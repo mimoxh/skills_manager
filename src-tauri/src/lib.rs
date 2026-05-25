@@ -1,21 +1,24 @@
-mod adapter;
+pub mod adapter;
 mod commands;
-mod error;
-mod hash;
-mod manifest;
-mod models;
-mod store;
+pub mod error;
+pub mod hash;
+pub mod manifest;
+pub mod models;
+pub mod native_app;
+pub mod service;
+pub mod store;
 
 use commands::*;
-use store::AppStore;
+use service::AppService;
 
 pub fn run() {
     tauri::Builder::default()
-        .manage(AppStore::new().expect("failed to initialize local store"))
+        .manage(AppService::new().expect("failed to initialize local service"))
         .invoke_handler(tauri::generate_handler![
             set_repository,
             get_repository,
             scan_skills,
+            import_skill_upload,
             detect_agents,
             list_agents,
             add_agent,
@@ -28,4 +31,8 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Skills Manager");
+}
+
+pub fn run_native() -> eframe::Result<()> {
+    native_app::run()
 }

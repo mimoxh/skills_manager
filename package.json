@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port 1420 --strictPort",
+    "native:dev": "cargo run --manifest-path src-tauri/Cargo.toml",
+    "native:build": "cargo build --release --manifest-path src-tauri/Cargo.toml",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",

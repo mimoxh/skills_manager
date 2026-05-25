@@ -20,6 +20,17 @@ export interface SkillSummary {
   manifestPath: string;
 }
 
+export interface ImportSkillFile {
+  relativePath: string;
+  bytes: number[];
+}
+
+export interface ImportSkillResult {
+  imported: number;
+  skipped: number;
+  message: string;
+}
+
 export interface AgentProfile {
   id: string;
   name: string;

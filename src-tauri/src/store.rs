@@ -8,6 +8,7 @@ use std::{fs, path::PathBuf, sync::Mutex};
 pub struct AppStore {
     conn: Mutex<Connection>,
     data_dir: PathBuf,
+    default_repository_path: PathBuf,
 }
 
 impl AppStore {
@@ -20,6 +21,7 @@ impl AppStore {
         let conn = Connection::open(db_path)?;
         let store = Self {
             conn: Mutex::new(conn),
+            default_repository_path: Self::default_repository_path(),
             data_dir,
         };
         store.migrate()?;
@@ -31,6 +33,9 @@ impl AppStore {
         let store = Self {
             conn: Mutex::new(Connection::open_in_memory()?),
             data_dir: std::env::temp_dir().join("skill-sync-manager-test"),
+            default_repository_path: std::env::temp_dir()
+                .join("skill-sync-manager-test")
+                .join("skills"),
         };
         store.migrate()?;
         Ok(store)
@@ -80,6 +85,20 @@ impl AppStore {
         self.data_dir.join("backups")
     }
 
+    pub fn import_root(&self) -> PathBuf {
+        self.data_dir.join("imports")
+    }
+
+    pub fn data_dir(&self) -> PathBuf {
+        self.data_dir.clone()
+    }
+
+    fn default_repository_path() -> PathBuf {
+        dirs::home_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("skills")
+    }
+
     pub fn set_repository(&self, path: &str) -> AppResult<()> {
         let conn = self
             .conn
@@ -100,6 +119,21 @@ impl AppStore {
         let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = 'repository'")?;
         let mut rows = stmt.query([])?;
         Ok(rows.next()?.map(|row| row.get(0)).transpose()?)
+    }
+
+    pub fn get_or_create_repository(&self) -> AppResult<String> {
+        if let Some(repository) = self.get_repository()? {
+            fs::create_dir_all(&repository)?;
+            return Ok(repository);
+        }
+
+        let repository = self
+            .default_repository_path
+            .to_string_lossy()
+            .to_string();
+        fs::create_dir_all(&repository)?;
+        self.set_repository(&repository)?;
+        Ok(repository)
     }
 
     pub fn save_agent(&self, profile: &AgentProfile) -> AppResult<()> {
@@ -273,5 +307,13 @@ mod tests {
             store.get_repository().unwrap(),
             Some("C:\\skills".to_string())
         );
+    }
+
+    #[test]
+    fn creates_default_repository_setting() {
+        let store = AppStore::in_memory().unwrap();
+        let repository = store.get_or_create_repository().unwrap();
+        assert_eq!(store.get_repository().unwrap(), Some(repository.clone()));
+        assert!(PathBuf::from(repository).ends_with("skills"));
     }
 }

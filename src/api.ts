@@ -1,41 +1,79 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentProfile, ConflictPolicy, InstallResult, InstallState, SkillSummary, SyncCandidate } from "./types";
+import type {
+  AgentProfile,
+  ConflictPolicy,
+  ImportSkillFile,
+  ImportSkillResult,
+  InstallResult,
+  InstallState,
+  SkillSummary,
+  SyncCandidate,
+} from "./types";
+
+const fallbackRepositoryKey = "skills-manager.repository";
+const fallbackRepository = "C:\\Users\\you\\skills";
+
+function hasTauriRuntime() {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+function getFallbackRepository() {
+  return localStorage.getItem(fallbackRepositoryKey) ?? fallbackRepository;
+}
+
+function command<T>(name: string, args: Record<string, unknown>, fallback: () => T | Promise<T>) {
+  if (hasTauriRuntime()) {
+    return invoke<T>(name, args);
+  }
+  return Promise.resolve(fallback());
+}
 
 export const api = {
   setRepository(path: string) {
-    return invoke<string>("set_repository", { path });
+    return command("set_repository", { path }, () => {
+      const repository = path.trim() || getFallbackRepository();
+      localStorage.setItem(fallbackRepositoryKey, repository);
+      return repository;
+    });
   },
   getRepository() {
-    return invoke<string | null>("get_repository");
+    return command("get_repository", {}, getFallbackRepository);
   },
   scanSkills() {
-    return invoke<SkillSummary[]>("scan_skills");
+    return command<SkillSummary[]>("scan_skills", {}, () => []);
+  },
+  importSkillUpload(fileName: string, files: ImportSkillFile[]) {
+    return command<ImportSkillResult>("import_skill_upload", { fileName, files }, () => ({
+      imported: 0,
+      skipped: 0,
+      message: "Upload import is available in the desktop app",
+    }));
   },
   detectAgents() {
-    return invoke<AgentProfile[]>("detect_agents");
+    return command<AgentProfile[]>("detect_agents", {}, () => []);
   },
   listAgents() {
-    return invoke<AgentProfile[]>("list_agents");
+    return command<AgentProfile[]>("list_agents", {}, () => []);
   },
   addAgent(profile: AgentProfile) {
-    return invoke<AgentProfile>("add_agent", { profile });
+    return command("add_agent", { profile }, () => profile);
   },
   removeAgent(agentId: string) {
-    return invoke<void>("remove_agent", { agentId });
+    return command<void>("remove_agent", { agentId }, () => undefined);
   },
   listInstallState() {
-    return invoke<InstallState[]>("list_install_state");
+    return command<InstallState[]>("list_install_state", {}, () => []);
   },
   previewSync(agentId: string) {
-    return invoke<SyncCandidate[]>("preview_sync", { agentId });
+    return command<SyncCandidate[]>("preview_sync", { agentId }, () => []);
   },
   installSkills(skillIds: string[], agentIds: string[], conflictPolicy: ConflictPolicy) {
-    return invoke<InstallResult[]>("install_skills", { skillIds, agentIds, conflictPolicy });
+    return command<InstallResult[]>("install_skills", { skillIds, agentIds, conflictPolicy }, () => []);
   },
   uninstallSkill(skillId: string, agentId: string) {
-    return invoke<void>("uninstall_skill", { skillId, agentId });
+    return command<void>("uninstall_skill", { skillId, agentId }, () => undefined);
   },
   rollbackLast(agentId: string, skillId: string) {
-    return invoke<void>("rollback_last", { agentId, skillId });
+    return command<void>("rollback_last", { agentId, skillId }, () => undefined);
   },
 };
