@@ -1,8 +1,7 @@
 use crate::{
     error::{AppError, AppResult},
     models::{
-        AgentProfile, AgentType, ConflictPolicy, InstallResult, InstallState, InstallStatus,
-        SkillSummary,
+        AgentProfile, AgentType, ConflictPolicy, GroupedSkill, InstallResult,
     },
     service::AppService,
 };
@@ -11,7 +10,7 @@ use eframe::egui::{
     Layout, Margin, RichText, Rounding, ScrollArea, Sense, Stroke, TextEdit, Ui, Vec2, Visuals,
 };
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     path::Path,
 };
 
@@ -28,9 +27,6 @@ mod theme {
     pub const FAINT: Color32 = Color32::from_rgb(148, 153, 162);
     pub const ACCENT: Color32 = Color32::from_rgb(19, 61, 59);
     pub const ACCENT_SOFT: Color32 = Color32::from_rgb(235, 245, 242);
-    pub const WARNING: Color32 = Color32::from_rgb(143, 91, 36);
-    pub const DANGER: Color32 = Color32::from_rgb(155, 55, 55);
-
     pub fn apply(ctx: &Context) {
         let mut style = (*ctx.style()).clone();
         style.visuals = Visuals::light();
@@ -113,9 +109,8 @@ pub struct NativeSkillsApp {
     view: View,
     repository: String,
     message: String,
-    skills: Vec<SkillSummary>,
+    skills: Vec<GroupedSkill>,
     agents: Vec<AgentProfile>,
-    states: Vec<InstallState>,
     selected_skills: HashSet<String>,
     selected_agents: HashSet<String>,
     skill_search: String,
@@ -138,7 +133,6 @@ impl NativeSkillsApp {
             message: "正在加载应用状态...".to_string(),
             skills: Vec::new(),
             agents: Vec::new(),
-            states: Vec::new(),
             selected_skills: HashSet::new(),
             selected_agents: HashSet::new(),
             skill_search: String::new(),
@@ -156,7 +150,7 @@ impl NativeSkillsApp {
         match self.load_data() {
             Ok(()) => {
                 self.message = format!(
-                    "已加载 {} 个 skills，{} 个 agent 配置。",
+                    "已从 Agent 目录识别 {} 个去重 skills，{} 个 agent 配置。",
                     self.skills.len(),
                     self.agents.len()
                 );
@@ -167,11 +161,10 @@ impl NativeSkillsApp {
 
     fn load_data(&mut self) -> AppResult<()> {
         self.repository = self.service.get_repository()?;
-        self.skills = self.service.scan_skills().unwrap_or_default();
         self.agents = self.service.list_agents()?;
-        self.states = self.service.list_install_state().unwrap_or_default();
+        self.skills = self.service.scan_agent_skills().unwrap_or_default();
         self.selected_skills
-            .retain(|id| self.skills.iter().any(|skill| skill.manifest.id == *id));
+            .retain(|title| self.skills.iter().any(|skill| skill.title == *title));
         self.selected_agents
             .retain(|id| self.agents.iter().any(|agent| agent.id == *id));
         Ok(())
@@ -261,25 +254,26 @@ impl NativeSkillsApp {
             return;
         }
 
-        match self.service.install_skills(
-            self.selected_skills.iter().cloned().collect(),
-            self.selected_agents.iter().cloned().collect(),
-            self.conflict_policy.clone(),
-        ) {
-            Ok(results) => {
+        let mut results = Vec::new();
+        for title in self.selected_skills.iter().cloned().collect::<Vec<_>>() {
+            match self.service.sync_grouped_skill(
+                &title,
+                None,
+                self.selected_agents.iter().cloned().collect(),
+                self.conflict_policy.clone(),
+            ) {
+                Ok(mut next) => results.append(&mut next),
+                Err(error) => {
+                    self.message = error.to_string();
+                    return;
+                }
+            }
+        }
+        {
                 self.message = format!("完成 {} 个同步任务。", results.len());
                 self.results = results;
                 let _ = self.load_data();
-            }
-            Err(error) => self.message = error.to_string(),
         }
-    }
-
-    fn state_by_pair(&self) -> HashMap<String, &InstallState> {
-        self.states
-            .iter()
-            .map(|state| (format!("{}:{}", state.agent_id, state.skill_id), state))
-            .collect()
     }
 
     fn handle_drops(&mut self, ctx: &Context) {
@@ -495,7 +489,7 @@ impl NativeSkillsApp {
                 ui,
                 "Skills",
                 self.skills.len().to_string(),
-                "主仓库中可识别的技能",
+                "按标题去重后的技能",
             );
             metric_card(
                 ui,
@@ -506,12 +500,12 @@ impl NativeSkillsApp {
             metric_card(
                 ui,
                 "待同步",
-                format!(
-                    "{} x {}",
-                    self.selected_skills.len(),
-                    self.selected_agents.len()
-                ),
-                "当前选择矩阵",
+                self.skills
+                    .iter()
+                    .map(|skill| skill.missing_agent_ids.len())
+                    .sum::<usize>()
+                    .to_string(),
+                "Agent 缺失的副本",
             );
         });
         ui.add_space(12.0);
@@ -590,17 +584,17 @@ impl NativeSkillsApp {
         let (left_width, right_width) = content_widths(total_width);
         let left_content = |left: &mut Ui, app: &mut Self| {
             left.set_width(left_width);
-            section_header(left, "Skills", "管理主仓库中的 skills");
+            section_header(left, "Skills", "从所有 Agent 目录自动识别并按标题去重");
             left.add_sized(
                 [left.available_width(), 34.0],
-                TextEdit::singleline(&mut app.skill_search).hint_text("搜索 skill 名称或 id"),
+                TextEdit::singleline(&mut app.skill_search).hint_text("搜索 skill 标题、来源 Agent 或路径"),
             );
             left.add_space(8.0);
             if app.skills.is_empty() {
                 empty_state(
                     left,
-                    "主仓库里还没有可识别的 skill manifest。",
-                    "导入文件夹或 zip 后会出现在这里。",
+                    "还没有从 Agent 目录识别到 skills。",
+                    "添加自定义 Agent，或确认 Codex/Claude skills 目录已存在后点击刷新。",
                 );
                 left.horizontal_wrapped(|ui| {
                     if primary_button(ui, "导入文件夹").clicked() {
@@ -618,9 +612,9 @@ impl NativeSkillsApp {
                         if !skill_matches(&skill, &query) {
                             continue;
                         }
-                        let selected = app.selected_skills.contains(&skill.manifest.id);
+                        let selected = app.selected_skills.contains(&skill.title);
                         if skill_card(ui, &skill, selected).clicked() {
-                            toggle(&mut app.selected_skills, &skill.manifest.id);
+                            toggle(&mut app.selected_skills, &skill.title);
                         }
                     }
                 });
@@ -632,15 +626,36 @@ impl NativeSkillsApp {
                 .selected_skills
                 .iter()
                 .next()
-                .and_then(|id| app.skills.iter().find(|skill| skill.manifest.id == *id))
+                .and_then(|title| app.skills.iter().find(|skill| skill.title == *title))
                 .cloned();
-            section_header(right, "详情", "查看选中 skill 的同步信息");
+            section_header(right, "详情", "查看同标题 skill 在各 Agent 中的副本");
             if let Some(skill) = selected {
-                detail_title(right, &skill.manifest.name, &skill.manifest.id);
-                detail_row(right, "版本", &skill.manifest.version);
-                detail_row(right, "支持", &skill.manifest.supported_agents.join(", "));
-                detail_row(right, "源目录", &skill.source_path);
-                detail_row(right, "Manifest", &skill.manifest_path);
+                detail_title(right, &skill.title, "按标题聚合");
+                detail_row(
+                    right,
+                    "最佳来源",
+                    &format!(
+                        "{} {}",
+                        skill.best_copy.agent_name,
+                        skill.best_copy
+                            .version
+                            .as_deref()
+                            .map(|version| format!("v{}", version))
+                            .unwrap_or_else(|| "未声明版本".to_string())
+                    ),
+                );
+                detail_row(right, "已有", &skill.installed_agent_ids.len().to_string());
+                detail_row(right, "缺失", &skill.missing_agent_ids.len().to_string());
+                detail_row(right, "路径", &skill.best_copy.skill_path);
+                right.add_space(8.0);
+                section_header(right, "副本", "");
+                for copy in &skill.copies {
+                    detail_row(
+                        right,
+                        &copy.agent_name,
+                        copy.version.as_deref().unwrap_or("未声明版本"),
+                    );
+                }
                 right.add_space(8.0);
                 pill(
                     right,
@@ -682,7 +697,17 @@ impl NativeSkillsApp {
                 }
                 for agent in agents {
                     let selected = app.selected_agents.contains(&agent.id);
-                    if agent_card(ui, &agent, selected).clicked() {
+                    let installed = app
+                        .skills
+                        .iter()
+                        .filter(|skill| skill.installed_agent_ids.contains(&agent.id))
+                        .count();
+                    let missing = app
+                        .skills
+                        .iter()
+                        .filter(|skill| skill.missing_agent_ids.contains(&agent.id))
+                        .count();
+                    if agent_card(ui, &agent, selected, installed, missing).clicked() {
                         toggle(&mut app.selected_agents, &agent.id);
                     }
                 }
@@ -768,7 +793,6 @@ impl NativeSkillsApp {
                 );
             });
             left.add_space(8.0);
-            let states = app.state_by_pair();
             ScrollArea::vertical().show(left, |ui| {
                 if app.selected_skills.is_empty() || app.selected_agents.is_empty() {
                     empty_state(
@@ -777,11 +801,13 @@ impl NativeSkillsApp {
                         "请先在 Skills 和 Agents 页面选择项目。",
                     );
                 }
-                for skill_id in &app.selected_skills {
+                for title in &app.selected_skills {
+                    let skill = app.skills.iter().find(|skill| skill.title == *title);
                     for agent_id in &app.selected_agents {
-                        let key = format!("{}:{}", agent_id, skill_id);
-                        let state = states.get(&key).copied();
-                        sync_row(ui, skill_id, &agent_name(&app.agents, agent_id), state);
+                        let installed = skill
+                            .map(|skill| skill.installed_agent_ids.contains(agent_id))
+                            .unwrap_or(false);
+                        sync_row(ui, title, &agent_name(&app.agents, agent_id), installed);
                     }
                 }
             });
@@ -1068,8 +1094,8 @@ fn metric_card(ui: &mut Ui, label: &str, value: String, helper: &str) {
     });
 }
 
-fn skill_card(ui: &mut Ui, skill: &SkillSummary, selected: bool) -> egui::Response {
-    let id = ui.id().with(("skill-card", &skill.manifest.id));
+fn skill_card(ui: &mut Ui, skill: &GroupedSkill, selected: bool) -> egui::Response {
+    let id = ui.id().with(("skill-card", &skill.title));
     let inner = theme::list_item_frame(selected, false).show(ui, |ui| {
         let width = ui.available_width();
         let action_width = 78.0;
@@ -1078,28 +1104,34 @@ fn skill_card(ui: &mut Ui, skill: &SkillSummary, selected: bool) -> egui::Respon
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.set_width(text_width);
-                ui.label(RichText::new(short_path(&skill.manifest.name)).strong());
+                ui.label(RichText::new(short_path(&skill.title)).strong());
                 ui.label(
-                    RichText::new(
-                        skill
-                            .manifest
-                            .description
-                            .as_deref()
-                            .map(short_path)
-                            .unwrap_or_else(|| short_path(&skill.manifest.id)),
-                    )
+                    RichText::new(format!(
+                        "来源 {} · {} 个副本",
+                        short_path(&skill.best_copy.agent_name),
+                        skill.copies.len()
+                    ))
                     .color(theme::MUTED),
                 );
                 ui.horizontal_wrapped(|ui| {
                     pill(
                         ui,
-                        &format!("v{}", skill.manifest.version),
+                        &skill
+                            .best_copy
+                            .version
+                            .as_deref()
+                            .map(|version| format!("v{}", version))
+                            .unwrap_or_else(|| "未声明版本".to_string()),
                         theme::PANEL_SOFT,
                         theme::MUTED,
                     );
                     clipped_pill(
                         ui,
-                        &skill.manifest.supported_agents.join(", "),
+                        &format!(
+                            "{} 已有 / {} 缺失",
+                            skill.installed_agent_ids.len(),
+                            skill.missing_agent_ids.len()
+                        ),
                         theme::PANEL_SOFT,
                         theme::MUTED,
                     );
@@ -1133,7 +1165,13 @@ fn skill_card(ui: &mut Ui, skill: &SkillSummary, selected: bool) -> egui::Respon
     response
 }
 
-fn agent_card(ui: &mut Ui, agent: &AgentProfile, selected: bool) -> egui::Response {
+fn agent_card(
+    ui: &mut Ui,
+    agent: &AgentProfile,
+    selected: bool,
+    installed: usize,
+    missing: usize,
+) -> egui::Response {
     let id = ui.id().with(("agent-card", &agent.id));
     let inner = theme::list_item_frame(selected, false).show(ui, |ui| {
         let width = ui.available_width();
@@ -1144,6 +1182,20 @@ fn agent_card(ui: &mut Ui, agent: &AgentProfile, selected: bool) -> egui::Respon
                 ui.set_width(text_width);
                 ui.label(RichText::new(short_path(&agent_label(agent))).strong());
                 ui.label(RichText::new(short_path(&agent.skills_path)).color(theme::MUTED));
+                ui.horizontal_wrapped(|ui| {
+                    pill(
+                        ui,
+                        &format!("{} 已有", installed),
+                        theme::PANEL_SOFT,
+                        theme::MUTED,
+                    );
+                    pill(
+                        ui,
+                        &format!("{} 缺失", missing),
+                        theme::PANEL_SOFT,
+                        theme::MUTED,
+                    );
+                });
             });
             ui.add_space((ui.available_width() - action_width).max(0.0));
             pill(
@@ -1177,13 +1229,17 @@ fn agent_card(ui: &mut Ui, agent: &AgentProfile, selected: bool) -> egui::Respon
     response
 }
 
-fn sync_row(ui: &mut Ui, skill_id: &str, agent_name: &str, state: Option<&InstallState>) {
+fn sync_row(ui: &mut Ui, skill_title: &str, agent_name: &str, installed: bool) {
     theme::soft_frame().show(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(skill_id).strong());
+            ui.label(RichText::new(skill_title).strong());
             ui.label(RichText::new(agent_name).color(theme::MUTED));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let (label, color) = status_label(state.map(|state| &state.status));
+                let (label, color) = if installed {
+                    ("已有", theme::ACCENT)
+                } else {
+                    ("缺失", theme::MUTED)
+                };
                 pill(ui, label, theme::PANEL, color);
             });
         });
@@ -1301,10 +1357,15 @@ fn toggle(set: &mut HashSet<String>, value: &str) {
     }
 }
 
-fn skill_matches(skill: &SkillSummary, query: &str) -> bool {
+fn skill_matches(skill: &GroupedSkill, query: &str) -> bool {
     query.is_empty()
-        || skill.manifest.name.to_lowercase().contains(query)
-        || skill.manifest.id.to_lowercase().contains(query)
+        || skill.title.to_lowercase().contains(query)
+        || skill.best_copy.agent_name.to_lowercase().contains(query)
+        || skill.best_copy.skill_path.to_lowercase().contains(query)
+        || skill
+            .copies
+            .iter()
+            .any(|copy| copy.agent_name.to_lowercase().contains(query))
 }
 
 fn active_query(local: &str, global: &str) -> String {
@@ -1312,15 +1373,6 @@ fn active_query(local: &str, global: &str) -> String {
         global.trim().to_lowercase()
     } else {
         local.trim().to_lowercase()
-    }
-}
-
-fn status_label(status: Option<&InstallStatus>) -> (&'static str, Color32) {
-    match status {
-        Some(InstallStatus::Installed) => ("已安装", theme::ACCENT),
-        Some(InstallStatus::Stale) => ("需更新", theme::WARNING),
-        Some(InstallStatus::Conflict) => ("冲突", theme::DANGER),
-        Some(InstallStatus::Missing) | None => ("未安装", theme::MUTED),
     }
 }
 
