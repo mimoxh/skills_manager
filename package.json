@@ -4,19 +4,33 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --port 1420 --strictPort",
-    "native:dev": "cargo run --manifest-path src-tauri/Cargo.toml",
-    "native:build": "cargo build --release --manifest-path src-tauri/Cargo.toml",
+    "dev": "vite --port 5173 --strictPort --host 127.0.0.1",
+    "desktop:dev": "tauri dev",
+    "native:legacy": "cargo run --manifest-path src-tauri/Cargo.toml --bin native",
+    "native:dev": "tauri dev",
+    "native:build": "tauri build",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-dropdown-menu": "^2.1.16",
+    "@radix-ui/react-label": "^2.1.8",
+    "@radix-ui/react-scroll-area": "^1.2.10",
+    "@radix-ui/react-separator": "^1.1.8",
+    "@radix-ui/react-slot": "^1.2.4",
+    "@radix-ui/react-tooltip": "^1.2.8",
+    "@tailwindcss/vite": "^4.3.0",
     "@tauri-apps/api": "^2.0.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "tailwind-merge": "^3.6.0",
+    "tailwindcss": "^4.3.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",

@@ -29,7 +29,10 @@ pub fn run() {
             install_skills,
             sync_grouped_skill,
             uninstall_skill,
-            rollback_last
+            rollback_last,
+            add_discovery_path,
+            remove_discovery_path,
+            list_discovery_paths
         ])
         .run(tauri::generate_context!())
         .expect("error while running Skills Manager");

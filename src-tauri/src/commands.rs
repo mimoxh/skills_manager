@@ -1,8 +1,8 @@
 use crate::{
     error::AppResult,
     models::{
-        AgentProfile, ConflictPolicy, GroupedSkill, ImportSkillFile, ImportSkillResult,
-        InstallResult, InstallState, SkillSummary, SyncCandidate,
+        AgentProfile, ConflictPolicy, DiscoveryPathEntry, GroupedSkill, ImportSkillFile,
+        ImportSkillResult, InstallResult, InstallState, SkillSummary, SyncCandidate,
     },
     service::AppService,
 };
@@ -109,4 +109,24 @@ pub fn rollback_last(
     service: State<AppService>,
 ) -> AppResult<()> {
     service.rollback_last(&agent_id, &skill_id)
+}
+
+#[tauri::command]
+pub fn add_discovery_path(
+    path: String,
+    label: String,
+    skills_subdir: String,
+    service: State<AppService>,
+) -> AppResult<()> {
+    service.add_discovery_path(&path, &label, &skills_subdir)
+}
+
+#[tauri::command]
+pub fn remove_discovery_path(path: String, service: State<AppService>) -> AppResult<()> {
+    service.remove_discovery_path(&path)
+}
+
+#[tauri::command]
+pub fn list_discovery_paths(service: State<AppService>) -> AppResult<Vec<DiscoveryPathEntry>> {
+    service.list_discovery_paths()
 }

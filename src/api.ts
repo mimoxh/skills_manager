@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AgentProfile,
   ConflictPolicy,
+  DiscoveryPathEntry,
   GroupedSkill,
   ImportSkillFile,
   ImportSkillResult,
@@ -86,5 +87,14 @@ export const api = {
   },
   rollbackLast(agentId: string, skillId: string) {
     return command<void>("rollback_last", { agentId, skillId }, () => undefined);
+  },
+  addDiscoveryPath(path: string, label: string, skillsSubdir: string) {
+    return command<void>("add_discovery_path", { path, label, skillsSubdir }, () => undefined);
+  },
+  removeDiscoveryPath(path: string) {
+    return command<void>("remove_discovery_path", { path }, () => undefined);
+  },
+  listDiscoveryPaths() {
+    return command<DiscoveryPathEntry[]>("list_discovery_paths", {}, () => []);
   },
 };

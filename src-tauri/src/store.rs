@@ -1,6 +1,6 @@
 use crate::{
     error::{AppError, AppResult},
-    models::{AgentProfile, AgentType},
+    models::{AgentProfile, AgentType, DiscoveryPathEntry},
 };
 use rusqlite::{params, Connection};
 use std::{fs, path::PathBuf, sync::Mutex};
@@ -76,6 +76,11 @@ impl AppStore {
                 backup_path TEXT,
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS agent_discovery_paths (
+                path TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                skills_subdir TEXT NOT NULL DEFAULT 'skills'
+            );
             "#,
         )?;
         Ok(())
@@ -127,10 +132,7 @@ impl AppStore {
             return Ok(repository);
         }
 
-        let repository = self
-            .default_repository_path
-            .to_string_lossy()
-            .to_string();
+        let repository = self.default_repository_path.to_string_lossy().to_string();
         fs::create_dir_all(&repository)?;
         self.set_repository(&repository)?;
         Ok(repository)
@@ -195,6 +197,10 @@ impl AppStore {
                 agent_type: match agent_type.as_str() {
                     "codex" => AgentType::Codex,
                     "claude" => AgentType::Claude,
+                    "claudeCode" => AgentType::ClaudeCode,
+                    "cursor" => AgentType::Cursor,
+                    "windsurf" => AgentType::Windsurf,
+                    "aider" => AgentType::Aider,
                     _ => AgentType::Custom,
                 },
                 skills_path: row.get(3)?,
@@ -292,6 +298,53 @@ impl AppStore {
         } else {
             Ok(None)
         }
+    }
+
+    pub fn add_discovery_path(
+        &self,
+        path: &str,
+        label: &str,
+        skills_subdir: &str,
+    ) -> AppResult<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        conn.execute(
+            "INSERT INTO agent_discovery_paths(path, label, skills_subdir) VALUES(?1, ?2, ?3) ON CONFLICT(path) DO UPDATE SET label = excluded.label, skills_subdir = excluded.skills_subdir",
+            params![path, label, skills_subdir],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_discovery_path(&self, path: &str) -> AppResult<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        conn.execute(
+            "DELETE FROM agent_discovery_paths WHERE path = ?1",
+            params![path],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_discovery_paths(&self) -> AppResult<Vec<DiscoveryPathEntry>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let mut stmt = conn.prepare(
+            "SELECT path, label, skills_subdir FROM agent_discovery_paths ORDER BY label",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(DiscoveryPathEntry {
+                path: row.get(0)?,
+                label: row.get(1)?,
+                skills_subdir: row.get(2)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
     }
 }
 

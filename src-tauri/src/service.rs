@@ -4,8 +4,9 @@ use crate::{
     hash::{copy_dir_all, hash_dir},
     manifest::{read_skill, scan_repository},
     models::{
-        AgentProfile, AgentSkillCopy, ConflictPolicy, GroupedSkill, ImportSkillFile,
-        ImportSkillResult, InstallResult, InstallState, SkillSummary, SyncCandidate,
+        AgentProfile, AgentSkillCopy, AgentType, ConflictPolicy, DiscoveryPathEntry, GroupedSkill,
+        ImportSkillFile, ImportSkillResult, InstallResult, InstallState, SkillSummary,
+        SyncCandidate,
     },
     store::AppStore,
 };
@@ -77,7 +78,48 @@ impl AppService {
         for adapter in built_in_adapters() {
             agents.extend(adapter.detect());
         }
+        for entry in self.store.list_discovery_paths()? {
+            let skills_path = Path::new(&entry.path).join(&entry.skills_subdir);
+            if skills_path.exists() {
+                agents.push(AgentProfile {
+                    id: format!("discovered:{}", entry.path),
+                    name: entry.label,
+                    agent_type: AgentType::Custom,
+                    skills_path: skills_path.to_string_lossy().to_string(),
+                    adapter_config: None,
+                });
+            }
+        }
         Ok(agents)
+    }
+
+    pub fn add_discovery_path(
+        &self,
+        path: &str,
+        label: &str,
+        skills_subdir: &str,
+    ) -> AppResult<()> {
+        if path.trim().is_empty() {
+            return Err(AppError::Message("发现路径不能为空".to_string()));
+        }
+        if label.trim().is_empty() {
+            return Err(AppError::Message("标签不能为空".to_string()));
+        }
+        let subdir = if skills_subdir.trim().is_empty() {
+            "skills"
+        } else {
+            skills_subdir.trim()
+        };
+        self.store
+            .add_discovery_path(path.trim(), label.trim(), subdir)
+    }
+
+    pub fn remove_discovery_path(&self, path: &str) -> AppResult<()> {
+        self.store.remove_discovery_path(path)
+    }
+
+    pub fn list_discovery_paths(&self) -> AppResult<Vec<DiscoveryPathEntry>> {
+        self.store.list_discovery_paths()
     }
 
     pub fn list_saved_agents(&self) -> AppResult<Vec<AgentProfile>> {
@@ -552,7 +594,7 @@ fn scan_agent_skill_copies(agent: &AgentProfile) -> AppResult<Vec<AgentSkillCopy
             skill_path: path.to_string_lossy().to_string(),
             title,
             version,
-            fingerprint: hash_dir(&path)?,
+            fingerprint: String::new(),
             updated_at: metadata
                 .and_then(|metadata| metadata.modified().ok())
                 .map(system_time_to_rfc3339),

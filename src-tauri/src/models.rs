@@ -70,6 +70,14 @@ pub enum AgentType {
     Codex,
     #[serde(rename = "claude")]
     Claude,
+    #[serde(rename = "claudeCode")]
+    ClaudeCode,
+    #[serde(rename = "cursor")]
+    Cursor,
+    #[serde(rename = "windsurf")]
+    Windsurf,
+    #[serde(rename = "aider")]
+    Aider,
     #[serde(rename = "custom")]
     Custom,
 }
@@ -79,9 +87,21 @@ impl AgentType {
         match self {
             AgentType::Codex => "codex",
             AgentType::Claude => "claude",
+            AgentType::ClaudeCode => "claudeCode",
+            AgentType::Cursor => "cursor",
+            AgentType::Windsurf => "windsurf",
+            AgentType::Aider => "aider",
             AgentType::Custom => "custom",
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoveryPathEntry {
+    pub path: String,
+    pub label: String,
+    pub skills_subdir: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -149,4 +169,13 @@ pub struct InstallResult {
     pub target_path: String,
     pub backup_path: Option<String>,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitialData {
+    pub repository: String,
+    pub skills: Vec<GroupedSkill>,
+    pub agents: Vec<AgentProfile>,
+    pub discovery_paths: Vec<DiscoveryPathEntry>,
 }

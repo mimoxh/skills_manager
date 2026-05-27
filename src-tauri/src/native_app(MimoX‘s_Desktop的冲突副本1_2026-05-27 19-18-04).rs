@@ -1,13 +1,18 @@
 use crate::{
     error::{AppError, AppResult},
-    models::{AgentProfile, AgentType, ConflictPolicy, DiscoveryPathEntry, GroupedSkill},
+    models::{
+        AgentProfile, AgentType, ConflictPolicy, DiscoveryPathEntry, GroupedSkill, InstallResult,
+    },
     service::AppService,
 };
 use eframe::egui::{
     self, Align, Align2, Button, Color32, Context, FontData, FontDefinitions, FontFamily, Frame,
     Layout, Margin, RichText, Rounding, ScrollArea, Sense, Stroke, TextEdit, Ui, Vec2, Visuals,
 };
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::HashSet,
+    path::Path,
+};
 
 mod theme {
     use super::*;
@@ -95,6 +100,7 @@ enum View {
     Overview,
     Skills,
     Agents,
+    Sync,
     Settings,
 }
 
@@ -105,10 +111,14 @@ pub struct NativeSkillsApp {
     message: String,
     skills: Vec<GroupedSkill>,
     agents: Vec<AgentProfile>,
+    selected_skills: HashSet<String>,
+    selected_agents: HashSet<String>,
     skill_search: String,
     global_search: String,
     custom_agent_name: String,
     custom_agent_path: String,
+    conflict_policy: ConflictPolicy,
+    results: Vec<InstallResult>,
     discovery_paths: Vec<DiscoveryPathEntry>,
     new_discovery_path: String,
     new_discovery_label: String,
@@ -131,10 +141,14 @@ impl NativeSkillsApp {
             message: "正在加载应用状态...".to_string(),
             skills: Vec::new(),
             agents: Vec::new(),
+            selected_skills: HashSet::new(),
+            selected_agents: HashSet::new(),
             skill_search: String::new(),
             global_search: String::new(),
             custom_agent_name: String::new(),
             custom_agent_path: String::new(),
+            conflict_policy: ConflictPolicy::Prompt,
+            results: Vec::new(),
             discovery_paths: Vec::new(),
             new_discovery_path: String::new(),
             new_discovery_label: String::new(),
@@ -166,6 +180,10 @@ impl NativeSkillsApp {
         self.agents = self.service.list_agents()?;
         self.skills = self.service.scan_agent_skills().unwrap_or_default();
         self.discovery_paths = self.service.list_discovery_paths()?;
+        self.selected_skills
+            .retain(|title| self.skills.iter().any(|skill| skill.title == *title));
+        self.selected_agents
+            .retain(|id| self.agents.iter().any(|agent| agent.id == *id));
         Ok(())
     }
 
@@ -240,15 +258,43 @@ impl NativeSkillsApp {
             Ok(agent) => {
                 self.custom_agent_name.clear();
                 self.custom_agent_path.clear();
-                self.message = format!("已添加 {}。", agent.name);
+                self.selected_agents.insert(agent.id);
                 self.refresh();
             }
             Err(error) => self.message = error.to_string(),
         }
     }
 
+    fn install_selected(&mut self) {
+        if self.selected_skills.is_empty() || self.selected_agents.is_empty() {
+            self.message = "请至少选择一个 skill 和一个 agent。".to_string();
+            return;
+        }
+
+        let mut results = Vec::new();
+        for title in self.selected_skills.iter().cloned().collect::<Vec<_>>() {
+            match self.service.sync_grouped_skill(
+                &title,
+                None,
+                self.selected_agents.iter().cloned().collect(),
+                self.conflict_policy.clone(),
+            ) {
+                Ok(mut next) => results.append(&mut next),
+                Err(error) => {
+                    self.message = error.to_string();
+                    return;
+                }
+            }
+        }
+        {
+                self.message = format!("完成 {} 个同步任务。", results.len());
+                self.results = results;
+                let _ = self.load_data();
+        }
+    }
+
     fn open_sync_popup(&mut self, skill: GroupedSkill) {
-        self.sync_popup_agents = skill.missing_agent_ids.iter().cloned().collect();
+        self.sync_popup_agents = skill.installed_agent_ids.iter().cloned().collect();
         self.sync_popup_policy = ConflictPolicy::BackupOverwrite;
         self.sync_popup_skill = Some(skill);
         self.sync_popup_open = true;
@@ -259,12 +305,11 @@ impl NativeSkillsApp {
             return;
         };
         let title = skill.title.clone();
-        let agent_ids = self.sync_popup_agents.iter().cloned().collect::<Vec<_>>();
+        let agent_ids: Vec<String> = self.sync_popup_agents.iter().cloned().collect();
         if agent_ids.is_empty() {
-            self.message = "请至少选择一个目标 Agent。".to_string();
+            self.message = "请至少选择一个 Agent。".to_string();
             return;
         }
-
         match self.service.sync_grouped_skill(
             &title,
             None,
@@ -272,10 +317,10 @@ impl NativeSkillsApp {
             self.sync_popup_policy.clone(),
         ) {
             Ok(results) => {
-                self.message = format!("已完成 {} 个同步任务。", results.len());
+                self.message = format!("完成 {} 个同步任务。", results.len());
+                self.results = results;
                 self.sync_popup_open = false;
                 self.sync_popup_skill = None;
-                self.sync_popup_agents.clear();
                 let _ = self.load_data();
             }
             Err(error) => {
@@ -306,11 +351,7 @@ impl eframe::App for NativeSkillsApp {
         self.handle_drops(ctx);
 
         egui::TopBottomPanel::top("titlebar")
-            .frame(
-                Frame::none()
-                    .fill(theme::PANEL)
-                    .inner_margin(Margin::same(0.0)),
-            )
+            .frame(Frame::none().fill(theme::PANEL).inner_margin(Margin::same(0.0)))
             .show(ctx, |ui| {
                 self.titlebar(ui, ctx);
             });
@@ -342,11 +383,141 @@ impl eframe::App for NativeSkillsApp {
                     View::Overview => self.overview(ui),
                     View::Skills => self.skills_view(ui),
                     View::Agents => self.agents_view(ui),
+                    View::Sync => self.sync_view(ui),
                     View::Settings => self.settings_view(ui),
                 }
             });
 
-        self.sync_popup(ctx);
+        if self.sync_popup_open {
+            let mut open = self.sync_popup_open;
+            let mut should_execute = false;
+            let mut should_close = false;
+
+            egui::Window::new("同步 Skill 到 Agents")
+                .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+                .collapsible(false)
+                .resizable(false)
+                .fixed_size(Vec2::new(480.0, 420.0))
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    if let Some(skill) = self.sync_popup_skill.clone() {
+                        ui.label(
+                            RichText::new(&skill.title)
+                                .size(18.0)
+                                .strong()
+                                .color(theme::TEXT),
+                        );
+                        ui.label(
+                            RichText::new(format!(
+                                "来源 {} · {} 个副本",
+                                skill.best_copy.agent_name,
+                                skill.copies.len()
+                            ))
+                            .color(theme::MUTED),
+                        );
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.add_space(8.0);
+
+                        ui.label(RichText::new("选择目标 Agents").strong());
+                        ui.add_space(4.0);
+
+                        ScrollArea::vertical()
+                            .id_salt("sync_popup_agents")
+                            .max_height(200.0)
+                            .show(ui, |ui| {
+                                for agent in &self.agents {
+                                    let is_installed = skill.installed_agent_ids.contains(&agent.id);
+                                    let mut checked =
+                                        self.sync_popup_agents.contains(&agent.id);
+                                    ui.horizontal(|ui| {
+                                        if ui.checkbox(&mut checked, "").changed() {
+                                            if checked {
+                                                self.sync_popup_agents.insert(agent.id.clone());
+                                            } else {
+                                                self.sync_popup_agents.remove(&agent.id);
+                                            }
+                                        }
+                                        ui.label(
+                                            RichText::new(&agent.name)
+                                                .color(theme::TEXT),
+                                        );
+                                        if is_installed {
+                                            pill(
+                                                ui,
+                                                "已安装",
+                                                theme::ACCENT_SOFT,
+                                                theme::ACCENT,
+                                            );
+                                        } else {
+                                            pill(
+                                                ui,
+                                                "未安装",
+                                                theme::PANEL_SOFT,
+                                                theme::MUTED,
+                                            );
+                                        }
+                                    });
+                                }
+                            });
+
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.add_space(8.0);
+
+                        ui.label(RichText::new("冲突策略").strong());
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            policy_button(
+                                ui,
+                                &mut self.sync_popup_policy,
+                                ConflictPolicy::BackupOverwrite,
+                                "备份覆盖",
+                            );
+                            policy_button(
+                                ui,
+                                &mut self.sync_popup_policy,
+                                ConflictPolicy::Skip,
+                                "跳过冲突",
+                            );
+                            policy_button(
+                                ui,
+                                &mut self.sync_popup_policy,
+                                ConflictPolicy::Rename,
+                                "另存副本",
+                            );
+                        });
+
+                        ui.add_space(12.0);
+                        ui.horizontal(|ui| {
+                            if primary_button(ui, "同步").clicked() {
+                                should_execute = true;
+                            }
+                            if secondary_button(ui, "取消").clicked() {
+                                should_close = true;
+                            }
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} 个 Agent 已选",
+                                    self.sync_popup_agents.len()
+                                ))
+                                .color(theme::MUTED),
+                            );
+                        });
+                    }
+                });
+
+            if !open {
+                should_close = true;
+            }
+            if should_execute {
+                self.execute_sync_popup();
+            }
+            if should_close {
+                self.sync_popup_open = false;
+                self.sync_popup_skill = None;
+            }
+        }
 
         if self.is_drag_hovering(ctx) {
             egui::Area::new(egui::Id::new("drop_overlay"))
@@ -368,6 +539,7 @@ impl eframe::App for NativeSkillsApp {
                         });
                 });
         }
+
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
@@ -376,136 +548,6 @@ impl eframe::App for NativeSkillsApp {
 }
 
 impl NativeSkillsApp {
-    fn sync_popup(&mut self, ctx: &Context) {
-        if !self.sync_popup_open {
-            return;
-        }
-
-        let mut open = true;
-        let mut should_execute = false;
-        let mut should_close = false;
-
-        egui::Window::new("同步 Skill 到 Agent")
-            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-            .collapsible(false)
-            .resizable(false)
-            .fixed_size(Vec2::new(520.0, 460.0))
-            .open(&mut open)
-            .show(ctx, |ui| {
-                if let Some(skill) = self.sync_popup_skill.clone() {
-                    ui.label(
-                        RichText::new(&skill.title)
-                            .size(18.0)
-                            .strong()
-                            .color(theme::TEXT),
-                    );
-                    ui.label(
-                        RichText::new(format!(
-                            "来源 {} · {} 个副本",
-                            skill.best_copy.agent_name,
-                            skill.copies.len()
-                        ))
-                        .color(theme::MUTED),
-                    );
-                    ui.add_space(8.0);
-                    ui.separator();
-                    ui.add_space(8.0);
-
-                    ui.label(RichText::new("目标 Agent").strong());
-                    ui.add_space(4.0);
-                    ScrollArea::vertical()
-                        .id_salt("skill_sync_targets")
-                        .max_height(220.0)
-                        .show(ui, |ui| {
-                            for agent in &self.agents {
-                                let is_installed = skill.installed_agent_ids.contains(&agent.id);
-                                let mut checked = self.sync_popup_agents.contains(&agent.id);
-                                theme::soft_frame().show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        if ui.checkbox(&mut checked, "").changed() {
-                                            if checked {
-                                                self.sync_popup_agents.insert(agent.id.clone());
-                                            } else {
-                                                self.sync_popup_agents.remove(&agent.id);
-                                            }
-                                        }
-                                        ui.vertical(|ui| {
-                                            ui.label(RichText::new(&agent.name).strong());
-                                            ui.label(
-                                                RichText::new(short_path(&agent.skills_path))
-                                                    .color(theme::MUTED),
-                                            );
-                                        });
-                                        ui.with_layout(
-                                            Layout::right_to_left(Align::Center),
-                                            |ui| {
-                                                if is_installed {
-                                                    pill(
-                                                        ui,
-                                                        "已安装",
-                                                        theme::ACCENT_SOFT,
-                                                        theme::ACCENT,
-                                                    );
-                                                } else {
-                                                    pill(ui, "未安装", theme::PANEL, theme::MUTED);
-                                                }
-                                            },
-                                        );
-                                    });
-                                });
-                            }
-                        });
-
-                    ui.add_space(8.0);
-                    ui.separator();
-                    ui.add_space(8.0);
-                    ui.label(RichText::new("冲突策略").strong());
-                    ui.horizontal(|ui| {
-                        ui.radio_value(
-                            &mut self.sync_popup_policy,
-                            ConflictPolicy::BackupOverwrite,
-                            "备份覆盖",
-                        );
-                        ui.radio_value(&mut self.sync_popup_policy, ConflictPolicy::Skip, "跳过");
-                        ui.radio_value(
-                            &mut self.sync_popup_policy,
-                            ConflictPolicy::Rename,
-                            "另存副本",
-                        );
-                    });
-
-                    ui.add_space(12.0);
-                    ui.horizontal(|ui| {
-                        if primary_button(ui, "同步").clicked() {
-                            should_execute = true;
-                        }
-                        if secondary_button(ui, "取消").clicked() {
-                            should_close = true;
-                        }
-                        ui.label(
-                            RichText::new(format!(
-                                "已选 {} 个 Agent",
-                                self.sync_popup_agents.len()
-                            ))
-                            .color(theme::MUTED),
-                        );
-                    });
-                }
-            });
-
-        if !open {
-            should_close = true;
-        }
-        if should_execute {
-            self.execute_sync_popup();
-        }
-        if should_close {
-            self.sync_popup_open = false;
-            self.sync_popup_skill = None;
-            self.sync_popup_agents.clear();
-        }
-    }
-
     fn titlebar(&mut self, ui: &mut Ui, ctx: &Context) {
         let available = ui.available_width();
         let (rect, response) = ui.allocate_exact_size(
@@ -558,6 +600,7 @@ impl NativeSkillsApp {
         nav_button(ui, &mut self.view, View::Overview, "概览");
         nav_button(ui, &mut self.view, View::Skills, "Skills");
         nav_button(ui, &mut self.view, View::Agents, "Agents");
+        nav_button(ui, &mut self.view, View::Sync, "同步");
         nav_button(ui, &mut self.view, View::Settings, "设置");
         ui.with_layout(Layout::bottom_up(Align::LEFT), |ui| {
             ui.label(RichText::new("v0.1.0").color(theme::FAINT));
@@ -588,6 +631,9 @@ impl NativeSkillsApp {
                 if secondary_button(ui, "刷新").clicked() {
                     self.refresh();
                 }
+                if primary_button(ui, "同步").clicked() {
+                    self.view = View::Sync;
+                }
             });
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -610,11 +656,11 @@ impl NativeSkillsApp {
                 ui,
                 "Agents",
                 self.agents.len().to_string(),
-                "已识别的本地配置",
+                "可同步的目标配置",
             );
             metric_card(
                 ui,
-                "缺失副本",
+                "待同步",
                 self.skills
                     .iter()
                     .map(|skill| skill.missing_agent_ids.len())
@@ -631,49 +677,15 @@ impl NativeSkillsApp {
             ScrollArea::vertical()
                 .id_salt("overview_stacked")
                 .show(ui, |ui| {
-                    theme::panel_frame().show(ui, |left| {
-                        left.set_width(left_width);
-                        section_header(left, "最近状态", "导入和扫描结果会显示在这里");
-                        empty_state(
-                            left,
-                            &self.message,
-                            "导入文件夹或 zip 后会刷新本地 skills 状态。",
-                        );
-                    });
-                    ui.add_space(CONTENT_GAP);
-                    theme::panel_frame().show(ui, |right| {
-                        right.set_width(right_width);
-                        section_header(right, "快速操作", "从这里开始导入和查看");
-                        action_panel(
-                            right,
-                            "导入 Skills",
-                            "选择文件夹或 zip 压缩包，也可以直接拖入窗口。",
-                        );
-                        right.horizontal(|ui| {
-                            if primary_button(ui, "导入文件夹").clicked() {
-                                self.import_folder_dialog();
-                            }
-                            if secondary_button(ui, "导入 zip").clicked() {
-                                self.import_zip_dialog();
-                            }
-                        });
-                    });
-                });
-        } else {
-            ui.horizontal(|ui| {
                 theme::panel_frame().show(ui, |left| {
                     left.set_width(left_width);
-                    section_header(left, "最近状态", "导入和扫描结果会显示在这里");
-                    empty_state(
-                        left,
-                        &self.message,
-                        "导入文件夹或 zip 后会刷新本地 skills 状态。",
-                    );
+                    section_header(left, "最近状态", "导入、扫描和同步结果会显示在这里");
+                    empty_or_results(left, &self.results, &self.message);
                 });
                 ui.add_space(CONTENT_GAP);
                 theme::panel_frame().show(ui, |right| {
                     right.set_width(right_width);
-                    section_header(right, "快速操作", "从这里开始导入和查看");
+                    section_header(right, "快速操作", "从这里开始导入和同步");
                     action_panel(
                         right,
                         "导入 Skills",
@@ -687,13 +699,49 @@ impl NativeSkillsApp {
                             self.import_zip_dialog();
                         }
                     });
+                    right.add_space(10.0);
+                    action_panel(right, "同步到 Agent", "选择 skills 和 agents 后执行同步。");
+                    if primary_button(right, "打开同步页").clicked() {
+                        self.view = View::Sync;
+                    }
+                });
+            });
+        } else {
+            ui.horizontal(|ui| {
+                theme::panel_frame().show(ui, |left| {
+                    left.set_width(left_width);
+                    section_header(left, "最近状态", "导入、扫描和同步结果会显示在这里");
+                    empty_or_results(left, &self.results, &self.message);
+                });
+                ui.add_space(CONTENT_GAP);
+                theme::panel_frame().show(ui, |right| {
+                    right.set_width(right_width);
+                    section_header(right, "快速操作", "从这里开始导入和同步");
+                    action_panel(
+                        right,
+                        "导入 Skills",
+                        "选择文件夹或 zip 压缩包，也可以直接拖入窗口。",
+                    );
+                    right.horizontal(|ui| {
+                        if primary_button(ui, "导入文件夹").clicked() {
+                            self.import_folder_dialog();
+                        }
+                        if secondary_button(ui, "导入 zip").clicked() {
+                            self.import_zip_dialog();
+                        }
+                    });
+                    right.add_space(10.0);
+                    action_panel(right, "同步到 Agent", "选择 skills 和 agents 后执行同步。");
+                    if primary_button(right, "打开同步页").clicked() {
+                        self.view = View::Sync;
+                    }
                 });
             });
         }
     }
 
     fn skills_view(&mut self, ui: &mut Ui) {
-        section_header(ui, "Skills", "从 Agent 目录识别并按标题去重");
+        section_header(ui, "Skills", "点击 skill 即可选择 Agents 进行同步");
         ui.add_sized(
             [ui.available_width(), 34.0],
             TextEdit::singleline(&mut self.skill_search)
@@ -720,15 +768,15 @@ impl NativeSkillsApp {
             ScrollArea::vertical()
                 .id_salt("skills_list")
                 .show(ui, |ui| {
-                    for skill in skills {
-                        if !skill_matches(&skill, &query) {
-                            continue;
-                        }
-                        if skill_card(ui, &skill, false).clicked() {
-                            self.open_sync_popup(skill.clone());
-                        }
+                for skill in skills {
+                    if !skill_matches(&skill, &query) {
+                        continue;
                     }
-                });
+                    if skill_card(ui, &skill, false).clicked() {
+                        self.open_sync_popup(skill.clone());
+                    }
+                }
+            });
         }
     }
 
@@ -738,32 +786,35 @@ impl NativeSkillsApp {
         let (left_width, right_width) = content_widths(total_width);
         let left_content = |left: &mut Ui, app: &mut Self| {
             left.set_width(left_width);
-            section_header(left, "Agents", "查看已识别或手动添加的 Agent 配置");
+            section_header(left, "Agents", "选择要安装 skills 的目标");
             let agents = app.agents.clone();
             ScrollArea::vertical()
                 .id_salt("agents_list")
                 .show(left, |ui| {
-                    if agents.is_empty() {
-                        empty_state(ui, "没有发现 agent。", "可以在右侧添加自定义 agent。");
+                if agents.is_empty() {
+                    empty_state(ui, "没有发现 agent。", "可以在右侧添加自定义 agent。");
+                }
+                for agent in agents {
+                    let selected = app.selected_agents.contains(&agent.id);
+                    let installed = app
+                        .skills
+                        .iter()
+                        .filter(|skill| skill.installed_agent_ids.contains(&agent.id))
+                        .count();
+                    let missing = app
+                        .skills
+                        .iter()
+                        .filter(|skill| skill.missing_agent_ids.contains(&agent.id))
+                        .count();
+                    if agent_card(ui, &agent, selected, installed, missing).clicked() {
+                        toggle(&mut app.selected_agents, &agent.id);
                     }
-                    for agent in agents {
-                        let installed = app
-                            .skills
-                            .iter()
-                            .filter(|skill| skill.installed_agent_ids.contains(&agent.id))
-                            .count();
-                        let missing = app
-                            .skills
-                            .iter()
-                            .filter(|skill| skill.missing_agent_ids.contains(&agent.id))
-                            .count();
-                        agent_card(ui, &agent, false, installed, missing);
-                    }
-                });
+                }
+            });
         };
         let right_content = |right: &mut Ui, app: &mut Self| {
             right.set_width(right_width);
-            section_header(right, "自定义 Agent", "添加一个普通目录作为 Agent 配置");
+            section_header(right, "自定义 Agent", "添加一个普通目录作为同步目标");
             label_input(right, "名称", &mut app.custom_agent_name, "例如 My Agent");
             right.horizontal(|ui| {
                 ui.vertical(|ui| {
@@ -783,15 +834,117 @@ impl NativeSkillsApp {
             if primary_button(right, "添加 Agent").clicked() {
                 app.add_custom_agent();
             }
+            right.add_space(16.0);
+            pill(
+                right,
+                &format!("已选择 {} 个 agents", app.selected_agents.len()),
+                theme::ACCENT_SOFT,
+                theme::ACCENT,
+            );
         };
         if stacked {
             ScrollArea::vertical()
                 .id_salt("agents_stacked")
                 .show(ui, |ui| {
-                    theme::panel_frame().show(ui, |left| left_content(left, self));
-                    ui.add_space(CONTENT_GAP);
-                    theme::panel_frame().show(ui, |right| right_content(right, self));
-                });
+                theme::panel_frame().show(ui, |left| left_content(left, self));
+                ui.add_space(CONTENT_GAP);
+                theme::panel_frame().show(ui, |right| right_content(right, self));
+            });
+        } else {
+            ui.horizontal(|ui| {
+                theme::panel_frame().show(ui, |left| left_content(left, self));
+                ui.add_space(CONTENT_GAP);
+                theme::panel_frame().show(ui, |right| right_content(right, self));
+            });
+        }
+    }
+
+    fn sync_view(&mut self, ui: &mut Ui) {
+        let total_width = ui.available_width();
+        let stacked = is_stacked(total_width);
+        let (left_width, right_width) = content_widths(total_width);
+        let left_content = |left: &mut Ui, app: &mut Self| {
+            left.set_width(left_width);
+            section_header(left, "同步矩阵", "检查每个 skill 到每个 agent 的状态");
+            left.horizontal(|ui| {
+                policy_button(
+                    ui,
+                    &mut app.conflict_policy,
+                    ConflictPolicy::Prompt,
+                    "提示冲突",
+                );
+                policy_button(
+                    ui,
+                    &mut app.conflict_policy,
+                    ConflictPolicy::BackupOverwrite,
+                    "备份覆盖",
+                );
+                policy_button(
+                    ui,
+                    &mut app.conflict_policy,
+                    ConflictPolicy::Skip,
+                    "跳过冲突",
+                );
+                policy_button(
+                    ui,
+                    &mut app.conflict_policy,
+                    ConflictPolicy::Rename,
+                    "另存副本",
+                );
+            });
+            left.add_space(8.0);
+            ScrollArea::vertical()
+                .id_salt("sync_matrix")
+                .show(left, |ui| {
+                if app.selected_skills.is_empty() || app.selected_agents.is_empty() {
+                    empty_state(
+                        ui,
+                        "还没有同步矩阵",
+                        "请先在 Skills 和 Agents 页面选择项目。",
+                    );
+                }
+                for title in &app.selected_skills {
+                    let skill = app.skills.iter().find(|skill| skill.title == *title);
+                    for agent_id in &app.selected_agents {
+                        let installed = skill
+                            .map(|skill| skill.installed_agent_ids.contains(agent_id))
+                            .unwrap_or(false);
+                        sync_row(ui, title, &agent_name(&app.agents, agent_id), installed);
+                    }
+                }
+            });
+        };
+        let right_content = |right: &mut Ui, app: &mut Self| {
+            right.set_width(right_width);
+            section_header(right, "执行", "同步选中的组合");
+            detail_row(right, "Skills", &app.selected_skills.len().to_string());
+            detail_row(right, "Agents", &app.selected_agents.len().to_string());
+            detail_row(right, "策略", conflict_policy_label(&app.conflict_policy));
+            if primary_button(right, "执行同步").clicked() {
+                app.install_selected();
+            }
+            right.add_space(16.0);
+            section_header(right, "最近结果", "");
+            ScrollArea::vertical()
+                .id_salt("sync_results")
+                .max_height(280.0)
+                .show(right, |ui| {
+                if app.results.is_empty() {
+                    empty_state(ui, "暂无同步结果", "执行同步后会显示安装、更新或跳过记录。");
+                }
+                for result in &app.results {
+                    result_card(ui, result);
+                }
+            });
+        };
+        if stacked {
+            ScrollArea::vertical()
+                .id_salt("sync_stacked")
+                .show(ui, |ui| {
+                theme::panel_frame().show(ui, |left| left_content(left, self));
+                ui.add_space(CONTENT_GAP);
+                theme::panel_frame().show(ui, |right| right_content(right, self));
+            });
         } else {
             ui.horizontal(|ui| {
                 theme::panel_frame().show(ui, |left| left_content(left, self));
@@ -842,19 +995,9 @@ impl NativeSkillsApp {
                 "Agent 发现路径",
                 "添加额外的 agent skills 目录用于自动识别",
             );
-            label_input(
-                right,
-                "路径",
-                &mut app.new_discovery_path,
-                "例如 C:\\Users\\me\\.cursor",
-            );
+            label_input(right, "路径", &mut app.new_discovery_path, "例如 C:\\Users\\me\\.cursor");
             label_input(right, "标签", &mut app.new_discovery_label, "例如 Cursor");
-            label_input(
-                right,
-                "Skills 子目录",
-                &mut app.new_discovery_subdir,
-                "默认 skills",
-            );
+            label_input(right, "Skills 子目录", &mut app.new_discovery_subdir, "默认 skills");
             right.add_space(6.0);
             if primary_button(right, "添加发现路径").clicked() {
                 let path = app.new_discovery_path.trim().to_string();
@@ -888,47 +1031,42 @@ impl NativeSkillsApp {
                     .id_salt("discovery_paths")
                     .max_height(320.0)
                     .show(right, |ui| {
-                        let paths = app.discovery_paths.clone();
-                        for entry in &paths {
-                            theme::soft_frame().show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.vertical(|ui| {
-                                        ui.label(RichText::new(&entry.label).strong());
-                                        ui.label(
-                                            RichText::new(short_path(&entry.path))
-                                                .color(theme::MUTED),
-                                        );
-                                        ui.label(
-                                            RichText::new(format!(
-                                                "子目录: {}",
-                                                entry.skills_subdir
-                                            ))
+                    let paths = app.discovery_paths.clone();
+                    for entry in &paths {
+                        theme::soft_frame().show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.vertical(|ui| {
+                                    ui.label(RichText::new(&entry.label).strong());
+                                    ui.label(
+                                        RichText::new(short_path(&entry.path)).color(theme::MUTED),
+                                    );
+                                    ui.label(
+                                        RichText::new(format!("子目录: {}", entry.skills_subdir))
                                             .color(theme::FAINT)
                                             .size(11.0),
-                                        );
-                                    });
-                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                        if secondary_button(ui, "删除").clicked() {
-                                            let _ = app.service.remove_discovery_path(&entry.path);
-                                            app.message =
-                                                format!("已删除发现路径: {}", entry.label);
-                                            let _ = app.load_data();
-                                        }
-                                    });
+                                    );
+                                });
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    if secondary_button(ui, "删除").clicked() {
+                                        let _ = app.service.remove_discovery_path(&entry.path);
+                                        app.message = format!("已删除发现路径: {}", entry.label);
+                                        let _ = app.load_data();
+                                    }
                                 });
                             });
-                        }
-                    });
+                        });
+                    }
+                });
             }
         };
         if stacked {
             ScrollArea::vertical()
                 .id_salt("settings_stacked")
                 .show(ui, |ui| {
-                    theme::panel_frame().show(ui, |left| left_content(left, self));
-                    ui.add_space(CONTENT_GAP);
-                    theme::panel_frame().show(ui, |right| right_content(right, self));
-                });
+                theme::panel_frame().show(ui, |left| left_content(left, self));
+                ui.add_space(CONTENT_GAP);
+                theme::panel_frame().show(ui, |right| right_content(right, self));
+            });
         } else {
             ui.horizontal(|ui| {
                 theme::panel_frame().show(ui, |left| left_content(left, self));
@@ -1080,6 +1218,35 @@ fn secondary_button(ui: &mut Ui, label: &str) -> egui::Response {
             .stroke(Stroke::new(1.0, theme::BORDER_STRONG))
             .rounding(Rounding::same(8.0)),
     )
+}
+
+fn policy_button(ui: &mut Ui, current: &mut ConflictPolicy, value: ConflictPolicy, label: &str) {
+    let selected = *current == value;
+    let response = ui.add_sized(
+        [button_width(label), 34.0],
+        Button::new(RichText::new(label).color(if selected {
+            theme::ACCENT
+        } else {
+            theme::MUTED
+        }))
+        .fill(if selected {
+            theme::ACCENT_SOFT
+        } else {
+            theme::PANEL
+        })
+        .stroke(Stroke::new(
+            1.0,
+            if selected {
+                theme::ACCENT
+            } else {
+                theme::BORDER
+            },
+        ))
+        .rounding(Rounding::same(8.0)),
+    );
+    if response.clicked() {
+        *current = value;
+    }
 }
 
 fn section_header(ui: &mut Ui, title: &str, subtitle: &str) {
@@ -1238,6 +1405,45 @@ fn agent_card(
     response
 }
 
+fn sync_row(ui: &mut Ui, skill_title: &str, agent_name: &str, installed: bool) {
+    theme::soft_frame().show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(skill_title).strong());
+            ui.label(RichText::new(agent_name).color(theme::MUTED));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let (label, color) = if installed {
+                    ("已有", theme::ACCENT)
+                } else {
+                    ("缺失", theme::MUTED)
+                };
+                pill(ui, label, theme::PANEL, color);
+            });
+        });
+    });
+}
+
+fn result_card(ui: &mut Ui, result: &InstallResult) {
+    theme::soft_frame().show(ui, |ui| {
+        ui.horizontal(|ui| {
+            pill(ui, &result.action, theme::PANEL, theme::ACCENT);
+            ui.label(RichText::new(&result.message).color(theme::TEXT));
+        });
+        ui.label(RichText::new(&result.target_path).color(theme::MUTED));
+    });
+}
+
+fn empty_or_results(ui: &mut Ui, results: &[InstallResult], message: &str) {
+    if results.is_empty() {
+        empty_state(ui, message, "完成导入或同步后会显示更详细的记录。");
+    } else {
+        ScrollArea::vertical().show(ui, |ui| {
+            for result in results {
+                result_card(ui, result);
+            }
+        });
+    }
+}
+
 fn action_panel(ui: &mut Ui, title: &str, text: &str) {
     theme::soft_frame().show(ui, |ui| {
         ui.label(RichText::new(title).strong());
@@ -1253,6 +1459,7 @@ fn empty_state(ui: &mut Ui, title: &str, body: &str) {
         ui.add_space(6.0);
     });
 }
+
 
 fn detail_row(ui: &mut Ui, label: &str, value: &str) {
     ui.horizontal(|ui| {
@@ -1315,6 +1522,12 @@ fn button_width(label: &str) -> f32 {
     (label.chars().count() as f32 * 14.0 + 28.0).clamp(62.0, 128.0)
 }
 
+fn toggle(set: &mut HashSet<String>, value: &str) {
+    if !set.insert(value.to_string()) {
+        set.remove(value);
+    }
+}
+
 fn skill_matches(skill: &GroupedSkill, query: &str) -> bool {
     query.is_empty()
         || skill.title.to_lowercase().contains(query)
@@ -1334,8 +1547,25 @@ fn active_query(local: &str, global: &str) -> String {
     }
 }
 
+fn conflict_policy_label(policy: &ConflictPolicy) -> &'static str {
+    match policy {
+        ConflictPolicy::Prompt => "提示冲突",
+        ConflictPolicy::BackupOverwrite => "备份覆盖",
+        ConflictPolicy::Skip => "跳过冲突",
+        ConflictPolicy::Rename => "另存副本",
+    }
+}
+
 fn agent_label(agent: &AgentProfile) -> String {
     format!("{} ({})", agent.name, agent.agent_type.as_str())
+}
+
+fn agent_name(agents: &[AgentProfile], agent_id: &str) -> String {
+    agents
+        .iter()
+        .find(|agent| agent.id == agent_id)
+        .map(|agent| agent.name.clone())
+        .unwrap_or_else(|| agent_id.to_string())
 }
 
 fn short_path(path: &str) -> String {

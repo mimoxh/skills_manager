@@ -82,12 +82,13 @@ impl AgentAdapter for DirectoryAdapter {
     fn detect(&self) -> Vec<AgentProfile> {
         let candidates = match self.agent_type {
             AgentType::Codex => vec![Self::home_path(&[".codex", "skills"])],
-            AgentType::Claude => vec![
-                env::var_os("APPDATA")
-                    .map(PathBuf::from)
-                    .map(|path| path.join("Claude").join("skills")),
-                Self::home_path(&[".claude", "skills"]),
-            ],
+            AgentType::Claude => vec![env::var_os("APPDATA")
+                .map(PathBuf::from)
+                .map(|path| path.join("Claude").join("skills"))],
+            AgentType::ClaudeCode => vec![Self::home_path(&[".claude", "skills"])],
+            AgentType::Cursor => vec![Self::home_path(&[".cursor", "skills"])],
+            AgentType::Windsurf => vec![Self::home_path(&[".windsurf", "skills"])],
+            AgentType::Aider => vec![Self::home_path(&[".aider", "skills"])],
             AgentType::Custom => vec![],
         };
 
@@ -102,6 +103,10 @@ impl AgentAdapter for DirectoryAdapter {
                     name: match self.agent_type {
                         AgentType::Codex => "Codex".to_string(),
                         AgentType::Claude => "Claude".to_string(),
+                        AgentType::ClaudeCode => "Claude Code".to_string(),
+                        AgentType::Cursor => "Cursor".to_string(),
+                        AgentType::Windsurf => "Windsurf".to_string(),
+                        AgentType::Aider => "Aider".to_string(),
                         AgentType::Custom => "Custom".to_string(),
                     },
                     agent_type: self.agent_type.clone(),
@@ -276,6 +281,10 @@ pub fn built_in_adapters() -> Vec<DirectoryAdapter> {
     vec![
         DirectoryAdapter::new(AgentType::Codex),
         DirectoryAdapter::new(AgentType::Claude),
+        DirectoryAdapter::new(AgentType::ClaudeCode),
+        DirectoryAdapter::new(AgentType::Cursor),
+        DirectoryAdapter::new(AgentType::Windsurf),
+        DirectoryAdapter::new(AgentType::Aider),
     ]
 }
 

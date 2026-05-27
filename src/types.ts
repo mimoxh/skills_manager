@@ -1,4 +1,4 @@
-export type AgentType = "codex" | "claude" | "custom";
+export type AgentType = "codex" | "claude" | "claudeCode" | "cursor" | "windsurf" | "aider" | "custom";
 export type ConflictPolicy = "prompt" | "backupOverwrite" | "skip" | "rename";
 export type InstallStatus = "installed" | "stale" | "conflict" | "missing";
 
@@ -78,4 +78,10 @@ export interface InstallResult {
   targetPath: string;
   backupPath?: string | null;
   message: string;
+}
+
+export interface DiscoveryPathEntry {
+  path: string;
+  label: string;
+  skillsSubdir: string;
 }

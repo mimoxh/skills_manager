@@ -738,6 +738,29 @@ button:disabled {
   display: none;
 }
 
+.icon-button {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.icon-button:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.icon-button.danger:hover {
+  background: #fde8e8;
+  color: #c0392b;
+}
+
 @media (max-width: 1080px) {
   .content-grid {
     grid-template-columns: minmax(0, 1fr);
