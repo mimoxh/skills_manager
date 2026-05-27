@@ -20,6 +20,24 @@ export interface SkillSummary {
   manifestPath: string;
 }
 
+export interface AgentSkillCopy {
+  agentId: string;
+  agentName: string;
+  skillPath: string;
+  title: string;
+  version?: string | null;
+  fingerprint: string;
+  updatedAt?: string | null;
+}
+
+export interface GroupedSkill {
+  title: string;
+  bestCopy: AgentSkillCopy;
+  copies: AgentSkillCopy[];
+  installedAgentIds: string[];
+  missingAgentIds: string[];
+}
+
 export interface ImportSkillFile {
   relativePath: string;
   bytes: number[];

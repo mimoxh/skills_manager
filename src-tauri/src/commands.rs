@@ -1,8 +1,8 @@
 use crate::{
     error::AppResult,
     models::{
-        AgentProfile, ConflictPolicy, ImportSkillFile, ImportSkillResult, InstallResult,
-        InstallState, SkillSummary, SyncCandidate,
+        AgentProfile, ConflictPolicy, GroupedSkill, ImportSkillFile, ImportSkillResult,
+        InstallResult, InstallState, SkillSummary, SyncCandidate,
     },
     service::AppService,
 };
@@ -58,10 +58,12 @@ pub fn list_install_state(service: State<AppService>) -> AppResult<Vec<InstallSt
 }
 
 #[tauri::command]
-pub fn preview_sync(
-    agent_id: String,
-    service: State<AppService>,
-) -> AppResult<Vec<SyncCandidate>> {
+pub fn scan_agent_skills(service: State<AppService>) -> AppResult<Vec<GroupedSkill>> {
+    service.scan_agent_skills()
+}
+
+#[tauri::command]
+pub fn preview_sync(agent_id: String, service: State<AppService>) -> AppResult<Vec<SyncCandidate>> {
     service.preview_sync(&agent_id)
 }
 
@@ -73,6 +75,22 @@ pub fn install_skills(
     service: State<AppService>,
 ) -> AppResult<Vec<InstallResult>> {
     service.install_skills(skill_ids, agent_ids, conflict_policy)
+}
+
+#[tauri::command]
+pub fn sync_grouped_skill(
+    title: String,
+    source_agent_id: Option<String>,
+    target_agent_ids: Vec<String>,
+    conflict_policy: ConflictPolicy,
+    service: State<AppService>,
+) -> AppResult<Vec<InstallResult>> {
+    service.sync_grouped_skill(
+        &title,
+        source_agent_id.as_deref(),
+        target_agent_ids,
+        conflict_policy,
+    )
 }
 
 #[tauri::command]

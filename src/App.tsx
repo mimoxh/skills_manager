@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "./api";
-import type { AgentProfile, ConflictPolicy, ImportSkillFile, InstallResult, InstallState, SkillSummary } from "./types";
+import type { AgentProfile, ConflictPolicy, GroupedSkill, ImportSkillFile, InstallResult } from "./types";
 
 type View = "overview" | "skills" | "agents" | "sync" | "settings";
 
@@ -64,19 +64,6 @@ function agentLabel(agent: AgentProfile) {
 function shortPath(path: string) {
   if (!path) return "未设置";
   return path.length > 48 ? `...${path.slice(-45)}` : path;
-}
-
-function statusText(status?: string) {
-  switch (status) {
-    case "installed":
-      return "已安装";
-    case "stale":
-      return "需更新";
-    case "conflict":
-      return "冲突";
-    default:
-      return "未安装";
-  }
 }
 
 function actionText(action: InstallResult["action"]) {
@@ -151,9 +138,8 @@ export default function App() {
   const archiveInputRef = useRef<HTMLInputElement>(null);
   const [view, setView] = useState<View>("overview");
   const [repository, setRepository] = useState("");
-  const [skills, setSkills] = useState<SkillSummary[]>([]);
+  const [skills, setSkills] = useState<GroupedSkill[]>([]);
   const [agents, setAgents] = useState<AgentProfile[]>([]);
-  const [states, setStates] = useState<InstallState[]>([]);
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [customAgent, setCustomAgent] = useState<AgentProfile>(emptyCustom);
@@ -164,20 +150,23 @@ export default function App() {
   const [draggingSkills, setDraggingSkills] = useState(false);
   const [query, setQuery] = useState("");
 
-  const stateByPair = useMemo(() => {
-    const map = new Map<string, InstallState>();
-    states.forEach((state) => map.set(`${state.agentId}:${state.skillId}`, state));
+  const skillByTitle = useMemo(() => {
+    const map = new Map<string, GroupedSkill>();
+    skills.forEach((skill) => map.set(skill.title, skill));
     return map;
-  }, [states]);
+  }, [skills]);
 
   const filteredSkills = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     if (!normalized) return skills;
     return skills.filter((skill) => {
-      const manifest = skill.manifest;
-      return [manifest.name, manifest.id, manifest.description ?? "", ...(manifest.tags ?? [])].some((value) =>
-        value.toLowerCase().includes(normalized),
-      );
+      return [
+        skill.title,
+        skill.bestCopy.version ?? "",
+        skill.bestCopy.agentName,
+        skill.bestCopy.skillPath,
+        ...skill.copies.map((copy) => copy.agentName),
+      ].some((value) => value.toLowerCase().includes(normalized));
     });
   }, [query, skills]);
 
@@ -187,20 +176,19 @@ export default function App() {
     return agents.filter((agent) => [agent.name, agent.id, agent.type, agent.skillsPath].some((value) => value.toLowerCase().includes(normalized)));
   }, [agents, query]);
 
-  const selectedSkill = selectedSkills[0] ? skills.find((skill) => skill.manifest.id === selectedSkills[0]) : undefined;
+  const selectedSkill = selectedSkills[0] ? skills.find((skill) => skill.title === selectedSkills[0]) : undefined;
   const selectedAgent = selectedAgents[0] ? agents.find((agent) => agent.id === selectedAgents[0]) : undefined;
-  const installedCount = states.filter((state) => state.status === "installed").length;
-  const conflictCount = states.filter((state) => state.status === "conflict").length;
+  const installedCount = skills.reduce((total, skill) => total + skill.installedAgentIds.length, 0);
+  const missingCount = skills.reduce((total, skill) => total + skill.missingAgentIds.length, 0);
 
   async function refreshAll() {
     setBusy(true);
     try {
-      const [repo, scanned, savedAgents, detected, installStates] = await Promise.all([
+      const [repo, scanned, savedAgents, detected] = await Promise.all([
         api.getRepository(),
-        api.scanSkills().catch(() => []),
+        api.scanAgentSkills().catch(() => []),
         api.listAgents(),
         api.detectAgents(),
-        api.listInstallState().catch(() => []),
       ]);
       setRepository(repo ?? "");
       setSkills(scanned);
@@ -208,10 +196,9 @@ export default function App() {
       [...savedAgents, ...detected].forEach((agent) => merged.set(agent.id, agent));
       const nextAgents = [...merged.values()];
       setAgents(nextAgents);
-      setStates(installStates);
-      setSelectedSkills((prev) => prev.filter((id) => scanned.some((skill) => skill.manifest.id === id)));
+      setSelectedSkills((prev) => prev.filter((title) => scanned.some((skill) => skill.title === title)));
       setSelectedAgents((prev) => prev.filter((id) => nextAgents.some((agent) => agent.id === id)));
-      setMessage(`已加载 ${scanned.length} 个 skills，${nextAgents.length} 个 agent 配置。`);
+      setMessage(`已从 Agent 目录识别 ${scanned.length} 个去重 skills，${nextAgents.length} 个 agent 配置。`);
     } catch (error) {
       setMessage(String(error));
     } finally {
@@ -335,17 +322,20 @@ export default function App() {
       return;
     }
     if (conflictPolicy === "prompt") {
-      const hasConflict = selectedSkills.some((skillId) =>
-        selectedAgents.some((agentId) => stateByPair.get(`${agentId}:${skillId}`)?.status === "conflict"),
+      const hasExistingTarget = selectedSkills.some((title) =>
+        selectedAgents.some((agentId) => skillByTitle.get(title)?.installedAgentIds.includes(agentId)),
       );
-      if (hasConflict) {
-        setMessage("检测到冲突。请先选择备份覆盖、跳过冲突或另存副本策略。");
+      if (hasExistingTarget) {
+        setMessage("目标 Agent 已存在同名 skill。请先选择备份覆盖、跳过冲突或另存副本策略。");
         return;
       }
     }
     setBusy(true);
     try {
-      const installResults = await api.installSkills(selectedSkills, selectedAgents, conflictPolicy);
+      const batches = await Promise.all(
+        selectedSkills.map((title) => api.syncGroupedSkill(title, null, selectedAgents, conflictPolicy)),
+      );
+      const installResults = batches.flat();
       setResults(installResults);
       await refreshAll();
       setMessage(`完成 ${installResults.length} 个同步任务。`);
@@ -370,13 +360,13 @@ export default function App() {
       case "skills":
         return <SkillsView skills={filteredSkills} selectedSkills={selectedSkills} dragging={draggingSkills} busy={busy} onToggle={toggleSkill} onDrop={handleSkillDrop} onDrag={setDraggingSkills} onFolder={() => folderInputRef.current?.click()} onArchive={() => archiveInputRef.current?.click()} />;
       case "agents":
-        return <AgentsView agents={filteredAgents} selectedAgents={selectedAgents} states={states} customAgent={customAgent} busy={busy} onToggle={toggleAgent} onCustomChange={setCustomAgent} onSaveCustom={saveCustomAgent} />;
+        return <AgentsView agents={filteredAgents} selectedAgents={selectedAgents} skills={skills} customAgent={customAgent} busy={busy} onToggle={toggleAgent} onCustomChange={setCustomAgent} onSaveCustom={saveCustomAgent} />;
       case "sync":
-        return <SyncView selectedSkills={selectedSkills} selectedAgents={selectedAgents} agents={agents} stateByPair={stateByPair} conflictPolicy={conflictPolicy} results={results} busy={busy} onPolicy={setConflictPolicy} onInstall={installSelected} onRefresh={refreshAll} />;
+        return <SyncView selectedSkills={selectedSkills} selectedAgents={selectedAgents} skills={skills} agents={agents} conflictPolicy={conflictPolicy} results={results} busy={busy} onPolicy={setConflictPolicy} onInstall={installSelected} onRefresh={refreshAll} />;
       case "settings":
         return <SettingsView repository={repository} busy={busy} onRepository={setRepository} onSave={saveRepository} />;
       default:
-        return <OverviewView skills={skills} agents={agents} states={states} results={results} onView={setView} onFolder={() => folderInputRef.current?.click()} onArchive={() => archiveInputRef.current?.click()} />;
+        return <OverviewView skills={skills} agents={agents} results={results} onView={setView} onFolder={() => folderInputRef.current?.click()} onArchive={() => archiveInputRef.current?.click()} />;
     }
   }
 
@@ -440,7 +430,7 @@ export default function App() {
               selectedSkills={selectedSkills}
               selectedAgents={selectedAgents}
               installedCount={installedCount}
-              conflictCount={conflictCount}
+              missingCount={missingCount}
               conflictPolicy={conflictPolicy}
               onPolicy={setConflictPolicy}
               onInstall={installSelected}
@@ -467,29 +457,26 @@ export default function App() {
 function OverviewView({
   skills,
   agents,
-  states,
   results,
   onView,
   onFolder,
   onArchive,
 }: {
-  skills: SkillSummary[];
+  skills: GroupedSkill[];
   agents: AgentProfile[];
-  states: InstallState[];
   results: InstallResult[];
   onView: (view: View) => void;
   onFolder: () => void;
   onArchive: () => void;
 }) {
-  const stale = states.filter((state) => state.status === "stale").length;
-  const conflicts = states.filter((state) => state.status === "conflict").length;
+  const missing = skills.reduce((total, skill) => total + skill.missingAgentIds.length, 0);
 
   return (
     <div className="view-stack">
       <div className="metric-grid">
-        <Metric label="Skills" value={skills.length} helper="主仓库中可识别项目" />
+        <Metric label="Skills" value={skills.length} helper="按标题去重后的项目" />
         <Metric label="Agents" value={agents.length} helper="可同步目标配置" />
-        <Metric label="待处理" value={stale + conflicts} helper="需更新或冲突项目" />
+        <Metric label="待同步" value={missing} helper="Agent 缺失的 skill 副本" />
       </div>
 
       <section className="panel-section">
@@ -537,7 +524,7 @@ function SkillsView({
   onFolder,
   onArchive,
 }: {
-  skills: SkillSummary[];
+  skills: GroupedSkill[];
   selectedSkills: string[];
   dragging: boolean;
   busy: boolean;
@@ -578,17 +565,18 @@ function SkillsView({
         <div className="item-list">
           {skills.map((skill) => (
             <button
-              className={`item-row ${selectedSkills.includes(skill.manifest.id) ? "selected" : ""}`}
-              key={skill.manifest.id}
-              onClick={() => onToggle(skill.manifest.id)}
+              className={`item-row ${selectedSkills.includes(skill.title) ? "selected" : ""}`}
+              key={skill.title}
+              onClick={() => onToggle(skill.title)}
               type="button"
             >
               <div>
-                <strong>{skill.manifest.name}</strong>
-                <span>{skill.manifest.description || skill.manifest.id}</span>
+                <strong>{skill.title}</strong>
+                <span>来源 {skill.bestCopy.agentName} · {skill.copies.length} 个副本</span>
                 <div className="chip-line">
-                  <small>v{skill.manifest.version}</small>
-                  <small>{skill.manifest.supportedAgents.join(", ") || "未声明 Agent"}</small>
+                  <small>{skill.bestCopy.version ? `v${skill.bestCopy.version}` : "未声明版本"}</small>
+                  <small>{skill.installedAgentIds.length} 已有</small>
+                  <small>{skill.missingAgentIds.length} 缺失</small>
                 </div>
               </div>
               <Check className="checkmark" size={17} />
@@ -604,7 +592,7 @@ function SkillsView({
 function AgentsView({
   agents,
   selectedAgents,
-  states,
+  skills,
   customAgent,
   busy,
   onToggle,
@@ -613,7 +601,7 @@ function AgentsView({
 }: {
   agents: AgentProfile[];
   selectedAgents: string[];
-  states: InstallState[];
+  skills: GroupedSkill[];
   customAgent: AgentProfile;
   busy: boolean;
   onToggle: (id: string) => void;
@@ -636,8 +624,8 @@ function AgentsView({
                 <strong>{agentLabel(agent)}</strong>
                 <span>{agent.skillsPath}</span>
                 <div className="chip-line">
-                  <small>{states.filter((state) => state.agentId === agent.id && state.status === "installed").length} 已安装</small>
-                  <small>{states.filter((state) => state.agentId === agent.id && state.status === "stale").length} 需更新</small>
+                  <small>{skills.filter((skill) => skill.installedAgentIds.includes(agent.id)).length} 已有</small>
+                  <small>{skills.filter((skill) => skill.missingAgentIds.includes(agent.id)).length} 缺失</small>
                 </div>
               </div>
               <Check className="checkmark" size={17} />
@@ -671,8 +659,8 @@ function AgentsView({
 function SyncView({
   selectedSkills,
   selectedAgents,
+  skills,
   agents,
-  stateByPair,
   conflictPolicy,
   results,
   busy,
@@ -682,8 +670,8 @@ function SyncView({
 }: {
   selectedSkills: string[];
   selectedAgents: string[];
+  skills: GroupedSkill[];
   agents: AgentProfile[];
-  stateByPair: Map<string, InstallState>;
   conflictPolicy: ConflictPolicy;
   results: InstallResult[];
   busy: boolean;
@@ -691,6 +679,7 @@ function SyncView({
   onInstall: () => void;
   onRefresh: () => void;
 }) {
+  const skillByTitle = new Map(skills.map((skill) => [skill.title, skill]));
   return (
     <div className="view-stack">
       <section className="panel-section">
@@ -716,13 +705,14 @@ function SyncView({
         <div className="matrix-list">
           {selectedSkills.map((skillId) =>
             selectedAgents.map((agentId) => {
-              const state = stateByPair.get(`${agentId}:${skillId}`);
+              const skill = skillByTitle.get(skillId);
+              const installed = skill?.installedAgentIds.includes(agentId) ?? false;
               return (
-                <div className={`matrix-row ${state?.status ?? "missing"}`} key={`${agentId}:${skillId}`}>
+                <div className={`matrix-row ${installed ? "installed" : "missing"}`} key={`${agentId}:${skillId}`}>
                   <span>{skillId}</span>
                   <span>{agents.find((agent) => agent.id === agentId)?.name ?? agentId}</span>
-                  <strong>{statusText(state?.status)}</strong>
-                  {state?.status === "conflict" && <ShieldAlert size={15} />}
+                  <strong>{installed ? "已有" : "缺失"}</strong>
+                  {installed && <ShieldAlert size={15} />}
                 </div>
               );
             }),
@@ -788,20 +778,20 @@ function RightPanel({
   selectedSkills,
   selectedAgents,
   installedCount,
-  conflictCount,
+  missingCount,
   conflictPolicy,
   onPolicy,
   onInstall,
   busy,
 }: {
-  skills: SkillSummary[];
+  skills: GroupedSkill[];
   agents: AgentProfile[];
-  selectedSkill?: SkillSummary;
+  selectedSkill?: GroupedSkill;
   selectedAgent?: AgentProfile;
   selectedSkills: string[];
   selectedAgents: string[];
   installedCount: number;
-  conflictCount: number;
+  missingCount: number;
   conflictPolicy: ConflictPolicy;
   onPolicy: (policy: ConflictPolicy) => void;
   onInstall: () => void;
@@ -817,8 +807,8 @@ function RightPanel({
       <div className="detail-list">
         <Detail label="Skills" value={String(skills.length)} />
         <Detail label="Agents" value={String(agents.length)} />
-        <Detail label="已安装" value={String(installedCount)} />
-        <Detail label="冲突" value={String(conflictCount)} />
+        <Detail label="已有副本" value={String(installedCount)} />
+        <Detail label="缺失副本" value={String(missingCount)} />
       </div>
 
       <div className="detail-block">
@@ -828,9 +818,20 @@ function RightPanel({
 
       <div className="detail-block">
         <span>Skill</span>
-        <strong>{selectedSkill?.manifest.name ?? "未选择"}</strong>
-        {selectedSkill && <p>{selectedSkill.manifest.description || selectedSkill.manifest.id}</p>}
+        <strong>{selectedSkill?.title ?? "未选择"}</strong>
+        {selectedSkill && <p>最佳来源：{selectedSkill.bestCopy.agentName} · {selectedSkill.copies.length} 个副本</p>}
       </div>
+
+      {selectedSkill && (
+        <div className="detail-block">
+          <span>副本</span>
+          {selectedSkill.copies.map((copy) => (
+            <p key={`${copy.agentId}:${copy.skillPath}`}>
+              {copy.agentName} · {copy.version ? `v${copy.version}` : "未声明版本"}
+            </p>
+          ))}
+        </div>
+      )}
 
       <div className="detail-block">
         <span>Agent</span>

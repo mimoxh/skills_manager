@@ -24,8 +24,10 @@ pub fn run() {
             add_agent,
             remove_agent,
             list_install_state,
+            scan_agent_skills,
             preview_sync,
             install_skills,
+            sync_grouped_skill,
             uninstall_skill,
             rollback_last
         ])

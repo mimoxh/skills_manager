@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AgentProfile,
   ConflictPolicy,
+  GroupedSkill,
   ImportSkillFile,
   ImportSkillResult,
   InstallResult,
@@ -42,6 +43,9 @@ export const api = {
   scanSkills() {
     return command<SkillSummary[]>("scan_skills", {}, () => []);
   },
+  scanAgentSkills() {
+    return command<GroupedSkill[]>("scan_agent_skills", {}, () => []);
+  },
   importSkillUpload(fileName: string, files: ImportSkillFile[]) {
     return command<ImportSkillResult>("import_skill_upload", { fileName, files }, () => ({
       imported: 0,
@@ -69,6 +73,13 @@ export const api = {
   },
   installSkills(skillIds: string[], agentIds: string[], conflictPolicy: ConflictPolicy) {
     return command<InstallResult[]>("install_skills", { skillIds, agentIds, conflictPolicy }, () => []);
+  },
+  syncGroupedSkill(title: string, sourceAgentId: string | null | undefined, targetAgentIds: string[], conflictPolicy: ConflictPolicy) {
+    return command<InstallResult[]>(
+      "sync_grouped_skill",
+      { title, sourceAgentId, targetAgentIds, conflictPolicy },
+      () => [],
+    );
   },
   uninstallSkill(skillId: string, agentId: string) {
     return command<void>("uninstall_skill", { skillId, agentId }, () => undefined);

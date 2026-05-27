@@ -26,6 +26,28 @@ pub struct SkillSummary {
     pub manifest_path: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSkillCopy {
+    pub agent_id: String,
+    pub agent_name: String,
+    pub skill_path: String,
+    pub title: String,
+    pub version: Option<String>,
+    pub fingerprint: String,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupedSkill {
+    pub title: String,
+    pub best_copy: AgentSkillCopy,
+    pub copies: Vec<AgentSkillCopy>,
+    pub installed_agent_ids: Vec<String>,
+    pub missing_agent_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportSkillFile {

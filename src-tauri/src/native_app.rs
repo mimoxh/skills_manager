@@ -90,6 +90,15 @@ mod theme {
     }
 }
 
+const SIDEBAR_WIDTH: f32 = 220.0;
+const TITLEBAR_HEIGHT: f32 = 38.0;
+const WORKSPACE_PADDING: f32 = 16.0;
+const CONTENT_GAP: f32 = 12.0;
+const DETAIL_PANEL_MIN_WIDTH: f32 = 280.0;
+const DETAIL_PANEL_MAX_WIDTH: f32 = 360.0;
+const WINDOW_BUTTON_WIDTH: f32 = 46.0;
+const PANEL_HORIZONTAL_MARGIN: f32 = 32.0;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum View {
     Overview,
@@ -293,38 +302,17 @@ impl NativeSkillsApp {
 impl eframe::App for NativeSkillsApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         self.handle_drops(ctx);
-        egui::SidePanel::left("sidebar")
-            .resizable(false)
-            .exact_width(220.0)
-            .frame(
-                Frame::none()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0, theme::BORDER))
-                    .inner_margin(Margin::same(16.0)),
-            )
-            .show(ctx, |ui| self.sidebar(ui));
-
-        egui::TopBottomPanel::top("command_bar")
-            .resizable(false)
-            .frame(
-                Frame::none()
-                    .fill(theme::APP_BG)
-                    .inner_margin(Margin::symmetric(14.0, 12.0)),
-            )
-            .show(ctx, |ui| self.command_bar(ui));
-
         egui::CentralPanel::default()
             .frame(
                 Frame::none()
                     .fill(theme::APP_BG)
-                    .inner_margin(Margin::symmetric(14.0, 0.0)),
+                    .inner_margin(Margin::same(0.0)),
             )
-            .show(ctx, |ui| match self.view {
-                View::Overview => self.overview(ui),
-                View::Skills => self.skills_view(ui),
-                View::Agents => self.agents_view(ui),
-                View::Sync => self.sync_view(ui),
-                View::Settings => self.settings_view(ui),
+            .show(ctx, |ui| {
+                ui.set_width(ui.available_width());
+                ui.set_height(ui.available_height());
+                self.titlebar(ui, ctx);
+                self.workbench(ui);
             });
 
         if self.is_drag_hovering(ctx) {
@@ -351,8 +339,106 @@ impl eframe::App for NativeSkillsApp {
 }
 
 impl NativeSkillsApp {
+    fn titlebar(&mut self, ui: &mut Ui, ctx: &Context) {
+        let available = ui.available_width();
+        let (rect, response) = ui.allocate_exact_size(
+            Vec2::new(available, TITLEBAR_HEIGHT),
+            Sense::click_and_drag(),
+        );
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, Rounding::same(0.0), theme::PANEL);
+        painter.line_segment(
+            [rect.left_bottom(), rect.right_bottom()],
+            Stroke::new(1.0, theme::BORDER),
+        );
+
+        if response.double_clicked() {
+            let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+        } else if response.drag_started() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
+
+        ui.allocate_new_ui(
+            egui::UiBuilder::new().max_rect(rect.shrink2(Vec2::new(10.0, 0.0))),
+            |ui| {
+                ui.horizontal(|ui| {
+                    ui.set_height(TITLEBAR_HEIGHT);
+                    ui.add_space(2.0);
+                    title_mark(ui);
+                    ui.label(RichText::new("Skills Manager").strong().color(theme::TEXT));
+                    let spacer = (ui.available_width() - WINDOW_BUTTON_WIDTH * 3.0).max(0.0);
+                    ui.add_space(spacer);
+                    if window_button(ui, "−").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                    }
+                    let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
+                    if window_button(ui, if maximized { "▢" } else { "□" }).clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                    }
+                    if close_button(ui).clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+            },
+        );
+    }
+
+    fn workbench(&mut self, ui: &mut Ui) {
+        let available = ui.available_size();
+        let (outer, _) = ui.allocate_exact_size(available, Sense::hover());
+        let work_rect = outer.shrink(WORKSPACE_PADDING);
+        if work_rect.width() <= SIDEBAR_WIDTH + CONTENT_GAP || work_rect.height() <= 0.0 {
+            return;
+        }
+
+        let sidebar_rect =
+            egui::Rect::from_min_size(work_rect.min, Vec2::new(SIDEBAR_WIDTH, work_rect.height()));
+        let content_rect = egui::Rect::from_min_max(
+            egui::pos2(sidebar_rect.max.x + CONTENT_GAP, work_rect.min.y),
+            work_rect.max,
+        );
+
+        ui.painter()
+            .rect_filled(sidebar_rect, Rounding::same(12.0), theme::PANEL);
+        ui.painter().rect_stroke(
+            sidebar_rect,
+            Rounding::same(12.0),
+            Stroke::new(1.0, theme::BORDER),
+        );
+
+        let sidebar_inner = sidebar_rect.shrink(16.0);
+        ui.allocate_new_ui(
+            egui::UiBuilder::new()
+                .max_rect(sidebar_inner)
+                .layout(Layout::top_down(Align::Min)),
+            |sidebar| {
+                sidebar.set_min_size(sidebar_inner.size());
+                self.sidebar(sidebar);
+            },
+        );
+
+        ui.allocate_new_ui(
+            egui::UiBuilder::new()
+                .max_rect(content_rect)
+                .layout(Layout::top_down(Align::Min)),
+            |content| {
+                content.set_min_size(content_rect.size());
+                self.command_bar(content);
+                content.add_space(CONTENT_GAP);
+                match self.view {
+                    View::Overview => self.overview(content),
+                    View::Skills => self.skills_view(content),
+                    View::Agents => self.agents_view(content),
+                    View::Sync => self.sync_view(content),
+                    View::Settings => self.settings_view(content),
+                }
+            },
+        );
+    }
+
     fn sidebar(&mut self, ui: &mut Ui) {
-        ui.set_height(ui.available_height());
+        ui.set_min_size(Vec2::new(ui.available_width(), ui.available_height()));
         ui.label(RichText::new("Skills Manager").size(20.0).strong());
         ui.label(RichText::new("原生工作台").color(theme::MUTED));
         ui.add_space(18.0);
@@ -373,96 +459,82 @@ impl NativeSkillsApp {
 
     fn command_bar(&mut self, ui: &mut Ui) {
         theme::panel_frame().show(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new("工作台").size(18.0).strong());
                 ui.add_space(8.0);
+                let search_width = (ui.available_width() - 360.0).clamp(220.0, 360.0);
                 ui.add_sized(
-                    [260.0, 34.0],
+                    [search_width, 34.0],
                     TextEdit::singleline(&mut self.global_search).hint_text("搜索或过滤当前内容"),
                 );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if primary_button(ui, "同步").clicked() {
-                        self.view = View::Sync;
-                    }
-                    if secondary_button(ui, "刷新").clicked() {
-                        self.refresh();
-                    }
-                    if secondary_button(ui, "导入 zip").clicked() {
-                        self.import_zip_dialog();
-                    }
-                    if secondary_button(ui, "导入文件夹").clicked() {
-                        self.import_folder_dialog();
-                    }
-                });
+                if secondary_button(ui, "导入文件夹").clicked() {
+                    self.import_folder_dialog();
+                }
+                if secondary_button(ui, "导入 zip").clicked() {
+                    self.import_zip_dialog();
+                }
+                if secondary_button(ui, "刷新").clicked() {
+                    self.refresh();
+                }
+                if primary_button(ui, "同步").clicked() {
+                    self.view = View::Sync;
+                }
             });
             ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                pill(ui, &self.message, theme::PANEL_SOFT, theme::MUTED);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(RichText::new(&self.repository).color(theme::MUTED));
-                    ui.label(RichText::new("主仓库").color(theme::FAINT));
-                });
+            ui.horizontal_wrapped(|ui| {
+                clipped_pill(ui, &self.message, theme::PANEL_SOFT, theme::MUTED);
+                ui.label(RichText::new("主仓库").color(theme::FAINT));
+                ui.label(RichText::new(short_path(&self.repository)).color(theme::MUTED));
             });
         });
     }
 
     fn overview(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
-            metric_card(ui, "Skills", self.skills.len().to_string(), "主仓库中可识别的技能");
-            metric_card(ui, "Agents", self.agents.len().to_string(), "可同步的目标配置");
+        ui.horizontal_wrapped(|ui| {
+            metric_card(
+                ui,
+                "Skills",
+                self.skills.len().to_string(),
+                "主仓库中可识别的技能",
+            );
+            metric_card(
+                ui,
+                "Agents",
+                self.agents.len().to_string(),
+                "可同步的目标配置",
+            );
             metric_card(
                 ui,
                 "待同步",
-                format!("{} x {}", self.selected_skills.len(), self.selected_agents.len()),
+                format!(
+                    "{} x {}",
+                    self.selected_skills.len(),
+                    self.selected_agents.len()
+                ),
                 "当前选择矩阵",
             );
         });
         ui.add_space(12.0);
-        let (left_width, right_width) = content_widths(ui.available_width());
-        ui.horizontal(|ui| {
-            ui.set_height(ui.available_height());
-            theme::panel_frame().show(ui, |left| {
-                left.set_width(left_width);
-                section_header(left, "最近状态", "导入、扫描和同步结果会显示在这里");
-                empty_or_results(left, &self.results, &self.message);
-            });
-            ui.add_space(4.0);
-            theme::panel_frame().show(ui, |right| {
-                right.set_width(right_width);
-                section_header(right, "快速操作", "从这里开始导入和同步");
-                action_panel(right, "导入 Skills", "选择文件夹或 zip 压缩包，也可以直接拖入窗口。");
-                right.horizontal(|ui| {
-                    if primary_button(ui, "导入文件夹").clicked() {
-                        self.import_folder_dialog();
-                    }
-                    if secondary_button(ui, "导入 zip").clicked() {
-                        self.import_zip_dialog();
-                    }
+        let total_width = ui.available_width();
+        let stacked = is_stacked(total_width);
+        let (left_width, right_width) = content_widths(total_width);
+        if stacked {
+            ScrollArea::vertical().show(ui, |ui| {
+                theme::panel_frame().show(ui, |left| {
+                    left.set_width(left_width);
+                    section_header(left, "最近状态", "导入、扫描和同步结果会显示在这里");
+                    empty_or_results(left, &self.results, &self.message);
                 });
-                right.add_space(10.0);
-                action_panel(right, "同步到 Agent", "选择 skills 和 agents 后执行同步。");
-                if primary_button(right, "打开同步页").clicked() {
-                    self.view = View::Sync;
-                }
-            });
-        });
-    }
-
-    fn skills_view(&mut self, ui: &mut Ui) {
-        let (left_width, right_width) = content_widths(ui.available_width());
-        ui.horizontal(|ui| {
-            ui.set_height(ui.available_height());
-            theme::panel_frame().show(ui, |left| {
-                left.set_width(left_width);
-                section_header(left, "Skills", "管理主仓库中的 skills");
-                left.add_sized(
-                    [left.available_width(), 34.0],
-                    TextEdit::singleline(&mut self.skill_search).hint_text("搜索 skill 名称或 id"),
-                );
-                left.add_space(8.0);
-                if self.skills.is_empty() {
-                    empty_state(left, "主仓库里还没有可识别的 skill manifest。", "导入文件夹或 zip 后会出现在这里。");
-                    left.horizontal(|ui| {
+                ui.add_space(CONTENT_GAP);
+                theme::panel_frame().show(ui, |right| {
+                    right.set_width(right_width);
+                    section_header(right, "快速操作", "从这里开始导入和同步");
+                    action_panel(
+                        right,
+                        "导入 Skills",
+                        "选择文件夹或 zip 压缩包，也可以直接拖入窗口。",
+                    );
+                    right.horizontal_wrapped(|ui| {
                         if primary_button(ui, "导入文件夹").clicked() {
                             self.import_folder_dialog();
                         }
@@ -470,193 +542,336 @@ impl NativeSkillsApp {
                             self.import_zip_dialog();
                         }
                     });
-                } else {
-                    let query = active_query(&self.skill_search, &self.global_search);
-                    let skills = self.skills.clone();
-                    ScrollArea::vertical().show(left, |ui| {
-                        for skill in skills {
-                            if !skill_matches(&skill, &query) {
-                                continue;
-                            }
-                            let selected = self.selected_skills.contains(&skill.manifest.id);
-                            if skill_card(ui, &skill, selected).clicked() {
-                                toggle(&mut self.selected_skills, &skill.manifest.id);
-                            }
+                    right.add_space(10.0);
+                    action_panel(right, "同步到 Agent", "选择 skills 和 agents 后执行同步。");
+                    if primary_button(right, "打开同步页").clicked() {
+                        self.view = View::Sync;
+                    }
+                });
+            });
+        } else {
+            ui.horizontal(|ui| {
+                ui.set_height(ui.available_height());
+                theme::panel_frame().show(ui, |left| {
+                    left.set_width(left_width);
+                    section_header(left, "最近状态", "导入、扫描和同步结果会显示在这里");
+                    empty_or_results(left, &self.results, &self.message);
+                });
+                ui.add_space(CONTENT_GAP);
+                theme::panel_frame().show(ui, |right| {
+                    right.set_width(right_width);
+                    section_header(right, "快速操作", "从这里开始导入和同步");
+                    action_panel(
+                        right,
+                        "导入 Skills",
+                        "选择文件夹或 zip 压缩包，也可以直接拖入窗口。",
+                    );
+                    right.horizontal_wrapped(|ui| {
+                        if primary_button(ui, "导入文件夹").clicked() {
+                            self.import_folder_dialog();
+                        }
+                        if secondary_button(ui, "导入 zip").clicked() {
+                            self.import_zip_dialog();
                         }
                     });
-                }
+                    right.add_space(10.0);
+                    action_panel(right, "同步到 Agent", "选择 skills 和 agents 后执行同步。");
+                    if primary_button(right, "打开同步页").clicked() {
+                        self.view = View::Sync;
+                    }
+                });
             });
-            ui.add_space(4.0);
-            theme::panel_frame().show(ui, |right| {
-                right.set_width(right_width);
-                let selected = self
-                    .selected_skills
-                    .iter()
-                    .next()
-                    .and_then(|id| self.skills.iter().find(|skill| skill.manifest.id == *id))
-                    .cloned();
-                section_header(right, "详情", "查看选中 skill 的同步信息");
-                if let Some(skill) = selected {
-                    detail_title(right, &skill.manifest.name, &skill.manifest.id);
-                    detail_row(right, "版本", &skill.manifest.version);
-                    detail_row(right, "支持", &skill.manifest.supported_agents.join(", "));
-                    detail_row(right, "源目录", &skill.source_path);
-                    detail_row(right, "Manifest", &skill.manifest_path);
-                    right.add_space(8.0);
-                    pill(
-                        right,
-                        &format!("已选择 {} 个 skills", self.selected_skills.len()),
-                        theme::ACCENT_SOFT,
-                        theme::ACCENT,
-                    );
-                } else {
-                    empty_state(right, "未选择 skill", "在左侧列表中选择一个或多个 skill。");
-                }
-            });
-        });
+        }
     }
 
-    fn agents_view(&mut self, ui: &mut Ui) {
-        let (left_width, right_width) = content_widths(ui.available_width());
-        ui.horizontal(|ui| {
-            ui.set_height(ui.available_height());
-            theme::panel_frame().show(ui, |left| {
-                left.set_width(left_width);
-                section_header(left, "Agents", "选择要安装 skills 的目标");
-                let agents = self.agents.clone();
+    fn skills_view(&mut self, ui: &mut Ui) {
+        let total_width = ui.available_width();
+        let stacked = is_stacked(total_width);
+        let (left_width, right_width) = content_widths(total_width);
+        let left_content = |left: &mut Ui, app: &mut Self| {
+            left.set_width(left_width);
+            section_header(left, "Skills", "管理主仓库中的 skills");
+            left.add_sized(
+                [left.available_width(), 34.0],
+                TextEdit::singleline(&mut app.skill_search).hint_text("搜索 skill 名称或 id"),
+            );
+            left.add_space(8.0);
+            if app.skills.is_empty() {
+                empty_state(
+                    left,
+                    "主仓库里还没有可识别的 skill manifest。",
+                    "导入文件夹或 zip 后会出现在这里。",
+                );
+                left.horizontal_wrapped(|ui| {
+                    if primary_button(ui, "导入文件夹").clicked() {
+                        app.import_folder_dialog();
+                    }
+                    if secondary_button(ui, "导入 zip").clicked() {
+                        app.import_zip_dialog();
+                    }
+                });
+            } else {
+                let query = active_query(&app.skill_search, &app.global_search);
+                let skills = app.skills.clone();
                 ScrollArea::vertical().show(left, |ui| {
-                    if agents.is_empty() {
-                        empty_state(ui, "没有发现 agent。", "可以在右侧添加自定义 agent。");
-                    }
-                    for agent in agents {
-                        let selected = self.selected_agents.contains(&agent.id);
-                        if agent_card(ui, &agent, selected).clicked() {
-                            toggle(&mut self.selected_agents, &agent.id);
+                    for skill in skills {
+                        if !skill_matches(&skill, &query) {
+                            continue;
+                        }
+                        let selected = app.selected_skills.contains(&skill.manifest.id);
+                        if skill_card(ui, &skill, selected).clicked() {
+                            toggle(&mut app.selected_skills, &skill.manifest.id);
                         }
                     }
                 });
-            });
-            ui.add_space(4.0);
-            theme::panel_frame().show(ui, |right| {
-                right.set_width(right_width);
-                section_header(right, "自定义 Agent", "添加一个普通目录作为同步目标");
-                label_input(right, "名称", &mut self.custom_agent_name, "例如 My Agent");
-                right.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new("Skills 安装目录").color(theme::MUTED));
-                        ui.add_sized(
-                            [ui.available_width().max(220.0), 34.0],
-                            TextEdit::singleline(&mut self.custom_agent_path).hint_text("选择或输入目录"),
-                        );
-                    });
-                    if secondary_button(ui, "选择").clicked() {
-                        if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                            self.custom_agent_path = path.to_string_lossy().to_string();
-                        }
-                    }
-                });
-                if primary_button(right, "添加 Agent").clicked() {
-                    self.add_custom_agent();
-                }
-                right.add_space(16.0);
+            }
+        };
+        let right_content = |right: &mut Ui, app: &mut Self| {
+            right.set_width(right_width);
+            let selected = app
+                .selected_skills
+                .iter()
+                .next()
+                .and_then(|id| app.skills.iter().find(|skill| skill.manifest.id == *id))
+                .cloned();
+            section_header(right, "详情", "查看选中 skill 的同步信息");
+            if let Some(skill) = selected {
+                detail_title(right, &skill.manifest.name, &skill.manifest.id);
+                detail_row(right, "版本", &skill.manifest.version);
+                detail_row(right, "支持", &skill.manifest.supported_agents.join(", "));
+                detail_row(right, "源目录", &skill.source_path);
+                detail_row(right, "Manifest", &skill.manifest_path);
+                right.add_space(8.0);
                 pill(
                     right,
-                    &format!("已选择 {} 个 agents", self.selected_agents.len()),
+                    &format!("已选择 {} 个 skills", app.selected_skills.len()),
                     theme::ACCENT_SOFT,
                     theme::ACCENT,
                 );
+            } else {
+                empty_state(right, "未选择 skill", "在左侧列表中选择一个或多个 skill。");
+            }
+        };
+        if stacked {
+            ScrollArea::vertical().show(ui, |ui| {
+                theme::panel_frame().show(ui, |left| left_content(left, self));
+                ui.add_space(CONTENT_GAP);
+                theme::panel_frame().show(ui, |right| right_content(right, self));
             });
-        });
+        } else {
+            ui.horizontal(|ui| {
+                ui.set_height(ui.available_height());
+                theme::panel_frame().show(ui, |left| left_content(left, self));
+                ui.add_space(CONTENT_GAP);
+                theme::panel_frame().show(ui, |right| right_content(right, self));
+            });
+        }
+    }
+
+    fn agents_view(&mut self, ui: &mut Ui) {
+        let total_width = ui.available_width();
+        let stacked = is_stacked(total_width);
+        let (left_width, right_width) = content_widths(total_width);
+        let left_content = |left: &mut Ui, app: &mut Self| {
+            left.set_width(left_width);
+            section_header(left, "Agents", "选择要安装 skills 的目标");
+            let agents = app.agents.clone();
+            ScrollArea::vertical().show(left, |ui| {
+                if agents.is_empty() {
+                    empty_state(ui, "没有发现 agent。", "可以在右侧添加自定义 agent。");
+                }
+                for agent in agents {
+                    let selected = app.selected_agents.contains(&agent.id);
+                    if agent_card(ui, &agent, selected).clicked() {
+                        toggle(&mut app.selected_agents, &agent.id);
+                    }
+                }
+            });
+        };
+        let right_content = |right: &mut Ui, app: &mut Self| {
+            right.set_width(right_width);
+            section_header(right, "自定义 Agent", "添加一个普通目录作为同步目标");
+            label_input(right, "名称", &mut app.custom_agent_name, "例如 My Agent");
+            right.horizontal_wrapped(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(RichText::new("Skills 安装目录").color(theme::MUTED));
+                    ui.add_sized(
+                        [ui.available_width().clamp(220.0, 520.0), 34.0],
+                        TextEdit::singleline(&mut app.custom_agent_path)
+                            .hint_text("选择或输入目录"),
+                    );
+                });
+                if secondary_button(ui, "选择").clicked() {
+                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                        app.custom_agent_path = path.to_string_lossy().to_string();
+                    }
+                }
+            });
+            if primary_button(right, "添加 Agent").clicked() {
+                app.add_custom_agent();
+            }
+            right.add_space(16.0);
+            pill(
+                right,
+                &format!("已选择 {} 个 agents", app.selected_agents.len()),
+                theme::ACCENT_SOFT,
+                theme::ACCENT,
+            );
+        };
+        if stacked {
+            ScrollArea::vertical().show(ui, |ui| {
+                theme::panel_frame().show(ui, |left| left_content(left, self));
+                ui.add_space(CONTENT_GAP);
+                theme::panel_frame().show(ui, |right| right_content(right, self));
+            });
+        } else {
+            ui.horizontal(|ui| {
+                ui.set_height(ui.available_height());
+                theme::panel_frame().show(ui, |left| left_content(left, self));
+                ui.add_space(CONTENT_GAP);
+                theme::panel_frame().show(ui, |right| right_content(right, self));
+            });
+        }
     }
 
     fn sync_view(&mut self, ui: &mut Ui) {
-        let (left_width, right_width) = content_widths(ui.available_width());
-        ui.horizontal(|ui| {
-            ui.set_height(ui.available_height());
-            theme::panel_frame().show(ui, |left| {
-                left.set_width(left_width);
-                section_header(left, "同步矩阵", "检查每个 skill 到每个 agent 的状态");
-                left.horizontal_wrapped(|ui| {
-                    policy_button(ui, &mut self.conflict_policy, ConflictPolicy::Prompt, "提示冲突");
-                    policy_button(
+        let total_width = ui.available_width();
+        let stacked = is_stacked(total_width);
+        let (left_width, right_width) = content_widths(total_width);
+        let left_content = |left: &mut Ui, app: &mut Self| {
+            left.set_width(left_width);
+            section_header(left, "同步矩阵", "检查每个 skill 到每个 agent 的状态");
+            left.horizontal_wrapped(|ui| {
+                policy_button(
+                    ui,
+                    &mut app.conflict_policy,
+                    ConflictPolicy::Prompt,
+                    "提示冲突",
+                );
+                policy_button(
+                    ui,
+                    &mut app.conflict_policy,
+                    ConflictPolicy::BackupOverwrite,
+                    "备份覆盖",
+                );
+                policy_button(
+                    ui,
+                    &mut app.conflict_policy,
+                    ConflictPolicy::Skip,
+                    "跳过冲突",
+                );
+                policy_button(
+                    ui,
+                    &mut app.conflict_policy,
+                    ConflictPolicy::Rename,
+                    "另存副本",
+                );
+            });
+            left.add_space(8.0);
+            let states = app.state_by_pair();
+            ScrollArea::vertical().show(left, |ui| {
+                if app.selected_skills.is_empty() || app.selected_agents.is_empty() {
+                    empty_state(
                         ui,
-                        &mut self.conflict_policy,
-                        ConflictPolicy::BackupOverwrite,
-                        "备份覆盖",
+                        "还没有同步矩阵",
+                        "请先在 Skills 和 Agents 页面选择项目。",
                     );
-                    policy_button(ui, &mut self.conflict_policy, ConflictPolicy::Skip, "跳过冲突");
-                    policy_button(ui, &mut self.conflict_policy, ConflictPolicy::Rename, "另存副本");
-                });
-                left.add_space(8.0);
-                let states = self.state_by_pair();
-                ScrollArea::vertical().show(left, |ui| {
-                    if self.selected_skills.is_empty() || self.selected_agents.is_empty() {
-                        empty_state(ui, "还没有同步矩阵", "请先在 Skills 和 Agents 页面选择项目。");
-                    }
-                    for skill_id in &self.selected_skills {
-                        for agent_id in &self.selected_agents {
-                            let key = format!("{}:{}", agent_id, skill_id);
-                            let state = states.get(&key).copied();
-                            sync_row(ui, skill_id, &agent_name(&self.agents, agent_id), state);
-                        }
-                    }
-                });
-            });
-            ui.add_space(4.0);
-            theme::panel_frame().show(ui, |right| {
-                right.set_width(right_width);
-                section_header(right, "执行", "同步选中的组合");
-                detail_row(right, "Skills", &self.selected_skills.len().to_string());
-                detail_row(right, "Agents", &self.selected_agents.len().to_string());
-                detail_row(right, "策略", conflict_policy_label(&self.conflict_policy));
-                if primary_button(right, "执行同步").clicked() {
-                    self.install_selected();
                 }
-                right.add_space(16.0);
-                section_header(right, "最近结果", "");
-                ScrollArea::vertical().max_height(280.0).show(right, |ui| {
-                    if self.results.is_empty() {
-                        empty_state(ui, "暂无同步结果", "执行同步后会显示安装、更新或跳过记录。");
+                for skill_id in &app.selected_skills {
+                    for agent_id in &app.selected_agents {
+                        let key = format!("{}:{}", agent_id, skill_id);
+                        let state = states.get(&key).copied();
+                        sync_row(ui, skill_id, &agent_name(&app.agents, agent_id), state);
                     }
-                    for result in &self.results {
-                        result_card(ui, result);
-                    }
-                });
+                }
             });
-        });
+        };
+        let right_content = |right: &mut Ui, app: &mut Self| {
+            right.set_width(right_width);
+            section_header(right, "执行", "同步选中的组合");
+            detail_row(right, "Skills", &app.selected_skills.len().to_string());
+            detail_row(right, "Agents", &app.selected_agents.len().to_string());
+            detail_row(right, "策略", conflict_policy_label(&app.conflict_policy));
+            if primary_button(right, "执行同步").clicked() {
+                app.install_selected();
+            }
+            right.add_space(16.0);
+            section_header(right, "最近结果", "");
+            ScrollArea::vertical().max_height(280.0).show(right, |ui| {
+                if app.results.is_empty() {
+                    empty_state(ui, "暂无同步结果", "执行同步后会显示安装、更新或跳过记录。");
+                }
+                for result in &app.results {
+                    result_card(ui, result);
+                }
+            });
+        };
+        if stacked {
+            ScrollArea::vertical().show(ui, |ui| {
+                theme::panel_frame().show(ui, |left| left_content(left, self));
+                ui.add_space(CONTENT_GAP);
+                theme::panel_frame().show(ui, |right| right_content(right, self));
+            });
+        } else {
+            ui.horizontal(|ui| {
+                ui.set_height(ui.available_height());
+                theme::panel_frame().show(ui, |left| left_content(left, self));
+                ui.add_space(CONTENT_GAP);
+                theme::panel_frame().show(ui, |right| right_content(right, self));
+            });
+        }
     }
 
     fn settings_view(&mut self, ui: &mut Ui) {
-        let (left_width, right_width) = content_widths(ui.available_width());
-        ui.horizontal(|ui| {
-            ui.set_height(ui.available_height());
-            theme::panel_frame().show(ui, |left| {
-                left.set_width(left_width);
-                section_header(left, "路径", "检查应用使用的本地目录");
-                label_input(left, "主仓库", &mut self.repository, "Skills 主仓库路径");
-                left.horizontal(|ui| {
-                    if secondary_button(ui, "选择目录").clicked() {
-                        self.choose_repository();
-                    }
-                    if primary_button(ui, "保存主仓库").clicked() {
-                        self.save_repository();
-                    }
-                });
-                left.add_space(12.0);
-                path_row(left, "应用数据", &self.service.data_dir().to_string_lossy());
-                path_row(left, "备份目录", &self.service.backup_root().to_string_lossy());
-                path_row(left, "导入缓存", &self.service.import_root().to_string_lossy());
+        let total_width = ui.available_width();
+        let stacked = is_stacked(total_width);
+        let (left_width, right_width) = content_widths(total_width);
+        let data_dir = self.service.data_dir().to_string_lossy().to_string();
+        let backup_root = self.service.backup_root().to_string_lossy().to_string();
+        let import_root = self.service.import_root().to_string_lossy().to_string();
+        let left_content = |left: &mut Ui, app: &mut Self| {
+            left.set_width(left_width);
+            section_header(left, "路径", "检查应用使用的本地目录");
+            label_input(left, "主仓库", &mut app.repository, "Skills 主仓库路径");
+            left.horizontal_wrapped(|ui| {
+                if secondary_button(ui, "选择目录").clicked() {
+                    app.choose_repository();
+                }
+                if primary_button(ui, "保存主仓库").clicked() {
+                    app.save_repository();
+                }
             });
-            ui.add_space(4.0);
-            theme::panel_frame().show(ui, |right| {
-                right.set_width(right_width);
-                section_header(right, "关于", "当前运行的是原生桌面版");
-                detail_row(right, "UI", "egui / eframe");
-                detail_row(right, "运行方式", "不依赖浏览器或 localhost");
-                detail_row(right, "版本", "0.1.0");
-                action_panel(right, "便携版", "使用 scripts/build-portable.ps1 生成 Windows 便携版目录。");
+            left.add_space(12.0);
+            path_row(left, "应用数据", &data_dir);
+            path_row(left, "备份目录", &backup_root);
+            path_row(left, "导入缓存", &import_root);
+        };
+        let right_content = |right: &mut Ui| {
+            right.set_width(right_width);
+            section_header(right, "关于", "当前运行的是原生桌面版");
+            detail_row(right, "UI", "egui / eframe");
+            detail_row(right, "运行方式", "不依赖浏览器或 localhost");
+            detail_row(right, "版本", "0.1.0");
+            action_panel(
+                right,
+                "便携版",
+                "使用 scripts/build-portable.ps1 生成 Windows 便携版目录。",
+            );
+        };
+        if stacked {
+            ScrollArea::vertical().show(ui, |ui| {
+                theme::panel_frame().show(ui, |left| left_content(left, self));
+                ui.add_space(CONTENT_GAP);
+                theme::panel_frame().show(ui, right_content);
             });
-        });
+        } else {
+            ui.horizontal(|ui| {
+                ui.set_height(ui.available_height());
+                theme::panel_frame().show(ui, |left| left_content(left, self));
+                ui.add_space(CONTENT_GAP);
+                theme::panel_frame().show(ui, right_content);
+            });
+        }
     }
 }
 
@@ -665,7 +880,8 @@ pub fn run() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title("Skills Manager")
             .with_inner_size(Vec2::new(1280.0, 820.0))
-            .with_min_inner_size(Vec2::new(960.0, 680.0)),
+            .with_min_inner_size(Vec2::new(960.0, 680.0))
+            .with_decorations(false),
         ..Default::default()
     };
 
@@ -708,18 +924,58 @@ fn configure_fonts(ctx: &Context) {
     ctx.set_fonts(fonts);
 }
 
+fn title_mark(ui: &mut Ui) {
+    Frame::none()
+        .fill(theme::ACCENT)
+        .rounding(Rounding::same(6.0))
+        .inner_margin(Margin::same(0.0))
+        .show(ui, |ui| {
+            ui.add_sized(
+                [22.0, 22.0],
+                egui::Label::new(RichText::new("S").strong().color(Color32::WHITE).size(13.0)),
+            );
+        });
+}
+
+fn window_button(ui: &mut Ui, label: &str) -> egui::Response {
+    ui.add_sized(
+        [WINDOW_BUTTON_WIDTH, TITLEBAR_HEIGHT - 1.0],
+        Button::new(RichText::new(label).size(15.0).color(theme::TEXT))
+            .fill(theme::PANEL)
+            .stroke(Stroke::NONE)
+            .rounding(Rounding::same(0.0)),
+    )
+}
+
+fn close_button(ui: &mut Ui) -> egui::Response {
+    ui.add_sized(
+        [WINDOW_BUTTON_WIDTH, TITLEBAR_HEIGHT - 1.0],
+        Button::new(RichText::new("×").size(16.0).color(theme::TEXT))
+            .fill(theme::PANEL)
+            .stroke(Stroke::NONE)
+            .rounding(Rounding::same(0.0)),
+    )
+}
+
 fn nav_button(ui: &mut Ui, view: &mut View, target: View, label: &str) {
     let selected = *view == target;
     let response = ui.add_sized(
         [ui.available_width(), 36.0],
-        Button::new(RichText::new(label).color(if selected {
-            theme::ACCENT
-        } else {
-            theme::TEXT
-        }))
-        .fill(if selected { theme::ACCENT_SOFT } else { theme::PANEL })
-        .stroke(Stroke::new(1.0, if selected { theme::ACCENT } else { theme::BORDER }))
-        .rounding(Rounding::same(9.0)),
+        Button::new(RichText::new(label).color(if selected { theme::ACCENT } else { theme::TEXT }))
+            .fill(if selected {
+                theme::ACCENT_SOFT
+            } else {
+                theme::PANEL
+            })
+            .stroke(Stroke::new(
+                1.0,
+                if selected {
+                    theme::ACCENT
+                } else {
+                    theme::BORDER
+                },
+            ))
+            .rounding(Rounding::same(9.0)),
     );
     if response.clicked() {
         *view = target;
@@ -727,15 +983,24 @@ fn nav_button(ui: &mut Ui, view: &mut View, target: View, label: &str) {
 }
 
 fn content_widths(total: f32) -> (f32, f32) {
-    let gap = 12.0;
-    let usable = (total - gap).max(640.0);
-    let right = usable.clamp(320.0, 390.0);
-    let left = (usable - right).max(360.0);
+    if is_stacked(total) {
+        let width = (total - PANEL_HORIZONTAL_MARGIN).max(0.0);
+        return (width, width);
+    }
+    let right_outer = (total * 0.32).clamp(DETAIL_PANEL_MIN_WIDTH, DETAIL_PANEL_MAX_WIDTH);
+    let left_outer = (total - CONTENT_GAP - right_outer).max(0.0);
+    let left = (left_outer - PANEL_HORIZONTAL_MARGIN).max(0.0);
+    let right = (right_outer - PANEL_HORIZONTAL_MARGIN).max(0.0);
     (left, right)
 }
 
+fn is_stacked(_total: f32) -> bool {
+    true
+}
+
 fn primary_button(ui: &mut Ui, label: &str) -> egui::Response {
-    ui.add(
+    ui.add_sized(
+        [button_width(label), 36.0],
         Button::new(RichText::new(label).color(Color32::WHITE))
             .fill(theme::ACCENT)
             .stroke(Stroke::new(1.0, theme::ACCENT))
@@ -744,7 +1009,8 @@ fn primary_button(ui: &mut Ui, label: &str) -> egui::Response {
 }
 
 fn secondary_button(ui: &mut Ui, label: &str) -> egui::Response {
-    ui.add(
+    ui.add_sized(
+        [button_width(label), 36.0],
         Button::new(RichText::new(label).color(theme::TEXT))
             .fill(theme::PANEL)
             .stroke(Stroke::new(1.0, theme::BORDER_STRONG))
@@ -754,14 +1020,26 @@ fn secondary_button(ui: &mut Ui, label: &str) -> egui::Response {
 
 fn policy_button(ui: &mut Ui, current: &mut ConflictPolicy, value: ConflictPolicy, label: &str) {
     let selected = *current == value;
-    let response = ui.add(
+    let response = ui.add_sized(
+        [button_width(label), 34.0],
         Button::new(RichText::new(label).color(if selected {
             theme::ACCENT
         } else {
             theme::MUTED
         }))
-        .fill(if selected { theme::ACCENT_SOFT } else { theme::PANEL })
-        .stroke(Stroke::new(1.0, if selected { theme::ACCENT } else { theme::BORDER }))
+        .fill(if selected {
+            theme::ACCENT_SOFT
+        } else {
+            theme::PANEL
+        })
+        .stroke(Stroke::new(
+            1.0,
+            if selected {
+                theme::ACCENT
+            } else {
+                theme::BORDER
+            },
+        ))
         .rounding(Rounding::same(8.0)),
     );
     if response.clicked() {
@@ -793,23 +1071,33 @@ fn metric_card(ui: &mut Ui, label: &str, value: String, helper: &str) {
 fn skill_card(ui: &mut Ui, skill: &SkillSummary, selected: bool) -> egui::Response {
     let id = ui.id().with(("skill-card", &skill.manifest.id));
     let inner = theme::list_item_frame(selected, false).show(ui, |ui| {
+        let width = ui.available_width();
+        let action_width = 78.0;
+        let text_width = (width - action_width - 18.0).max(160.0);
         ui.set_min_height(62.0);
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
-                ui.label(RichText::new(&skill.manifest.name).strong());
+                ui.set_width(text_width);
+                ui.label(RichText::new(short_path(&skill.manifest.name)).strong());
                 ui.label(
                     RichText::new(
                         skill
                             .manifest
                             .description
                             .as_deref()
-                            .unwrap_or(&skill.manifest.id),
+                            .map(short_path)
+                            .unwrap_or_else(|| short_path(&skill.manifest.id)),
                     )
                     .color(theme::MUTED),
                 );
                 ui.horizontal_wrapped(|ui| {
-                    pill(ui, &format!("v{}", skill.manifest.version), theme::PANEL_SOFT, theme::MUTED);
                     pill(
+                        ui,
+                        &format!("v{}", skill.manifest.version),
+                        theme::PANEL_SOFT,
+                        theme::MUTED,
+                    );
+                    clipped_pill(
                         ui,
                         &skill.manifest.supported_agents.join(", "),
                         theme::PANEL_SOFT,
@@ -817,14 +1105,21 @@ fn skill_card(ui: &mut Ui, skill: &SkillSummary, selected: bool) -> egui::Respon
                     );
                 });
             });
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                pill(
-                    ui,
-                    if selected { "已选择" } else { "选择" },
-                    if selected { theme::ACCENT_SOFT } else { theme::PANEL_SOFT },
-                    if selected { theme::ACCENT } else { theme::MUTED },
-                );
-            });
+            ui.add_space((ui.available_width() - action_width).max(0.0));
+            pill(
+                ui,
+                if selected { "已选择" } else { "选择" },
+                if selected {
+                    theme::ACCENT_SOFT
+                } else {
+                    theme::PANEL_SOFT
+                },
+                if selected {
+                    theme::ACCENT
+                } else {
+                    theme::MUTED
+                },
+            );
         });
     });
     let response = ui.interact(inner.response.rect, id, Sense::click());
@@ -841,19 +1136,34 @@ fn skill_card(ui: &mut Ui, skill: &SkillSummary, selected: bool) -> egui::Respon
 fn agent_card(ui: &mut Ui, agent: &AgentProfile, selected: bool) -> egui::Response {
     let id = ui.id().with(("agent-card", &agent.id));
     let inner = theme::list_item_frame(selected, false).show(ui, |ui| {
+        let width = ui.available_width();
+        let action_width = 86.0;
+        let text_width = (width - action_width - 18.0).max(160.0);
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
-                ui.label(RichText::new(agent_label(agent)).strong());
-                ui.label(RichText::new(&agent.skills_path).color(theme::MUTED));
+                ui.set_width(text_width);
+                ui.label(RichText::new(short_path(&agent_label(agent))).strong());
+                ui.label(RichText::new(short_path(&agent.skills_path)).color(theme::MUTED));
             });
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                pill(
-                    ui,
-                    if selected { "已选择" } else { agent.agent_type.as_str() },
-                    if selected { theme::ACCENT_SOFT } else { theme::PANEL_SOFT },
-                    if selected { theme::ACCENT } else { theme::MUTED },
-                );
-            });
+            ui.add_space((ui.available_width() - action_width).max(0.0));
+            pill(
+                ui,
+                if selected {
+                    "已选择"
+                } else {
+                    agent.agent_type.as_str()
+                },
+                if selected {
+                    theme::ACCENT_SOFT
+                } else {
+                    theme::PANEL_SOFT
+                },
+                if selected {
+                    theme::ACCENT
+                } else {
+                    theme::MUTED
+                },
+            );
         });
     });
     let response = ui.interact(inner.response.rect, id, Sense::click());
@@ -927,17 +1237,22 @@ fn detail_title(ui: &mut Ui, title: &str, subtitle: &str) {
 fn detail_row(ui: &mut Ui, label: &str, value: &str) {
     ui.horizontal_wrapped(|ui| {
         ui.set_min_height(28.0);
-        ui.label(RichText::new(label).color(theme::MUTED));
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label(RichText::new(value).color(theme::TEXT));
-        });
+        ui.add_sized(
+            [76.0, 24.0],
+            egui::Label::new(RichText::new(label).color(theme::MUTED)),
+        );
+        ui.label(RichText::new(short_path(value)).color(theme::TEXT));
     });
 }
 
 fn path_row(ui: &mut Ui, label: &str, path: &str) {
     theme::soft_frame().show(ui, |ui| {
         ui.label(RichText::new(label).color(theme::MUTED));
-        ui.monospace(path);
+        ui.label(
+            RichText::new(short_path(path))
+                .monospace()
+                .color(theme::TEXT),
+        );
     });
 }
 
@@ -950,14 +1265,34 @@ fn label_input(ui: &mut Ui, label: &str, value: &mut String, hint: &str) {
 }
 
 fn pill(ui: &mut Ui, text: &str, fill: Color32, color: Color32) {
+    pill_text(ui, text, fill, color, None);
+}
+
+fn clipped_pill(ui: &mut Ui, text: &str, fill: Color32, color: Color32) {
+    let max_width = ui.available_width().clamp(160.0, 560.0);
+    pill_text(ui, text, fill, color, Some(max_width));
+}
+
+fn pill_text(ui: &mut Ui, text: &str, fill: Color32, color: Color32, max_width: Option<f32>) {
     Frame::none()
         .fill(fill)
         .stroke(Stroke::new(1.0, theme::BORDER))
         .rounding(Rounding::same(999.0))
         .inner_margin(Margin::symmetric(9.0, 3.0))
         .show(ui, |ui| {
-            ui.label(RichText::new(text).color(color).size(12.0));
+            if let Some(width) = max_width {
+                ui.add_sized(
+                    [width, 18.0],
+                    egui::Label::new(RichText::new(short_path(text)).color(color).size(12.0)),
+                );
+            } else {
+                ui.label(RichText::new(text).color(color).size(12.0));
+            }
         });
+}
+
+fn button_width(label: &str) -> f32 {
+    (label.chars().count() as f32 * 14.0 + 28.0).clamp(62.0, 128.0)
 }
 
 fn toggle(set: &mut HashSet<String>, value: &str) {
