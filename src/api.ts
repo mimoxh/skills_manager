@@ -55,6 +55,9 @@ export const api = {
   uninstallSkill(skillId: string, agentId: string) {
     return command<void>("uninstall_skill", { skillId, agentId }, () => undefined);
   },
+  uninstallSkillFromAgents(skillId: string, agentIds: string[]) {
+    return command<void>("uninstall_skill_from_agents", { skillId, agentIds }, () => undefined);
+  },
   rollbackLast(agentId: string, skillId: string) {
     return command<void>("rollback_last", { agentId, skillId }, () => undefined);
   },

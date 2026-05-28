@@ -73,6 +73,15 @@ pub fn uninstall_skill(
 }
 
 #[tauri::command]
+pub fn uninstall_skill_from_agents(
+    skill_id: String,
+    agent_ids: Vec<String>,
+    service: State<AppService>,
+) -> AppResult<()> {
+    service.uninstall_skill_from_agents(&skill_id, &agent_ids)
+}
+
+#[tauri::command]
 pub fn rollback_last(
     agent_id: String,
     skill_id: String,

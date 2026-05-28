@@ -1,9 +1,7 @@
 use crate::{
     error::{AppError, AppResult},
-    hash::copy_dir_all,
     models::{AgentProfile, AgentType},
 };
-use chrono::Utc;
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -38,14 +36,9 @@ impl DirectoryAdapter {
         Some(path)
     }
 
-    fn backup_path(&self, backup_root: &Path, profile: &AgentProfile, skill_id: &str) -> PathBuf {
-        backup_root
-            .join(safe_path_segment(&profile.id))
-            .join(safe_path_segment(skill_id))
-            .join(Utc::now().format("%Y%m%d%H%M%S").to_string())
-    }
 }
 
+#[cfg(test)]
 fn safe_path_segment(value: &str) -> String {
     value
         .chars()
@@ -110,16 +103,14 @@ impl AgentAdapter for DirectoryAdapter {
         &self,
         skill_id: &str,
         profile: &AgentProfile,
-        backup_root: &Path,
+        _backup_root: &Path,
     ) -> AppResult<Option<PathBuf>> {
         let target = Path::new(&profile.skills_path).join(skill_id);
         if !target.exists() {
             return Ok(None);
         }
-        let backup = self.backup_path(backup_root, profile, skill_id);
-        copy_dir_all(&target, &backup)?;
         fs::remove_dir_all(&target)?;
-        Ok(Some(backup))
+        Ok(None)
     }
 }
 

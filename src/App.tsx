@@ -60,6 +60,7 @@ export default function App() {
             onFolder={() => folderInputRef.current?.click()}
             onArchive={() => archiveInputRef.current?.click()}
             onSync={state.syncSkillToAgents}
+            onUninstall={state.uninstallSkillFromAgents}
             onRefresh={state.refreshAll}
           />
         );

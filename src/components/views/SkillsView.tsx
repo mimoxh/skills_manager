@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import ReactMarkdown from "react-markdown";
 import type { AgentProfile, ConflictPolicy, GroupedSkill, InstallResult } from "../../types";
 
 const policyOptions: Array<{ value: ConflictPolicy; label: string; helper: string }> = [
@@ -15,16 +16,18 @@ interface SkillsViewProps {
   onFolder: () => void;
   onArchive: () => void;
   onSync: (title: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) => Promise<InstallResult[]>;
+  onUninstall: (skillId: string, agentIds: string[]) => Promise<void>;
   onRefresh: () => void;
 }
 
-export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, onSync, onRefresh }: SkillsViewProps) {
+export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, onSync, onUninstall, onRefresh }: SkillsViewProps) {
   const [selectedSkill, setSelectedSkill] = useState<GroupedSkill | null>(null);
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [conflictPolicy, setConflictPolicy] = useState<ConflictPolicy>("backupOverwrite");
   const [lastResults, setLastResults] = useState<InstallResult[]>([]);
   const [dragging, setDragging] = useState(false);
   const [filter, setFilter] = useState<"all" | "missing">("all");
+  const [deleteTarget, setDeleteTarget] = useState<GroupedSkill | null>(null);
 
   const displayedSkills = useMemo(() => {
     if (filter === "missing") return skills.filter((s) => s.missingAgentIds.length > 0);
@@ -58,9 +61,21 @@ export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, 
 
   async function executeSync() {
     if (!selectedSkill) return;
-    const results = await onSync(selectedSkill.title, selectedAgents, conflictPolicy);
-    setLastResults(results);
+    const deselectedIds = selectedSkill.installedAgentIds.filter((id) => !selectedAgents.includes(id));
+    if (deselectedIds.length > 0) {
+      await onUninstall(selectedSkill.title, deselectedIds);
+    }
+    if (selectedAgents.length > 0) {
+      const results = await onSync(selectedSkill.title, selectedAgents, conflictPolicy);
+      setLastResults(results);
+    }
     setSelectedSkill(null);
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    await onUninstall(deleteTarget.title, deleteTarget.installedAgentIds);
+    setDeleteTarget(null);
   }
 
   return (
@@ -146,6 +161,16 @@ export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, 
               <span className={`badge ${skill.missingAgentIds.length > 0 ? "badge-syncable" : "badge-synced"}`}>
                 {skill.missingAgentIds.length > 0 ? "可同步" : "已覆盖"}
               </span>
+              <button
+                className="btn-icon danger"
+                title="删除"
+                style={{ width: 32, height: 32, flexShrink: 0 }}
+                onClick={(e) => { e.stopPropagation(); setDeleteTarget(skill); }}
+                disabled={busy}
+                type="button"
+              >
+                <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+              </button>
             </div>
           ))}
           {!displayedSkills.length && (
@@ -178,6 +203,18 @@ export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, 
           onToggleAgent={toggleAgent}
         />
       )}
+
+      {/* Delete Confirm Dialog */}
+      {deleteTarget && (
+        <ConfirmDialog
+          title="删除 Skill"
+          message={`确定要从所有 ${deleteTarget.installedAgentIds.length} 个 Agent 中删除 "${deleteTarget.title}" 吗？`}
+          confirmLabel="删除"
+          busy={busy}
+          onClose={() => setDeleteTarget(null)}
+          onConfirm={confirmDelete}
+        />
+      )}
     </>
   );
 }
@@ -196,9 +233,11 @@ function SyncSkillDialog({
   onSync: () => void;
   onToggleAgent: (agentId: string) => void;
 }) {
+  const readmeContent = skill.readme || skill.description;
+
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(47, 48, 44, 0.28)", padding: 20 }}>
-      <div style={{ maxHeight: "88vh", width: "100%", maxWidth: 720, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(80,60,30,0.14), 0 2px 8px rgba(80,60,30,0.06)" }}>
+      <div style={{ maxHeight: "88vh", width: "100%", maxWidth: 960, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(80,60,30,0.14), 0 2px 8px rgba(80,60,30,0.06)" }}>
         {/* Header */}
         <div style={{ display: "flex", alignItems: "flex-start", gap: 12, borderBottom: "1px solid var(--border)", padding: "20px 24px" }}>
           <div style={{ width: 40, height: 40, background: "var(--accent-light)", borderRadius: "var(--radius-sm)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)", flexShrink: 0 }}>
@@ -213,59 +252,74 @@ function SyncSkillDialog({
           </button>
         </div>
 
-        {/* Body */}
-        <div style={{ flex: 1, overflow: "auto", padding: "20px 24px" }}>
-          {/* Agents */}
-          <div style={{ marginBottom: 20 }}>
-            <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>目标 Agent</p>
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {agents.map((agent) => {
-                const checked = selectedAgents.includes(agent.id);
-                const installed = skill.installedAgentIds.includes(agent.id);
-                return (
-                  <button
-                    key={agent.id}
-                    className={`agent-item${checked ? " selected" : ""}`}
-                    onClick={() => onToggleAgent(agent.id)}
-                    type="button"
-                    style={checked ? { borderColor: "var(--accent)", background: "var(--accent-soft)" } : undefined}
-                  >
-                    <span style={{
-                      width: 20, height: 20, flexShrink: 0, borderRadius: 4, border: `1px solid ${checked ? "var(--accent)" : "var(--border)"}`,
-                      background: checked ? "var(--accent)" : "transparent", display: "flex", alignItems: "center", justifyContent: "center",
-                    }}>
-                      {checked && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><polyline points="20 6 9 17 4 12" /></svg>}
-                    </span>
-                    <span style={{ flex: 1, minWidth: 0 }}>
-                      <span style={{ display: "block", fontSize: 14, fontWeight: 500 }}>{agent.name}</span>
-                      <span style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{agent.skillsPath}</span>
-                    </span>
-                    <span className={`badge ${installed ? "badge-success" : "badge-warning"}`}>{installed ? "已安装" : "未安装"}</span>
-                  </button>
-                );
-              })}
-            </div>
+        {/* Body - Two Column Layout */}
+        <div style={{ flex: 1, overflow: "hidden", display: "grid", gridTemplateColumns: "1.2fr 1fr" }}>
+          {/* Left Column - Markdown Reader */}
+          <div style={{ overflow: "auto", padding: "20px 24px", borderRight: "1px solid var(--border)" }}>
+            <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 12 }}>Skill 说明</p>
+            {readmeContent ? (
+              <div className="markdown-body">
+                <ReactMarkdown>{readmeContent}</ReactMarkdown>
+              </div>
+            ) : (
+              <p style={{ fontSize: 13, color: "var(--text-tertiary)", fontStyle: "italic" }}>暂无说明</p>
+            )}
           </div>
 
-          {/* Conflict Policy */}
-          <div>
-            <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>冲突策略</p>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-              {policyOptions.map((option) => (
-                <button
-                  key={option.value}
-                  className={`card${conflictPolicy === option.value ? " selected" : ""}`}
-                  onClick={() => onPolicy(option.value)}
-                  type="button"
-                  style={{
-                    padding: 12, textAlign: "left", cursor: "pointer",
-                    ...(conflictPolicy === option.value ? { borderColor: "var(--accent)", background: "var(--accent-soft)" } : {}),
-                  }}
-                >
-                  <span style={{ display: "block", fontSize: 14, fontWeight: 500 }}>{option.label}</span>
-                  <span style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>{option.helper}</span>
-                </button>
-              ))}
+          {/* Right Column - Agent Sync */}
+          <div style={{ overflow: "auto", padding: "20px 24px", display: "flex", flexDirection: "column", gap: 20 }}>
+            {/* Agents */}
+            <div>
+              <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>目标 Agent</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {agents.map((agent) => {
+                  const checked = selectedAgents.includes(agent.id);
+                  const installed = skill.installedAgentIds.includes(agent.id);
+                  return (
+                    <button
+                      key={agent.id}
+                      className={`agent-item${checked ? " selected" : ""}`}
+                      onClick={() => onToggleAgent(agent.id)}
+                      type="button"
+                      style={checked ? { borderColor: "var(--accent)", background: "var(--accent-soft)" } : undefined}
+                    >
+                      <span style={{
+                        width: 20, height: 20, flexShrink: 0, borderRadius: 4, border: `1px solid ${checked ? "var(--accent)" : "var(--border)"}`,
+                        background: checked ? "var(--accent)" : "transparent", display: "flex", alignItems: "center", justifyContent: "center",
+                      }}>
+                        {checked && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><polyline points="20 6 9 17 4 12" /></svg>}
+                      </span>
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ display: "block", fontSize: 14, fontWeight: 500 }}>{agent.name}</span>
+                        <span style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{agent.skillsPath}</span>
+                      </span>
+                      <span className={`badge ${installed ? "badge-success" : "badge-warning"}`}>{installed ? "已安装" : "未安装"}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Conflict Policy */}
+            <div>
+              <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>冲突策略</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {policyOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    className={`card${conflictPolicy === option.value ? " selected" : ""}`}
+                    onClick={() => onPolicy(option.value)}
+                    type="button"
+                    style={{
+                      padding: 12, textAlign: "left", cursor: "pointer",
+                      ...(conflictPolicy === option.value ? { borderColor: "var(--accent)", background: "var(--accent-soft)" } : {}),
+                    }}
+                  >
+                    <span style={{ display: "block", fontSize: 14, fontWeight: 500 }}>{option.label}</span>
+                    <span style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>{option.helper}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -275,11 +329,45 @@ function SyncSkillDialog({
           <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>已选择 {selectedAgents.length} 个 Agent</p>
           <div style={{ display: "flex", gap: 8 }}>
             <button className="btn btn-secondary" onClick={onClose} disabled={busy} type="button">取消</button>
-            <button className="btn btn-primary" onClick={onSync} disabled={busy || selectedAgents.length === 0} type="button">
-              <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>
-              同步
-            </button>
+            {selectedAgents.length === 0 ? (
+              <button className="btn btn-danger" onClick={onSync} disabled={busy} type="button">
+                <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+                全部删除
+              </button>
+            ) : (
+              <button className="btn btn-primary" onClick={onSync} disabled={busy} type="button">
+                <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>
+                {selectedAgents.length < skill.installedAgentIds.length ? "同步并清理" : "同步"}
+              </button>
+            )}
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConfirmDialog({
+  title, message, confirmLabel, busy,
+  onClose, onConfirm,
+}: {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(47, 48, 44, 0.36)", padding: 20 }}>
+      <div style={{ width: "100%", maxWidth: 420, borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(80,60,30,0.14)" }}>
+        <div style={{ padding: "20px 24px" }}>
+          <h3 style={{ fontSize: 15, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>{title}</h3>
+          <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6 }}>{message}</p>
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "14px 24px", borderTop: "1px solid var(--border)" }}>
+          <button className="btn btn-secondary" onClick={onClose} disabled={busy} type="button">取消</button>
+          <button className="btn btn-danger" onClick={onConfirm} disabled={busy} type="button">{confirmLabel}</button>
         </div>
       </div>
     </div>

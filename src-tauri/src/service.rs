@@ -235,20 +235,19 @@ impl AppService {
             .find(|agent| agent.id == agent_id)
             .ok_or_else(|| AppError::Message(format!("找不到 Agent: {}", agent_id)))?;
         let adapter = adapter_for(&agent);
-        let backup = adapter.uninstall(skill_id, &agent, &self.backup_root())?;
+        adapter.uninstall(skill_id, &agent, &self.backup_root())?;
         let target_path = Path::new(&agent.skills_path)
             .join(skill_id)
             .to_string_lossy()
             .to_string();
-        self.store.record_uninstall(
-            agent_id,
-            skill_id,
-            &target_path,
-            backup
-                .as_ref()
-                .map(|path| path.to_string_lossy())
-                .as_deref(),
-        )
+        self.store.record_uninstall(agent_id, skill_id, &target_path, None)
+    }
+
+    pub fn uninstall_skill_from_agents(&self, skill_id: &str, agent_ids: &[String]) -> AppResult<()> {
+        for agent_id in agent_ids {
+            self.uninstall_skill(skill_id, agent_id)?;
+        }
+        Ok(())
     }
 
     pub fn rollback_last(&self, agent_id: &str, skill_id: &str) -> AppResult<()> {
@@ -456,7 +455,7 @@ fn scan_agent_skill_copies(agent: &AgentProfile) -> AppResult<Vec<AgentSkillCopy
             continue;
         }
         let metadata = fs::metadata(&path).ok();
-        let (title, version, description) = read_agent_skill_info(&path);
+        let (title, version, description, readme) = read_agent_skill_info(&path);
         copies.push(AgentSkillCopy {
             agent_id: agent.id.clone(),
             agent_name: agent.name.clone(),
@@ -468,6 +467,7 @@ fn scan_agent_skill_copies(agent: &AgentProfile) -> AppResult<Vec<AgentSkillCopy
                 .and_then(|metadata| metadata.modified().ok())
                 .map(system_time_to_rfc3339),
             description,
+            readme,
         });
     }
     Ok(copies)
@@ -506,6 +506,7 @@ fn group_agent_skills(agents: &[AgentProfile], copies: Vec<AgentSkillCopy>) -> V
             GroupedSkill {
                 title: best_copy.title.clone(),
                 description: best_copy.description.clone(),
+                readme: best_copy.readme.clone(),
                 best_copy,
                 copies,
                 installed_agent_ids,
@@ -517,7 +518,7 @@ fn group_agent_skills(agents: &[AgentProfile], copies: Vec<AgentSkillCopy>) -> V
     values
 }
 
-fn read_agent_skill_info(skill_path: &Path) -> (String, Option<String>, Option<String>) {
+fn read_agent_skill_info(skill_path: &Path) -> (String, Option<String>, Option<String>, Option<String>) {
     for name in ["skill.json", "skill.yaml", "skill.yml"] {
         let manifest_path = skill_path.join(name);
         if !manifest_path.exists() {
@@ -547,19 +548,23 @@ fn read_agent_skill_info(skill_path: &Path) -> (String, Option<String>, Option<S
                     .filter(|value| !value.is_empty())
                     .map(ToString::to_string);
                 if let Some(title) = title {
-                    return (title.to_string(), version, description);
+                    let readme = fs::read_to_string(skill_path.join("SKILL.md"))
+                        .ok()
+                        .and_then(|text| extract_markdown_body(&text));
+                    return (title.to_string(), version, description, readme);
                 }
             }
         }
     }
 
     let skill_md = skill_path.join("SKILL.md");
-    if let Ok(text) = fs::read_to_string(skill_md) {
+    if let Ok(text) = fs::read_to_string(&skill_md) {
+        let readme = extract_markdown_body(&text);
         if let Some((title, version, description)) = read_markdown_frontmatter(&text) {
-            return (title, version, description);
+            return (title, version, description, readme);
         }
         if let Some(title) = read_markdown_heading(&text) {
-            return (title, None, None);
+            return (title, None, None, readme);
         }
     }
 
@@ -571,7 +576,25 @@ fn read_agent_skill_info(skill_path: &Path) -> (String, Option<String>, Option<S
             .to_string(),
         None,
         None,
+        None,
     )
+}
+
+fn extract_markdown_body(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if !trimmed.starts_with("---") {
+        return Some(trimmed.to_string());
+    }
+    let after_first = &trimmed[3..];
+    let Some(end_idx) = after_first.find("\n---") else {
+        return Some(trimmed.to_string());
+    };
+    let body = after_first[end_idx + 4..].trim();
+    if body.is_empty() {
+        None
+    } else {
+        Some(body.to_string())
+    }
 }
 
 fn read_markdown_frontmatter(text: &str) -> Option<(String, Option<String>, Option<String>)> {
@@ -802,19 +825,19 @@ mod tests {
 
         assert_eq!(
             read_agent_skill_info(&root.path().join("manifest")),
-            ("Manifest Title".to_string(), Some("2.0.0".to_string()), None)
+            ("Manifest Title".to_string(), Some("2.0.0".to_string()), None, Some("# Ignored".to_string()))
         );
         assert_eq!(
             read_agent_skill_info(&root.path().join("frontmatter")),
-            ("Frontmatter Title".to_string(), Some("1.2.3".to_string()), None)
+            ("Frontmatter Title".to_string(), Some("1.2.3".to_string()), None, Some("# Ignored".to_string()))
         );
         assert_eq!(
             read_agent_skill_info(&root.path().join("heading")),
-            ("Heading Title".to_string(), None, None)
+            ("Heading Title".to_string(), None, None, Some("# Heading Title".to_string()))
         );
         assert_eq!(
             read_agent_skill_info(&root.path().join("directory")),
-            ("directory".to_string(), None, None)
+            ("directory".to_string(), None, None, None)
         );
     }
 
@@ -844,6 +867,7 @@ mod tests {
                 fingerprint: "a".into(),
                 updated_at: Some("2026-05-01T00:00:00Z".into()),
                 description: None,
+                readme: None,
             },
             AgentSkillCopy {
                 agent_id: "b".into(),
@@ -854,6 +878,7 @@ mod tests {
                 fingerprint: "b".into(),
                 updated_at: Some("2026-05-02T00:00:00Z".into()),
                 description: None,
+                readme: None,
             },
         ];
 

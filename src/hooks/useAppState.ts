@@ -109,6 +109,20 @@ export function useAppState() {
     }
   }
 
+  async function uninstallSkillFromAgents(skillId: string, agentIds: string[]) {
+    if (!agentIds.length) return;
+    setBusy(true);
+    try {
+      await api.uninstallSkillFromAgents(skillId, agentIds);
+      await refreshAll();
+      setMessage(`已从 ${agentIds.length} 个 Agent 卸载 ${skillId}。`);
+    } catch (error) {
+      setMessage(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function syncSkillToAgents(
     title: string,
     targetAgentIds: string[],
@@ -194,7 +208,7 @@ export function useAppState() {
     message, setMessage,
     busy, query, setQuery,
     isInitialLoading,
-    refreshAll, syncSkillToAgents, deleteAgent, uninstallSkill,
+    refreshAll, syncSkillToAgents, deleteAgent, uninstallSkill, uninstallSkillFromAgents,
     handleSkillDrop, importFiles, fileToUpload,
   };
 }

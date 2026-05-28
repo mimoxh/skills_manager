@@ -24,6 +24,7 @@ pub fn run() {
             scan_agent_skills,
             sync_grouped_skill,
             uninstall_skill,
+            uninstall_skill_from_agents,
             rollback_last
         ])
         .run(tauri::generate_context!())

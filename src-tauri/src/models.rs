@@ -38,6 +38,8 @@ pub struct AgentSkillCopy {
     pub updated_at: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
+    pub readme: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -50,6 +52,8 @@ pub struct GroupedSkill {
     pub missing_agent_ids: Vec<String>,
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
+    pub readme: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
