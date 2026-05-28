@@ -1,58 +1,68 @@
-import { Bot, Gauge, Settings, Sparkles } from "lucide-react";
-import { cn } from "../../lib/utils";
+import { useState } from "react";
 import type { View } from "../../App";
 
-const navItems: Array<{ id: View; label: string; icon: React.ReactNode }> = [
-  { id: "overview", label: "概览", icon: <Gauge size={16} /> },
-  { id: "skills", label: "Skills", icon: <Sparkles size={16} /> },
-  { id: "agents", label: "Agents", icon: <Bot size={16} /> },
-  { id: "settings", label: "设置", icon: <Settings size={16} /> },
+const navItems: Array<{ id: View; label: string; icon: string }> = [
+  { id: "overview", label: "概览", icon: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z" },
+  { id: "skills", label: "Skills", icon: "M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" },
+  { id: "agents", label: "Agents", icon: "M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8z" },
 ];
-
-function shortPath(path: string) {
-  if (!path) return "未设置";
-  return path.length > 36 ? `...${path.slice(-33)}` : path;
-}
 
 interface SidebarProps {
   view: View;
-  repository: string;
   onNavigate: (view: View) => void;
+  skillCount?: number;
+  agentCount?: number;
 }
 
-export function Sidebar({ view, repository, onNavigate }: SidebarProps) {
+export function Sidebar({ view, onNavigate, skillCount = 0, agentCount = 0 }: SidebarProps) {
+  const [collapsed, setCollapsed] = useState(false);
+
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-[var(--color-border)] bg-[rgb(247_247_245_/_0.92)] px-3 py-4">
-      <nav className="flex flex-col gap-1">
+    <aside className={`sidebar${collapsed ? " collapsed" : ""}`}>
+      <div className="sidebar-header">
+        <div className="sidebar-logo">
+          <div className="sidebar-logo-icon">S</div>
+          <div>
+            <div className="sidebar-logo-text">Skills Manager</div>
+            <div className="sidebar-logo-badge">v0.1.0</div>
+          </div>
+        </div>
+      </div>
+      <nav className="sidebar-nav">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px 6px" }}>
+          <span className="nav-section-label" style={{ padding: 0 }}>导航</span>
+          <button
+            className="sidebar-toggle"
+            onClick={() => setCollapsed((c) => !c)}
+            title={collapsed ? "展开侧边栏" : "收纳侧边栏"}
+            type="button"
+            style={{ margin: 0 }}
+          >
+            <svg className="icon icon-sm" viewBox="0 0 24 24">
+              <polyline points={collapsed ? "9 18 15 12 9 6" : "15 18 9 12 15 6"} />
+            </svg>
+          </button>
+        </div>
         {navItems.map((item) => (
           <button
             key={item.id}
-            className={cn(
-              "relative flex min-h-11 items-center gap-3 rounded-md px-3 text-[13px] font-medium transition-colors duration-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color-mix(in_srgb,var(--color-accent)_28%,transparent)]",
-              view === item.id
-                ? "bg-[var(--color-surface-raised)] text-[var(--color-text)] shadow-sm"
-                : "text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-raised)] hover:text-[var(--color-text)]",
-            )}
+            className={`nav-item${view === item.id ? " active" : ""}`}
             onClick={() => onNavigate(item.id)}
             type="button"
+            title={collapsed ? item.label : undefined}
           >
-            {view === item.id && (
-              <div className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r bg-[var(--color-accent)]" />
-            )}
-            {item.icon}
+            <svg className="icon" viewBox="0 0 24 24">
+              <path d={item.icon} />
+            </svg>
             <span>{item.label}</span>
           </button>
         ))}
       </nav>
-
-      <div className="mt-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-raised)] p-3 shadow-sm">
-        <span className="text-xs font-medium text-[var(--color-text-secondary)]">主仓库</span>
-        <p
-          className="mt-1 truncate text-xs leading-relaxed text-[var(--color-text)]"
-          title={repository}
-        >
-          {shortPath(repository)}
-        </p>
+      <div className="sidebar-footer">
+        <div className="sidebar-stat">
+          <span className="sidebar-stat-dot" />
+          <span className="sidebar-footer-text">已识别 {skillCount} 个 skills，{agentCount} 个 agents</span>
+        </div>
       </div>
     </aside>
   );

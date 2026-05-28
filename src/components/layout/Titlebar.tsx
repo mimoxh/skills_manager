@@ -1,5 +1,4 @@
 import { MouseEvent, useEffect, useState } from "react";
-import { Maximize2, Minus, Sparkles, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 function hasTauriRuntime() {
@@ -30,48 +29,29 @@ export function Titlebar() {
   }
 
   return (
-    <header
-      className="flex h-11 shrink-0 select-none items-center border-b border-[var(--color-border)] bg-[rgb(253_253_252_/_0.92)]"
-      onMouseDown={startDrag}
-      onDoubleClick={toggleMaximize}
-    >
-      <div className="flex items-center gap-3 pl-4">
-        <div className="flex h-6 w-6 items-center justify-center rounded-md bg-[var(--color-accent)] text-white shadow-sm">
-          <Sparkles size={12} />
+    <div className="titlebar" onMouseDown={startDrag} onDoubleClick={toggleMaximize}>
+      <div className="titlebar-logo">
+        <div className="titlebar-logo-icon">
+          <svg viewBox="0 0 24 24">
+            <polygon points="12 2 2 7 12 12 22 7 12 2" />
+            <polyline points="2 17 12 22 22 17" />
+            <polyline points="2 12 12 17 22 12" />
+          </svg>
         </div>
-        <span className="text-[13px] font-semibold text-[var(--color-text)]">Skills Manager</span>
+        <span className="titlebar-text">Skills Manager</span>
       </div>
-      <div className="flex-1 h-full" />
-      <div
-        className="flex h-full"
-        onMouseDown={(e) => e.stopPropagation()}
-        onDoubleClick={(e) => e.stopPropagation()}
-      >
-        <button
-          className="flex h-full w-11 items-center justify-center text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
-          onClick={() => appWindow()?.minimize()}
-          title="最小化"
-          type="button"
-        >
-          <Minus size={14} />
+      <div className="titlebar-spacer" />
+      <div onMouseDown={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()} style={{ display: "flex", height: "100%" }}>
+        <button className="titlebar-btn" onClick={() => appWindow()?.minimize()} title="最小化" type="button">
+          <svg className="icon icon-sm" viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12" /></svg>
         </button>
-        <button
-          className="flex h-full w-11 items-center justify-center text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
-          onClick={toggleMaximize}
-          title={maximized ? "还原" : "最大化"}
-          type="button"
-        >
-          <Maximize2 size={13} />
+        <button className="titlebar-btn" onClick={toggleMaximize} title={maximized ? "还原" : "最大化"} type="button">
+          <svg className="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" /></svg>
         </button>
-        <button
-          className="flex h-full w-11 items-center justify-center text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-danger)] hover:text-white"
-          onClick={() => appWindow()?.close()}
-          title="关闭"
-          type="button"
-        >
-          <X size={14} />
+        <button className="titlebar-btn close" onClick={() => appWindow()?.close()} title="关闭" type="button">
+          <svg className="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
         </button>
       </div>
-    </header>
+    </div>
   );
 }

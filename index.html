@@ -4,9 +4,180 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Skills Manager</title>
+    <style>
+      /* 骨架屏：立即显示 UI 轮廓，消除黑屏/白屏 */
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #f3f3f0;
+        font-family: "Segoe UI Variable", "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
+      }
+      
+      .skeleton-root {
+        display: flex;
+        width: 100%;
+        height: 100%;
+        flex-direction: column;
+      }
+      
+      /* 标题栏骨架 */
+      .skeleton-titlebar {
+        height: 44px;
+        background: rgba(253, 253, 252, 0.92);
+        border-bottom: 1px solid #e7e5df;
+        display: flex;
+        align-items: center;
+        padding-left: 16px;
+        gap: 12px;
+      }
+      .skeleton-titlebar-icon {
+        width: 24px;
+        height: 24px;
+        border-radius: 6px;
+        background: #2f7d72;
+      }
+      .skeleton-titlebar-text {
+        width: 100px;
+        height: 14px;
+        border-radius: 3px;
+        background: #e7e5df;
+        animation: pulse 1.5s ease-in-out infinite;
+      }
+      
+      /* 主体区域 */
+      .skeleton-body {
+        flex: 1;
+        display: flex;
+        min-height: 0;
+      }
+      
+      /* 侧边栏骨架 */
+      .skeleton-sidebar {
+        width: 256px;
+        background: rgba(247, 247, 245, 0.92);
+        border-right: 1px solid #e7e5df;
+        padding: 16px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .skeleton-nav-item {
+        height: 44px;
+        border-radius: 6px;
+        background: #e7e5df;
+        animation: pulse 1.5s ease-in-out infinite;
+      }
+      .skeleton-nav-item:nth-child(2) {
+        animation-delay: 0.1s;
+      }
+      .skeleton-nav-item:nth-child(3) {
+        animation-delay: 0.2s;
+      }
+      .skeleton-nav-item:nth-child(4) {
+        animation-delay: 0.3s;
+      }
+      
+      /* 主内容区骨架 */
+      .skeleton-main {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+      
+      /* 命令栏骨架 */
+      .skeleton-commandbar {
+        padding: 16px 24px;
+        border-bottom: 1px solid #e7e5df;
+        background: rgba(253, 253, 252, 0.86);
+      }
+      .skeleton-search {
+        height: 36px;
+        border-radius: 6px;
+        background: #ffffff;
+        border: 1px solid #e7e5df;
+        animation: pulse 1.5s ease-in-out infinite;
+      }
+      
+      /* 内容区骨架 */
+      .skeleton-content {
+        flex: 1;
+        padding: 24px;
+        overflow: hidden;
+      }
+      .skeleton-metrics {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+        margin-bottom: 20px;
+      }
+      .skeleton-metric {
+        height: 80px;
+        border-radius: 8px;
+        background: #ffffff;
+        border: 1px solid #e7e5df;
+        animation: pulse 1.5s ease-in-out infinite;
+      }
+      .skeleton-metric:nth-child(2) { animation-delay: 0.1s; }
+      .skeleton-metric:nth-child(3) { animation-delay: 0.2s; }
+      .skeleton-metric:nth-child(4) { animation-delay: 0.3s; }
+      
+      .skeleton-card {
+        height: 200px;
+        border-radius: 8px;
+        background: #ffffff;
+        border: 1px solid #e7e5df;
+        animation: pulse 1.5s ease-in-out infinite;
+        animation-delay: 0.4s;
+      }
+      
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+      
+      /* React 挂载后隐藏骨架屏 */
+      #root:not(:empty) ~ .skeleton-root {
+        display: none;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>
+    
+    <!-- 骨架屏：在 React 挂载前显示 -->
+    <div class="skeleton-root">
+      <div class="skeleton-titlebar">
+        <div class="skeleton-titlebar-icon"></div>
+        <div class="skeleton-titlebar-text"></div>
+      </div>
+      <div class="skeleton-body">
+        <div class="skeleton-sidebar">
+          <div class="skeleton-nav-item"></div>
+          <div class="skeleton-nav-item"></div>
+          <div class="skeleton-nav-item"></div>
+          <div class="skeleton-nav-item"></div>
+        </div>
+        <div class="skeleton-main">
+          <div class="skeleton-commandbar">
+            <div class="skeleton-search"></div>
+          </div>
+          <div class="skeleton-content">
+            <div class="skeleton-metrics">
+              <div class="skeleton-metric"></div>
+              <div class="skeleton-metric"></div>
+              <div class="skeleton-metric"></div>
+              <div class="skeleton-metric"></div>
+            </div>
+            <div class="skeleton-card"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

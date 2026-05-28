@@ -104,7 +104,7 @@ pub struct DiscoveryPathEntry {
     pub skills_subdir: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentProfile {
     pub id: String,
@@ -129,37 +129,6 @@ pub enum ConflictPolicy {
     Rename,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum InstallStatus {
-    #[serde(rename = "installed")]
-    Installed,
-    #[serde(rename = "stale")]
-    Stale,
-    #[serde(rename = "conflict")]
-    Conflict,
-    #[serde(rename = "missing")]
-    Missing,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct InstallState {
-    pub agent_id: String,
-    pub skill_id: String,
-    pub status: InstallStatus,
-    pub installed_fingerprint: Option<String>,
-    pub target_fingerprint: Option<String>,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SyncCandidate {
-    pub skill: SkillSummary,
-    pub states: Vec<InstallState>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallResult {
@@ -174,8 +143,6 @@ pub struct InstallResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitialData {
-    pub repository: String,
     pub skills: Vec<GroupedSkill>,
     pub agents: Vec<AgentProfile>,
-    pub discovery_paths: Vec<DiscoveryPathEntry>,
 }

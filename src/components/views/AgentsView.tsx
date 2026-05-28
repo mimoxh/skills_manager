@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { AgentProfile, GroupedSkill } from "../../types";
+import type { AgentProfile, ConflictPolicy, GroupedSkill, InstallResult } from "../../types";
 
 async function pickFolder(): Promise<string | null> {
   if (!("__TAURI_INTERNALS__" in window)) return null;
@@ -16,11 +16,13 @@ interface AgentsViewProps {
   onCustomChange: (agent: AgentProfile) => void;
   onSaveCustom: () => void;
   onDelete: (agentId: string) => void;
+  onSync: (title: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) => Promise<InstallResult[]>;
 }
 
-export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, onSaveCustom, onDelete }: AgentsViewProps) {
+export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, onSaveCustom, onDelete, onSync }: AgentsViewProps) {
   const [detailAgentId, setDetailAgentId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [selectedMissing, setSelectedMissing] = useState<string[]>([]);
 
   const detailAgent = detailAgentId ? agents.find((a) => a.id === detailAgentId) : null;
   const installedSkills = detailAgent ? skills.filter((s) => s.installedAgentIds.includes(detailAgent.id)) : [];
@@ -29,6 +31,7 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
   function handleAgentClick(agentId: string) {
     setDetailAgentId((prev) => (prev === agentId ? null : agentId));
     setConfirmDeleteId(null);
+    setSelectedMissing([]);
   }
 
   function handleDelete(e: React.MouseEvent, agentId: string) {
@@ -40,6 +43,18 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
     } else {
       setConfirmDeleteId(agentId);
     }
+  }
+
+  function toggleMissing(title: string) {
+    setSelectedMissing((prev) => prev.includes(title) ? prev.filter((t) => t !== title) : [...prev, title]);
+  }
+
+  async function handleAddMissing() {
+    if (!detailAgent || !selectedMissing.length) return;
+    for (const title of selectedMissing) {
+      await onSync(title, [detailAgent.id], "prompt");
+    }
+    setSelectedMissing([]);
   }
 
   return (
@@ -100,9 +115,9 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
       </div>
 
       {/* Side Panel */}
-      <div className="flex-col gap-5" style={{ height: "100%", minHeight: 0, overflowY: "auto" }}>
+      <div style={{ height: "100%", minHeight: 0, display: "flex" }}>
         {detailAgent ? (
-          <div className="card">
+          <div className="card" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
             <div className="card-header">
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <div className="agent-icon">
@@ -114,9 +129,9 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
                 </div>
               </div>
             </div>
-            <div className="card-body">
-              <div className="detail-section">
-                <div className="detail-section-title">已安装 ({installedSkills.length})</div>
+            <div className="card-body" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, padding: "18px 24px" }}>
+              <div className="detail-section-title">已安装 ({installedSkills.length})</div>
+              <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
                 {installedSkills.map((s) => (
                   <div key={s.title} className="detail-item">
                     <span className="detail-item-name">{s.title}</span>
@@ -126,15 +141,39 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
                 {!installedSkills.length && <p style={{ fontSize: 12, color: "var(--text-tertiary)", padding: "8px 0" }}>暂无已安装 skills</p>}
               </div>
               {missingSkills.length > 0 && (
-                <div className="detail-section">
-                  <div className="detail-section-title">缺失 ({missingSkills.length})</div>
-                  {missingSkills.map((s) => (
-                    <div key={s.title} className="detail-item" style={{ borderStyle: "dashed", color: "var(--text-secondary)" }}>
-                      <span className="detail-item-name">{s.title}</span>
-                      <span className="badge badge-warning">缺失</span>
-                    </div>
-                  ))}
-                </div>
+                <>
+                  <div className="detail-section-title" style={{ marginTop: 12 }}>缺失 ({missingSkills.length})</div>
+                  <div style={{ overflowY: "auto", minHeight: 0, maxHeight: 200 }}>
+                    {missingSkills.map((s) => {
+                      const isSelected = selectedMissing.includes(s.title);
+                      return (
+                        <div
+                          key={s.title}
+                          className={`detail-item${isSelected ? " selected" : ""}`}
+                          style={{ borderStyle: "dashed", color: "var(--text-secondary)", cursor: "pointer" }}
+                          onClick={() => toggleMissing(s.title)}
+                          role="button"
+                          tabIndex={0}
+                        >
+                          <span className="detail-item-name">{s.title}</span>
+                          <span className={isSelected ? "badge badge-syncable" : "badge badge-warning"}>{isSelected ? "已选" : "缺失"}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {selectedMissing.length > 0 && (
+                    <button
+                      className="btn btn-primary"
+                      onClick={handleAddMissing}
+                      disabled={busy}
+                      type="button"
+                      style={{ marginTop: 8, width: "100%" }}
+                    >
+                      <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12" /></svg>
+                      添加 {selectedMissing.length} 个 Skills
+                    </button>
+                  )}
+                </>
               )}
             </div>
           </div>

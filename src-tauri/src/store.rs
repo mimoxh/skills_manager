@@ -1,14 +1,54 @@
 use crate::{
     error::{AppError, AppResult},
-    models::{AgentProfile, AgentType, DiscoveryPathEntry},
+    models::{AgentProfile, DiscoveryPathEntry},
 };
-use rusqlite::{params, Connection};
+
+use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf, sync::Mutex};
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct AppState {
+    #[serde(default)]
+    repository: Option<String>,
+    #[serde(default)]
+    agents: Vec<AgentProfile>,
+    #[serde(default)]
+    installs: Vec<InstallRecord>,
+    #[serde(default)]
+    discovery_paths: Vec<DiscoveryPathEntry>,
+    #[serde(default)]
+    operations: Vec<OperationRecord>,
+    #[serde(default)]
+    next_operation_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InstallRecord {
+    agent_id: String,
+    skill_id: String,
+    fingerprint: String,
+    target_path: String,
+    installed_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OperationRecord {
+    id: i64,
+    agent_id: String,
+    skill_id: String,
+    action: String,
+    target_path: String,
+    backup_path: Option<String>,
+    created_at: String,
+}
+
 pub struct AppStore {
-    conn: Mutex<Connection>,
+    state: Mutex<AppState>,
+    state_path: PathBuf,
     data_dir: PathBuf,
-    default_repository_path: PathBuf,
 }
 
 impl AppStore {
@@ -17,72 +57,40 @@ impl AppStore {
             .unwrap_or_else(std::env::temp_dir)
             .join("skill-sync-manager");
         fs::create_dir_all(&data_dir)?;
-        let db_path = data_dir.join("state.db");
-        let conn = Connection::open(db_path)?;
-        let store = Self {
-            conn: Mutex::new(conn),
-            default_repository_path: Self::default_repository_path(),
-            data_dir,
+        let state_path = data_dir.join("state.json");
+        let state = if state_path.exists() {
+            let text = fs::read_to_string(&state_path)?;
+            serde_json::from_str(&text).unwrap_or_default()
+        } else {
+            AppState::default()
         };
-        store.migrate()?;
-        Ok(store)
+        Ok(Self {
+            state: Mutex::new(state),
+            state_path,
+            data_dir,
+        })
     }
 
     #[cfg(test)]
     pub fn in_memory() -> AppResult<Self> {
-        let store = Self {
-            conn: Mutex::new(Connection::open_in_memory()?),
-            data_dir: std::env::temp_dir().join("skill-sync-manager-test"),
-            default_repository_path: std::env::temp_dir()
-                .join("skill-sync-manager-test")
-                .join("skills"),
-        };
-        store.migrate()?;
-        Ok(store)
+        let data_dir = std::env::temp_dir().join("skill-sync-manager-test");
+        Ok(Self {
+            state: Mutex::new(AppState::default()),
+            state_path: data_dir.join("state.json"),
+            data_dir,
+        })
     }
 
-    fn migrate(&self) -> AppResult<()> {
-        let conn = self
-            .conn
+    fn save(&self) -> AppResult<()> {
+        let state = self
+            .state
             .lock()
             .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
-        conn.execute_batch(
-            r#"
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS agents (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                agent_type TEXT NOT NULL,
-                skills_path TEXT NOT NULL,
-                adapter_config TEXT
-            );
-            CREATE TABLE IF NOT EXISTS installs (
-                agent_id TEXT NOT NULL,
-                skill_id TEXT NOT NULL,
-                fingerprint TEXT NOT NULL,
-                target_path TEXT NOT NULL,
-                installed_at TEXT NOT NULL,
-                PRIMARY KEY (agent_id, skill_id)
-            );
-            CREATE TABLE IF NOT EXISTS operations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                agent_id TEXT NOT NULL,
-                skill_id TEXT NOT NULL,
-                action TEXT NOT NULL,
-                target_path TEXT NOT NULL,
-                backup_path TEXT,
-                created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS agent_discovery_paths (
-                path TEXT PRIMARY KEY,
-                label TEXT NOT NULL,
-                skills_subdir TEXT NOT NULL DEFAULT 'skills'
-            );
-            "#,
-        )?;
+        if let Some(parent) = self.state_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string_pretty(&*state)?;
+        fs::write(&self.state_path, json)?;
         Ok(())
     }
 
@@ -98,116 +106,77 @@ impl AppStore {
         self.data_dir.clone()
     }
 
-    fn default_repository_path() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("skills")
-    }
-
     pub fn set_repository(&self, path: &str) -> AppResult<()> {
-        let conn = self
-            .conn
+        let mut state = self
+            .state
             .lock()
             .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
-        conn.execute(
-            "INSERT INTO settings(key, value) VALUES('repository', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![path],
-        )?;
-        Ok(())
+        state.repository = Some(path.to_string());
+        drop(state);
+        self.save()
     }
 
     pub fn get_repository(&self) -> AppResult<Option<String>> {
-        let conn = self
-            .conn
+        let state = self
+            .state
             .lock()
             .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
-        let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = 'repository'")?;
-        let mut rows = stmt.query([])?;
-        Ok(rows.next()?.map(|row| row.get(0)).transpose()?)
+        Ok(state.repository.clone())
     }
 
     pub fn get_or_create_repository(&self) -> AppResult<String> {
-        if let Some(repository) = self.get_repository()? {
-            fs::create_dir_all(&repository)?;
-            return Ok(repository);
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        if let Some(ref repo) = state.repository {
+            fs::create_dir_all(repo)?;
+            return Ok(repo.clone());
         }
-
-        let repository = self.default_repository_path.to_string_lossy().to_string();
-        fs::create_dir_all(&repository)?;
-        self.set_repository(&repository)?;
-        Ok(repository)
+        let default = dirs::home_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("skills");
+        let path = default.to_string_lossy().to_string();
+        fs::create_dir_all(&default)?;
+        state.repository = Some(path.clone());
+        drop(state);
+        self.save()?;
+        Ok(path)
     }
 
     pub fn save_agent(&self, profile: &AgentProfile) -> AppResult<()> {
-        let conn = self
-            .conn
+        let mut state = self
+            .state
             .lock()
             .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
-        conn.execute(
-            r#"
-            INSERT INTO agents(id, name, agent_type, skills_path, adapter_config)
-            VALUES(?1, ?2, ?3, ?4, ?5)
-            ON CONFLICT(id) DO UPDATE SET
-                name = excluded.name,
-                agent_type = excluded.agent_type,
-                skills_path = excluded.skills_path,
-                adapter_config = excluded.adapter_config
-            "#,
-            params![
-                profile.id,
-                profile.name,
-                profile.agent_type.as_str(),
-                profile.skills_path,
-                profile
-                    .adapter_config
-                    .as_ref()
-                    .map(|value| value.to_string())
-            ],
-        )?;
-        Ok(())
+        if let Some(existing) = state.agents.iter_mut().find(|a| a.id == profile.id) {
+            *existing = profile.clone();
+        } else {
+            state.agents.push(profile.clone());
+        }
+        drop(state);
+        self.save()
     }
 
     pub fn remove_agent(&self, agent_id: &str) -> AppResult<()> {
-        let conn = self
-            .conn
+        let mut state = self
+            .state
             .lock()
             .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
-        conn.execute("DELETE FROM agents WHERE id = ?1", params![agent_id])?;
-        conn.execute(
-            "DELETE FROM installs WHERE agent_id = ?1",
-            params![agent_id],
-        )?;
-        Ok(())
+        state.agents.retain(|a| a.id != agent_id);
+        state.installs.retain(|i| i.agent_id != agent_id);
+        drop(state);
+        self.save()
     }
 
     pub fn list_agents(&self) -> AppResult<Vec<AgentProfile>> {
-        let conn = self
-            .conn
+        let state = self
+            .state
             .lock()
             .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
-        let mut stmt = conn.prepare(
-            "SELECT id, name, agent_type, skills_path, adapter_config FROM agents ORDER BY name",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            let agent_type: String = row.get(2)?;
-            let adapter_config: Option<String> = row.get(4)?;
-            Ok(AgentProfile {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                agent_type: match agent_type.as_str() {
-                    "codex" => AgentType::Codex,
-                    "claude" => AgentType::Claude,
-                    "claudeCode" => AgentType::ClaudeCode,
-                    "cursor" => AgentType::Cursor,
-                    "windsurf" => AgentType::Windsurf,
-                    "aider" => AgentType::Aider,
-                    _ => AgentType::Custom,
-                },
-                skills_path: row.get(3)?,
-                adapter_config: adapter_config.and_then(|text| serde_json::from_str(&text).ok()),
-            })
-        })?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
+        let mut agents = state.agents.clone();
+        agents.sort_by(|a, b| a.name.cmp(&b.name).then(a.skills_path.cmp(&b.skills_path)));
+        Ok(agents)
     }
 
     pub fn installed_fingerprint(
@@ -215,14 +184,15 @@ impl AppStore {
         agent_id: &str,
         skill_id: &str,
     ) -> AppResult<Option<String>> {
-        let conn = self
-            .conn
+        let state = self
+            .state
             .lock()
             .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
-        let mut stmt =
-            conn.prepare("SELECT fingerprint FROM installs WHERE agent_id = ?1 AND skill_id = ?2")?;
-        let mut rows = stmt.query(params![agent_id, skill_id])?;
-        Ok(rows.next()?.map(|row| row.get(0)).transpose()?)
+        Ok(state
+            .installs
+            .iter()
+            .find(|i| i.agent_id == agent_id && i.skill_id == skill_id)
+            .map(|i| i.fingerprint.clone()))
     }
 
     pub fn record_install(
@@ -234,27 +204,44 @@ impl AppStore {
         action: &str,
         backup_path: Option<&str>,
     ) -> AppResult<()> {
-        let now = chrono::Utc::now().to_rfc3339();
-        let conn = self
-            .conn
+        let mut state = self
+            .state
             .lock()
             .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
-        conn.execute(
-            r#"
-            INSERT INTO installs(agent_id, skill_id, fingerprint, target_path, installed_at)
-            VALUES(?1, ?2, ?3, ?4, ?5)
-            ON CONFLICT(agent_id, skill_id) DO UPDATE SET
-                fingerprint = excluded.fingerprint,
-                target_path = excluded.target_path,
-                installed_at = excluded.installed_at
-            "#,
-            params![agent_id, skill_id, fingerprint, target_path, now],
-        )?;
-        conn.execute(
-            "INSERT INTO operations(agent_id, skill_id, action, target_path, backup_path, created_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
-            params![agent_id, skill_id, action, target_path, backup_path, now],
-        )?;
-        Ok(())
+        let now = chrono::Utc::now().to_rfc3339();
+
+        if let Some(existing) = state
+            .installs
+            .iter_mut()
+            .find(|i| i.agent_id == agent_id && i.skill_id == skill_id)
+        {
+            existing.fingerprint = fingerprint.to_string();
+            existing.target_path = target_path.to_string();
+            existing.installed_at = now.clone();
+        } else {
+            state.installs.push(InstallRecord {
+                agent_id: agent_id.to_string(),
+                skill_id: skill_id.to_string(),
+                fingerprint: fingerprint.to_string(),
+                target_path: target_path.to_string(),
+                installed_at: now.clone(),
+            });
+        }
+
+        let op_id = state.next_operation_id;
+        state.next_operation_id += 1;
+        state.operations.push(OperationRecord {
+            id: op_id,
+            agent_id: agent_id.to_string(),
+            skill_id: skill_id.to_string(),
+            action: action.to_string(),
+            target_path: target_path.to_string(),
+            backup_path: backup_path.map(|s| s.to_string()),
+            created_at: now,
+        });
+
+        drop(state);
+        self.save()
     }
 
     pub fn record_uninstall(
@@ -264,20 +251,30 @@ impl AppStore {
         target_path: &str,
         backup_path: Option<&str>,
     ) -> AppResult<()> {
-        let now = chrono::Utc::now().to_rfc3339();
-        let conn = self
-            .conn
+        let mut state = self
+            .state
             .lock()
             .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
-        conn.execute(
-            "DELETE FROM installs WHERE agent_id = ?1 AND skill_id = ?2",
-            params![agent_id, skill_id],
-        )?;
-        conn.execute(
-            "INSERT INTO operations(agent_id, skill_id, action, target_path, backup_path, created_at) VALUES(?1, ?2, 'uninstall', ?3, ?4, ?5)",
-            params![agent_id, skill_id, target_path, backup_path, now],
-        )?;
-        Ok(())
+        let now = chrono::Utc::now().to_rfc3339();
+
+        state
+            .installs
+            .retain(|i| !(i.agent_id == agent_id && i.skill_id == skill_id));
+
+        let op_id = state.next_operation_id;
+        state.next_operation_id += 1;
+        state.operations.push(OperationRecord {
+            id: op_id,
+            agent_id: agent_id.to_string(),
+            skill_id: skill_id.to_string(),
+            action: "uninstall".to_string(),
+            target_path: target_path.to_string(),
+            backup_path: backup_path.map(|s| s.to_string()),
+            created_at: now,
+        });
+
+        drop(state);
+        self.save()
     }
 
     pub fn last_backup(
@@ -285,72 +282,28 @@ impl AppStore {
         agent_id: &str,
         skill_id: &str,
     ) -> AppResult<Option<(String, String)>> {
-        let conn = self
-            .conn
+        let state = self
+            .state
             .lock()
             .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
-        let mut stmt = conn.prepare(
-            "SELECT target_path, backup_path FROM operations WHERE agent_id = ?1 AND skill_id = ?2 AND backup_path IS NOT NULL ORDER BY id DESC LIMIT 1",
-        )?;
-        let mut rows = stmt.query(params![agent_id, skill_id])?;
-        if let Some(row) = rows.next()? {
-            Ok(Some((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
-        } else {
-            Ok(None)
-        }
-    }
-
-    pub fn add_discovery_path(
-        &self,
-        path: &str,
-        label: &str,
-        skills_subdir: &str,
-    ) -> AppResult<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
-        conn.execute(
-            "INSERT INTO agent_discovery_paths(path, label, skills_subdir) VALUES(?1, ?2, ?3) ON CONFLICT(path) DO UPDATE SET label = excluded.label, skills_subdir = excluded.skills_subdir",
-            params![path, label, skills_subdir],
-        )?;
-        Ok(())
-    }
-
-    pub fn remove_discovery_path(&self, path: &str) -> AppResult<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
-        conn.execute(
-            "DELETE FROM agent_discovery_paths WHERE path = ?1",
-            params![path],
-        )?;
-        Ok(())
-    }
-
-    pub fn list_discovery_paths(&self) -> AppResult<Vec<DiscoveryPathEntry>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
-        let mut stmt = conn.prepare(
-            "SELECT path, label, skills_subdir FROM agent_discovery_paths ORDER BY label",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(DiscoveryPathEntry {
-                path: row.get(0)?,
-                label: row.get(1)?,
-                skills_subdir: row.get(2)?,
+        Ok(state
+            .operations
+            .iter()
+            .rev()
+            .find(|op| {
+                op.agent_id == agent_id
+                    && op.skill_id == skill_id
+                    && op.backup_path.is_some()
             })
-        })?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
+            .map(|op| (op.target_path.clone(), op.backup_path.clone().unwrap())))
     }
+
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::AgentType;
 
     #[test]
     fn stores_repository_setting() {
@@ -369,4 +322,55 @@ mod tests {
         assert_eq!(store.get_repository().unwrap(), Some(repository.clone()));
         assert!(PathBuf::from(repository).ends_with("skills"));
     }
+
+    #[test]
+    fn saves_and_lists_agents() {
+        let store = AppStore::in_memory().unwrap();
+        let profile = AgentProfile {
+            id: "test-1".into(),
+            name: "Test Agent".into(),
+            agent_type: AgentType::Custom,
+            skills_path: "/tmp/test".into(),
+            adapter_config: None,
+        };
+        store.save_agent(&profile).unwrap();
+        let agents = store.list_agents().unwrap();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].id, "test-1");
+    }
+
+    #[test]
+    fn removes_agent_and_installs() {
+        let store = AppStore::in_memory().unwrap();
+        let profile = AgentProfile {
+            id: "test-1".into(),
+            name: "Test".into(),
+            agent_type: AgentType::Custom,
+            skills_path: "/tmp/test".into(),
+            adapter_config: None,
+        };
+        store.save_agent(&profile).unwrap();
+        store
+            .record_install("test-1", "skill-a", "fp1", "/target", "installed", None)
+            .unwrap();
+        store.remove_agent("test-1").unwrap();
+        assert!(store.list_agents().unwrap().is_empty());
+        assert!(store
+            .installed_fingerprint("test-1", "skill-a")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn records_and_queries_install() {
+        let store = AppStore::in_memory().unwrap();
+        store
+            .record_install("a1", "s1", "fp123", "/target/path", "installed", None)
+            .unwrap();
+        assert_eq!(
+            store.installed_fingerprint("a1", "s1").unwrap(),
+            Some("fp123".to_string())
+        );
+    }
+
 }

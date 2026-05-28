@@ -18,7 +18,9 @@
         "minWidth": 960,
         "minHeight": 680,
         "decorations": false,
-        "transparent": false
+        "transparent": false,
+        "backgroundColor": "#f3f3f0",
+        "visible": true
       }
     ],
     "security": {
@@ -28,6 +30,6 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/icon.png"]
+    "icon": ["icons/icon.png", "icons/icon.ico"]
   }
 }

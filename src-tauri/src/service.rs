@@ -4,9 +4,8 @@ use crate::{
     hash::{copy_dir_all, hash_dir},
     manifest::{read_skill, scan_repository},
     models::{
-        AgentProfile, AgentSkillCopy, AgentType, ConflictPolicy, DiscoveryPathEntry, GroupedSkill,
-        ImportSkillFile, ImportSkillResult, InstallResult, InstallState, SkillSummary,
-        SyncCandidate,
+        AgentProfile, AgentSkillCopy, ConflictPolicy, GroupedSkill, ImportSkillFile,
+        ImportSkillResult, InitialData, InstallResult,
     },
     store::AppStore,
 };
@@ -55,22 +54,8 @@ impl AppService {
         self.store.import_root()
     }
 
-    pub fn set_repository(&self, path: &str) -> AppResult<String> {
-        let path = path.trim();
-        if path.is_empty() {
-            return Err(AppError::Message("主仓库路径不能为空".to_string()));
-        }
-        fs::create_dir_all(path)?;
-        self.store.set_repository(path)?;
-        Ok(path.to_string())
-    }
-
-    pub fn get_repository(&self) -> AppResult<String> {
+    fn get_repository(&self) -> AppResult<String> {
         self.store.get_or_create_repository()
-    }
-
-    pub fn scan_skills(&self) -> AppResult<Vec<SkillSummary>> {
-        scan_repository(Path::new(&self.get_repository()?))
     }
 
     pub fn detect_agents(&self) -> AppResult<Vec<AgentProfile>> {
@@ -78,48 +63,13 @@ impl AppService {
         for adapter in built_in_adapters() {
             agents.extend(adapter.detect());
         }
-        for entry in self.store.list_discovery_paths()? {
-            let skills_path = Path::new(&entry.path).join(&entry.skills_subdir);
-            if skills_path.exists() {
-                agents.push(AgentProfile {
-                    id: format!("discovered:{}", entry.path),
-                    name: entry.label,
-                    agent_type: AgentType::Custom,
-                    skills_path: skills_path.to_string_lossy().to_string(),
-                    adapter_config: None,
-                });
-            }
-        }
         Ok(agents)
     }
 
-    pub fn add_discovery_path(
-        &self,
-        path: &str,
-        label: &str,
-        skills_subdir: &str,
-    ) -> AppResult<()> {
-        if path.trim().is_empty() {
-            return Err(AppError::Message("发现路径不能为空".to_string()));
-        }
-        if label.trim().is_empty() {
-            return Err(AppError::Message("标签不能为空".to_string()));
-        }
-        let subdir = if skills_subdir.trim().is_empty() {
-            "skills"
-        } else {
-            skills_subdir.trim()
-        };
-        self.store
-            .add_discovery_path(path.trim(), label.trim(), subdir)
-    }
-
-    pub fn remove_discovery_path(&self, path: &str) -> AppResult<()> {
-        self.store.remove_discovery_path(path)
-    }
-
-    pub fn list_discovery_paths(&self) -> AppResult<Vec<DiscoveryPathEntry>> {
-        self.store.list_discovery_paths()
+    pub fn get_initial_data(&self) -> AppResult<InitialData> {
+        let agents = self.list_agents().unwrap_or_default();
+        let skills = self.scan_agent_skills().unwrap_or_default();
+        Ok(InitialData { skills, agents })
     }
 
     pub fn list_saved_agents(&self) -> AppResult<Vec<AgentProfile>> {
@@ -150,22 +100,6 @@ impl AppService {
         self.store.remove_agent(agent_id)
     }
 
-    pub fn list_install_state(&self) -> AppResult<Vec<InstallState>> {
-        let skills = self.scan_skills().unwrap_or_default();
-        let agents = self.list_agents()?;
-        let mut states = Vec::new();
-        for agent in agents {
-            let adapter = adapter_for(&agent);
-            for skill in &skills {
-                let installed = self
-                    .store
-                    .installed_fingerprint(&agent.id, &skill.manifest.id)?;
-                states.push(adapter.diff(skill, &agent, installed)?);
-            }
-        }
-        Ok(states)
-    }
-
     pub fn scan_agent_skills(&self) -> AppResult<Vec<GroupedSkill>> {
         let agents = self.list_agents()?;
         let mut copies = Vec::new();
@@ -173,75 +107,6 @@ impl AppService {
             copies.extend(scan_agent_skill_copies(agent)?);
         }
         Ok(group_agent_skills(&agents, copies))
-    }
-
-    pub fn preview_sync(&self, agent_id: &str) -> AppResult<Vec<SyncCandidate>> {
-        let skills = self.scan_skills()?;
-        let agent = self
-            .list_agents()?
-            .into_iter()
-            .find(|agent| agent.id == agent_id)
-            .ok_or_else(|| AppError::Message(format!("找不到 Agent: {}", agent_id)))?;
-        let adapter = adapter_for(&agent);
-        let mut candidates = Vec::new();
-        for skill in skills {
-            if adapter.check_compatibility(&skill, &agent) {
-                let installed = self
-                    .store
-                    .installed_fingerprint(&agent.id, &skill.manifest.id)?;
-                let state = adapter.diff(&skill, &agent, installed)?;
-                candidates.push(SyncCandidate {
-                    skill,
-                    states: vec![state],
-                });
-            }
-        }
-        Ok(candidates)
-    }
-
-    pub fn install_skills(
-        &self,
-        skill_ids: Vec<String>,
-        agent_ids: Vec<String>,
-        conflict_policy: ConflictPolicy,
-    ) -> AppResult<Vec<InstallResult>> {
-        let skills = self.scan_skills()?;
-        let agents = self.list_agents()?;
-        let skill_map: HashMap<_, _> = skills
-            .into_iter()
-            .map(|skill| (skill.manifest.id.clone(), skill))
-            .collect();
-        let agent_map: HashMap<_, _> = agents
-            .into_iter()
-            .map(|agent| (agent.id.clone(), agent))
-            .collect();
-        let mut results = Vec::new();
-
-        for agent_id in agent_ids {
-            let agent = agent_map
-                .get(&agent_id)
-                .ok_or_else(|| AppError::Message(format!("找不到 Agent: {}", agent_id)))?;
-            let adapter = adapter_for(agent);
-            for skill_id in &skill_ids {
-                let skill = skill_map
-                    .get(skill_id)
-                    .ok_or_else(|| AppError::Message(format!("找不到 Skill: {}", skill_id)))?;
-                let result =
-                    adapter.install(skill, agent, conflict_policy.clone(), &self.backup_root())?;
-                if result.action != "skipped" {
-                    self.store.record_install(
-                        &result.agent_id,
-                        &result.skill_id,
-                        &skill.fingerprint,
-                        &result.target_path,
-                        &result.action,
-                        result.backup_path.as_deref(),
-                    )?;
-                }
-                results.push(result);
-            }
-        }
-        Ok(results)
     }
 
     pub fn sync_grouped_skill(
@@ -586,6 +451,10 @@ fn scan_agent_skill_copies(agent: &AgentProfile) -> AppResult<Vec<AgentSkillCopy
         if !entry.file_type()?.is_dir() {
             continue;
         }
+        let dir_name = entry.file_name();
+        if dir_name.to_string_lossy().starts_with('.') {
+            continue;
+        }
         let metadata = fs::metadata(&path).ok();
         let (title, version) = read_agent_skill_title(&path);
         copies.push(AgentSkillCopy {
@@ -786,6 +655,7 @@ mod tests {
         let service = AppService::in_memory().unwrap();
         let repository = tempfile::tempdir().unwrap();
         service
+            .store()
             .set_repository(&repository.path().to_string_lossy())
             .unwrap();
         (service, repository)
@@ -840,14 +710,14 @@ mod tests {
 
     #[test]
     fn imports_folder_skill() {
-        let (service, _repository) = test_service();
+        let (service, repository) = test_service();
         let upload = tempfile::tempdir().unwrap();
         write_demo_skill(upload.path(), "demo");
 
         let result = service.import_folder(upload.path()).unwrap();
         assert_eq!(result.imported, 1);
         assert_eq!(result.skipped, 0);
-        assert_eq!(service.scan_skills().unwrap().len(), 1);
+        assert!(repository.path().join("demo").join("skill.json").exists());
     }
 
     #[test]
@@ -874,7 +744,7 @@ mod tests {
 
     #[test]
     fn imports_zip_skill() {
-        let (service, _repository) = test_service();
+        let (service, repository) = test_service();
         let upload = tempfile::tempdir().unwrap();
         write_demo_skill(upload.path(), "demo");
         let zip_path = upload.path().join("demo.zip");
@@ -892,7 +762,7 @@ mod tests {
 
         let result = service.import_zip_file(&zip_path).unwrap();
         assert_eq!(result.imported, 1);
-        assert_eq!(service.scan_skills().unwrap().len(), 1);
+        assert!(repository.path().join("demo").join("skill.json").exists());
     }
 
     #[test]
@@ -1042,5 +912,25 @@ mod tests {
             fs::read_to_string(target_root.path().join("demo").join("SKILL.md")).unwrap(),
             "# Demo Skill\nnew"
         );
+    }
+
+    #[test]
+    fn skips_hidden_directories_when_scanning_agent_skills() {
+        let root = tempfile::tempdir().unwrap();
+        write_agent_skill(root.path(), "real-skill", Some("Real Skill"), Some("1.0.0"), "# Real");
+        fs::create_dir_all(root.path().join(".system")).unwrap();
+        fs::write(root.path().join(".system").join("config.json"), "{}").unwrap();
+        fs::create_dir_all(root.path().join(".hidden")).unwrap();
+
+        let agent = AgentProfile {
+            id: "test".into(),
+            name: "Test".into(),
+            agent_type: crate::models::AgentType::Custom,
+            skills_path: root.path().to_string_lossy().to_string(),
+            adapter_config: None,
+        };
+        let copies = scan_agent_skill_copies(&agent).unwrap();
+        assert_eq!(copies.len(), 1);
+        assert_eq!(copies[0].title, "Real Skill");
     }
 }

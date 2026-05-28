@@ -103,14 +103,15 @@ npm run test:rust        # cargo test
 
 - **概览（OverviewView）**：指标卡、快速操作（导入文件夹/zip）和入口跳转。
 - **Skills（SkillsView）**：控制台式首屏，包含导入区域、指标、可滚动 skill 列表和状态 badge。点击某个 skill 会打开同步模态弹窗，在弹窗内勾选目标 agent（默认勾选已安装的 agents），并选择 `backupOverwrite` / `skip` / `rename` 冲突策略后执行 `syncGroupedSkill(title, null, targetAgentIds, conflictPolicy)`。
-- **Agents（AgentsView）**：双栏布局，左侧 agent 列表，右侧详情面板（已安装/缺失 skill 列表，支持滚动）。支持自定义 agent 添加和删除 agent。
+- **Agents（AgentsView）**：双栏布局，左侧 agent 列表，右侧详情面板。详情面板头部（agent 信息）和"已安装"/"缺失"标题固定不动，skill 条目列表在各自区域内独立滚动。缺失 skills 支持点击多选，选中后底部出现"添加"按钮批量安装到当前 agent。支持自定义 agent 添加和删除 agent。
 
 UI 特性：
 
 - 控制台风格：列表为主、信息密度适中、状态徽标清晰。
-- 自定义无边框标题栏（可拖拽、最小化/最大化/关闭）。
+- 自定义无边框标题栏（可拖拽、最小化/最大化/关闭），按钮贴右并适配 Windows 11 窗口圆角。
 - 侧边栏导航，活跃项有 accent 色条指示。
 - 支持拖放导入（文件夹和 .zip 压缩包）。
+- 双栏布局使用 `minmax()` 网格，窗口变窄时侧栏可自适应收缩。
 - Tailwind CSS 4 + 自定义全局样式（`index.css`）。
 
 ## Tauri API
@@ -211,7 +212,7 @@ manifest 字段：
 - Tauri + React 是唯一入口，`main.rs` 调用 `run()`。
 - `src-tauri/Cargo.toml` 设置了 `default-run = "skill-sync-manager"`。
 - 当前 React UI 有三个视图：概览、Skills、Agents。同步入口在 `SkillsView` 的单个 skill 点击模态弹窗中。
-- AgentsView 采用双栏布局：左侧 agent 列表，右侧详情面板（显示已安装/缺失 skills），右侧面板支持滚动。
+- AgentsView 采用双栏布局：左侧 agent 列表，右侧详情面板（显示已安装/缺失 skills）。详情面板采用 flex 纵向布局，card-header 固定顶部，card-body 内部"已安装"/"缺失"标题固定，skill 条目列表各自独立滚动（`overflow-y: auto`）。缺失 skills 支持单击多选，选中后显示"添加"按钮批量同步。
 - 同步弹窗默认勾选已安装该 skill 的 agents（`installedAgentIds`），而非未安装的。
 - AgentsView 支持删除 agent（点击垃圾桶图标，再次点击确认删除）。
 - `manifest.files` 目前只做非空校验；实际安装使用整个 skill 目录复制，不按 `files` 白名单过滤。
@@ -231,4 +232,4 @@ manifest 字段：
 - 涉及 Tauri command 参数时，同步检查 `src/api.ts`、`src/types.ts`、`src-tauri/src/models.rs` 和 command 函数签名。
 - 涉及安装/卸载/回滚时，优先增加 Rust 单元测试，使用 `tempfile` 隔离源目录、目标目录和备份目录。
 - 不要直接修改用户真实 agent skills 目录做测试；使用 custom agent 指向临时目录更安全。
-- 构建 exe：`npm run native:build`，生成到 `src-tauri/target/release/skill-sync-manager.exe`。打包安装程序需要 `.ico` 图标文件。
+- 构建 exe：`npm run native:build`，生成到 `src-tauri/target/release/skill-sync-manager.exe`，可复制到项目根目录作为 `SkillsManager.exe`。打包安装程序需要 `.ico` 图标文件（`tauri.conf.json` 中 `bundle.icon` 需包含 `icons/icon.ico`）。

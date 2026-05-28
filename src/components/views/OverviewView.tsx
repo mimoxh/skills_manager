@@ -1,5 +1,3 @@
-import { FolderArchive, FolderPlus } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../ui/card";
 import type { GroupedSkill, AgentProfile } from "../../types";
 
 interface OverviewViewProps {
@@ -14,71 +12,61 @@ export function OverviewView({ skills, agents, onNavigate, onFolder, onArchive }
   const missing = skills.reduce((t, s) => t + s.missingAgentIds.length, 0);
 
   return (
-    <div className="flex flex-col gap-5">
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Skills</CardDescription>
-            <CardTitle className="text-2xl">{skills.length}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xs text-[var(--color-text-secondary)]">按标题去重后的项目</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Agents</CardDescription>
-            <CardTitle className="text-2xl">{agents.length}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xs text-[var(--color-text-secondary)]">已识别的本地配置</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>缺失副本</CardDescription>
-            <CardTitle className="text-2xl">{missing}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xs text-[var(--color-text-secondary)]">Agent 缺失的 skill 副本</p>
-          </CardContent>
-        </Card>
+    <>
+      {/* Stats */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 24 }}>
+        <div className="card">
+          <div className="card-header">
+            <div className="card-desc">Skills</div>
+            <div className="card-title" style={{ fontSize: 28, marginTop: 4 }}>{skills.length}</div>
+          </div>
+          <div className="card-body"><span style={{ fontSize: 12, color: "var(--text-secondary)" }}>按标题去重后的项目</span></div>
+        </div>
+        <div className="card">
+          <div className="card-header">
+            <div className="card-desc">Agents</div>
+            <div className="card-title" style={{ fontSize: 28, marginTop: 4 }}>{agents.length}</div>
+          </div>
+          <div className="card-body"><span style={{ fontSize: 12, color: "var(--text-secondary)" }}>已识别的本地配置</span></div>
+        </div>
+        <div className="card">
+          <div className="card-header">
+            <div className="card-desc">缺失副本</div>
+            <div className="card-title" style={{ fontSize: 28, marginTop: 4, color: "var(--warning)" }}>{missing}</div>
+          </div>
+          <div className="card-body"><span style={{ fontSize: 12, color: "var(--text-secondary)" }}>Agent 缺失的 skill 副本</span></div>
+        </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>快速操作</CardTitle>
-          <CardDescription>导入或查看本地 skills</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <button
-              className="flex min-h-28 flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] p-5 text-[var(--color-text-secondary)] transition-[background,border-color,color] hover:border-[var(--color-accent)] hover:bg-[var(--color-accent-soft)] hover:text-[var(--color-accent)]"
-              onClick={onFolder}
-              type="button"
-            >
-              <FolderPlus size={20} />
-              <span className="text-xs font-medium">导入文件夹</span>
+      {/* Quick Actions */}
+      <div className="card">
+        <div className="card-header">
+          <div className="card-title">快速操作</div>
+          <div className="card-desc">导入或查看本地 skills</div>
+        </div>
+        <div className="card-body">
+          <div className="quick-actions">
+            <button className="quick-action" onClick={onFolder} type="button">
+              <div className="quick-action-icon">
+                <svg className="icon icon-lg" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg>
+              </div>
+              <span className="quick-action-label">导入文件夹</span>
             </button>
-            <button
-              className="flex min-h-28 flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] p-5 text-[var(--color-text-secondary)] transition-[background,border-color,color] hover:border-[var(--color-accent)] hover:bg-[var(--color-accent-soft)] hover:text-[var(--color-accent)]"
-              onClick={onArchive}
-              type="button"
-            >
-              <FolderArchive size={20} />
-              <span className="text-xs font-medium">导入 zip</span>
+            <button className="quick-action" onClick={onArchive} type="button">
+              <div className="quick-action-icon">
+                <svg className="icon icon-lg" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+              </div>
+              <span className="quick-action-label">导入 zip</span>
             </button>
-            <button
-              className="flex min-h-28 flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] p-5 text-[var(--color-text-secondary)] transition-[background,border-color,color] hover:border-[var(--color-accent)] hover:bg-[var(--color-accent-soft)] hover:text-[var(--color-accent)]"
-              onClick={() => onNavigate("skills")}
-              type="button"
-            >
-              <FolderPlus size={20} />
-              <span className="text-xs font-medium">查看 Skills</span>
+            <button className="quick-action" onClick={() => onNavigate("skills")} type="button">
+              <div className="quick-action-icon">
+                <svg className="icon icon-lg" viewBox="0 0 24 24"><polygon points="12 2 2 7 12 12 22 7 12 2" /><polyline points="2 17 12 22 22 17" /><polyline points="2 12 12 17 22 12" /></svg>
+              </div>
+              <span className="quick-action-label">查看 Skills</span>
             </button>
           </div>
-        </CardContent>
-      </Card>
-    </div>
+        </div>
+      </div>
+    </>
   );
 }

@@ -1,6 +1,5 @@
 export type AgentType = "codex" | "claude" | "claudeCode" | "cursor" | "windsurf" | "aider" | "custom";
 export type ConflictPolicy = "prompt" | "backupOverwrite" | "skip" | "rename";
-export type InstallStatus = "installed" | "stale" | "conflict" | "missing";
 
 export interface SkillManifest {
   id: string;
@@ -57,20 +56,6 @@ export interface AgentProfile {
   adapterConfig?: Record<string, unknown> | null;
 }
 
-export interface InstallState {
-  agentId: string;
-  skillId: string;
-  status: InstallStatus;
-  installedFingerprint?: string | null;
-  targetFingerprint?: string | null;
-  message: string;
-}
-
-export interface SyncCandidate {
-  skill: SkillSummary;
-  states: InstallState[];
-}
-
 export interface InstallResult {
   agentId: string;
   skillId: string;
@@ -80,8 +65,7 @@ export interface InstallResult {
   message: string;
 }
 
-export interface DiscoveryPathEntry {
-  path: string;
-  label: string;
-  skillsSubdir: string;
+export interface InitialData {
+  skills: GroupedSkill[];
+  agents: AgentProfile[];
 }

@@ -3,7 +3,6 @@ import { api } from "../api";
 import type {
   AgentProfile,
   ConflictPolicy,
-  DiscoveryPathEntry,
   GroupedSkill,
   ImportSkillFile,
   InstallResult,
@@ -18,14 +17,13 @@ const emptyCustom: AgentProfile = {
 };
 
 export function useAppState() {
-  const [repository, setRepository] = useState("");
   const [skills, setSkills] = useState<GroupedSkill[]>([]);
   const [agents, setAgents] = useState<AgentProfile[]>([]);
   const [customAgent, setCustomAgent] = useState<AgentProfile>(emptyCustom);
   const [message, setMessage] = useState("正在加载...");
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
-  const [discoveryPaths, setDiscoveryPaths] = useState<DiscoveryPathEntry[]>([]);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
 
   const filteredSkills = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -45,42 +43,21 @@ export function useAppState() {
   async function refreshAll() {
     setBusy(true);
     try {
-      const [repo, scanned, savedAgents, detected, paths] = await Promise.all([
-        api.getRepository(),
-        api.scanAgentSkills().catch(() => []),
-        api.listAgents(),
-        api.detectAgents(),
-        api.listDiscoveryPaths().catch(() => []),
-      ]);
-      setRepository(repo ?? "");
-      setSkills(scanned);
-      setDiscoveryPaths(paths);
-      const merged = new Map<string, AgentProfile>();
-      [...savedAgents, ...detected].forEach((a) => merged.set(a.id, a));
-      const nextAgents = [...merged.values()];
-      setAgents(nextAgents);
-      setMessage(`已识别 ${scanned.length} 个去重 skills，${nextAgents.length} 个 agent 配置。`);
+      const data = await api.getInitialData();
+      setSkills(data.skills);
+      setAgents(data.agents);
+      setMessage(`已识别 ${data.skills.length} 个去重 skills，${data.agents.length} 个 agent 配置。`);
     } catch (error) {
       setMessage(String(error));
     } finally {
       setBusy(false);
+      setIsInitialLoading(false);
     }
   }
 
-  useEffect(() => { void refreshAll(); }, []);
-
-  async function saveRepository() {
-    setBusy(true);
-    try {
-      await api.setRepository(repository.trim());
-      setMessage("主仓库已保存，正在重新扫描...");
-      await refreshAll();
-    } catch (error) {
-      setMessage(String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
+  useEffect(() => {
+    void refreshAll();
+  }, []);
 
   async function saveCustomAgent() {
     const agent = {
@@ -99,6 +76,32 @@ export function useAppState() {
       setCustomAgent(emptyCustom);
       await refreshAll();
       setMessage(`已添加 ${agent.name}。`);
+    } catch (error) {
+      setMessage(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteAgent(agentId: string) {
+    setBusy(true);
+    try {
+      await api.removeAgent(agentId);
+      await refreshAll();
+      setMessage("已删除 Agent。");
+    } catch (error) {
+      setMessage(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function uninstallSkill(skillId: string, agentId: string) {
+    setBusy(true);
+    try {
+      await api.uninstallSkill(skillId, agentId);
+      await refreshAll();
+      setMessage(`已从 Agent 卸载 ${skillId}。`);
     } catch (error) {
       setMessage(String(error));
     } finally {
@@ -185,14 +188,13 @@ export function useAppState() {
   }
 
   return {
-    repository, setRepository,
     skills, filteredSkills,
     agents, filteredAgents,
     customAgent, setCustomAgent, saveCustomAgent,
     message, setMessage,
     busy, query, setQuery,
-    discoveryPaths,
-    refreshAll, saveRepository, syncSkillToAgents,
+    isInitialLoading,
+    refreshAll, syncSkillToAgents, deleteAgent, uninstallSkill,
     handleSkillDrop, importFiles, fileToUpload,
   };
 }

@@ -1,26 +1,16 @@
 use crate::{
     error::AppResult,
     models::{
-        AgentProfile, ConflictPolicy, DiscoveryPathEntry, GroupedSkill, ImportSkillFile,
-        ImportSkillResult, InstallResult, InstallState, SkillSummary, SyncCandidate,
+        AgentProfile, ConflictPolicy, GroupedSkill, ImportSkillFile, ImportSkillResult,
+        InitialData, InstallResult,
     },
     service::AppService,
 };
 use tauri::State;
 
 #[tauri::command]
-pub fn set_repository(path: String, service: State<AppService>) -> AppResult<String> {
-    service.set_repository(&path)
-}
-
-#[tauri::command]
-pub fn get_repository(service: State<AppService>) -> AppResult<String> {
-    service.get_repository()
-}
-
-#[tauri::command]
-pub fn scan_skills(service: State<AppService>) -> AppResult<Vec<SkillSummary>> {
-    service.scan_skills()
+pub fn get_initial_data(service: State<AppService>) -> AppResult<InitialData> {
+    service.get_initial_data()
 }
 
 #[tauri::command]
@@ -53,28 +43,8 @@ pub fn remove_agent(agent_id: String, service: State<AppService>) -> AppResult<(
 }
 
 #[tauri::command]
-pub fn list_install_state(service: State<AppService>) -> AppResult<Vec<InstallState>> {
-    service.list_install_state()
-}
-
-#[tauri::command]
 pub fn scan_agent_skills(service: State<AppService>) -> AppResult<Vec<GroupedSkill>> {
     service.scan_agent_skills()
-}
-
-#[tauri::command]
-pub fn preview_sync(agent_id: String, service: State<AppService>) -> AppResult<Vec<SyncCandidate>> {
-    service.preview_sync(&agent_id)
-}
-
-#[tauri::command]
-pub fn install_skills(
-    skill_ids: Vec<String>,
-    agent_ids: Vec<String>,
-    conflict_policy: ConflictPolicy,
-    service: State<AppService>,
-) -> AppResult<Vec<InstallResult>> {
-    service.install_skills(skill_ids, agent_ids, conflict_policy)
 }
 
 #[tauri::command]
@@ -109,24 +79,4 @@ pub fn rollback_last(
     service: State<AppService>,
 ) -> AppResult<()> {
     service.rollback_last(&agent_id, &skill_id)
-}
-
-#[tauri::command]
-pub fn add_discovery_path(
-    path: String,
-    label: String,
-    skills_subdir: String,
-    service: State<AppService>,
-) -> AppResult<()> {
-    service.add_discovery_path(&path, &label, &skills_subdir)
-}
-
-#[tauri::command]
-pub fn remove_discovery_path(path: String, service: State<AppService>) -> AppResult<()> {
-    service.remove_discovery_path(&path)
-}
-
-#[tauri::command]
-pub fn list_discovery_paths(service: State<AppService>) -> AppResult<Vec<DiscoveryPathEntry>> {
-    service.list_discovery_paths()
 }
