@@ -2,7 +2,7 @@ import { ChangeEvent, Suspense, lazy, useEffect, useRef, useState } from "react"
 import { TooltipProvider } from "./components/ui/tooltip";
 import { Titlebar } from "./components/layout/Titlebar";
 import { Sidebar } from "./components/layout/Sidebar";
-import { SkillsView, ImportAgentDialog, UrlImportDialog } from "./components/views/SkillsView";
+import { SkillsView, ImportAgentDialog } from "./components/views/SkillsView";
 import { useAppState } from "./hooks/useAppState";
 import type { ImportSkillFile } from "./types";
 
@@ -59,7 +59,6 @@ export default function App() {
             onDrop={state.handleSkillDrop}
             onFolder={() => folderInputRef.current?.click()}
             onArchive={() => archiveInputRef.current?.click()}
-            onLink={() => state.startUrlImport("")}
             onSync={state.syncSkillToAgents}
             onUninstall={state.uninstallSkillFromAgents}
             onRefresh={state.refreshAll}
@@ -138,15 +137,6 @@ export default function App() {
           fileName={state.pendingImport.fileName}
           onClose={state.cancelImport}
           onImport={state.executeImport}
-        />
-      )}
-
-      {state.pendingUrlImport !== null && (
-        <UrlImportDialog
-          agents={state.agents}
-          busy={state.busy}
-          onClose={state.cancelUrlImport}
-          onImport={state.executeUrlImport}
         />
       )}
     </TooltipProvider>

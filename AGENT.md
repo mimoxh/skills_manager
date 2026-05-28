@@ -13,7 +13,7 @@
 ## 技术栈
 
 - 前端：React 18、TypeScript、Vite 5、Tailwind CSS 4、lucide-react、react-markdown（通过 Tauri 2 桌面壳）。
-- 后端：Rust 2021、serde/serde_json/serde_yaml、walkdir、sha2、chrono、dirs、thiserror、zip、reqwest、flate2、tar。
+- 后端：Rust 2021、serde/serde_json/serde_yaml、walkdir、sha2、chrono、dirs、thiserror、zip、regex。
 - 数据库：应用本地数据目录下的 `skill-sync-manager/state.json`（JSON 文件存储）。
 - 导入缓存：应用本地数据目录下的 `skill-sync-manager/imports`。
 
@@ -100,7 +100,7 @@ npm run test:rust        # cargo test
 三个视图：
 
 - **概览（OverviewView）**：指标卡（Skills 总数、Agents 数、未全覆盖数）、快速操作（导入文件夹/zip）和入口跳转。
-- **Skills（SkillsView）**：控制台式首屏，包含导入区域（支持文件夹/zip/链接三种方式）、指标卡（Skills 总数和"未全覆盖"数，后者可点击筛选）、可滚动 skill 列表和状态 badge。导入时弹出 agent 选择对话框（多选+全选+冲突策略），直接写入选中 agent 的 skills 目录。每个 skill 条目显示标题、来源、版本、描述（description）和同步状态，右侧有删除按钮（点击弹出确认对话框后从所有 agent 删除）。标题栏右侧有刷新按钮。点击某个 skill 会打开双栏模态弹窗：左侧用 Markdown 渲染器展示 SKILL.md 说明（`readme` 字段），右侧勾选目标 agent（默认勾选已安装的 agents）并选择冲突策略。取消选中 agent 后点同步会同时为未选中的 agent 删除该 skill；全部取消选中时按钮变为红色"全部删除"。
+- **Skills（SkillsView）**：控制台式首屏，包含导入区域（支持文件夹/zip 两种方式）、指标卡（Skills 总数和"未全覆盖"数，后者可点击筛选）、可滚动 skill 列表和状态 badge。导入时弹出 agent 选择对话框（多选+全选+冲突策略），直接写入选中 agent 的 skills 目录。每个 skill 条目显示标题、来源、版本、描述（description）和同步状态，右侧有删除按钮（点击弹出确认对话框后从所有 agent 删除）。标题栏右侧有刷新按钮。点击某个 skill 会打开双栏模态弹窗：左侧用 Markdown 渲染器展示 SKILL.md 说明（`readme` 字段），右侧勾选目标 agent（默认勾选已安装的 agents）并选择冲突策略。取消选中 agent 后点同步会同时为未选中的 agent 删除该 skill；全部取消选中时按钮变为红色"全部删除"。
 - **Agents（AgentsView）**：双栏布局，左侧 agent 列表（标题栏右侧有刷新按钮），右侧详情面板。详情面板头部（agent 信息）和"已安装"/"缺失"标题固定不动，skill 条目在各自区域内独立滚动，每条显示标题和描述。缺失 skills 支持点击多选，选中后底部出现"添加"按钮批量安装到当前 agent。支持自定义 agent 添加；删除 agent 时弹出确认对话框（显示 agent 名称，二次确认后执行删除）。
 
 UI 特性：
@@ -108,7 +108,7 @@ UI 特性：
 - 控制台风格：列表为主、信息密度适中、状态徽标清晰。
 - 自定义无边框标题栏（可拖拽、最小化/最大化/关闭），按钮贴右并适配 Windows 11 窗口圆角。
 - 侧边栏导航，活跃项有 accent 色条指示。
-- 支持拖放导入（文件夹和 .zip 压缩包）和链接导入（URL 下载 zip/tgz）。
+- 支持拖放导入（文件夹和 .zip 压缩包）。
 - 双栏布局使用 `minmax()` 网格，窗口变窄时侧栏可自适应收缩。
 - Tailwind CSS 4 + 自定义全局样式（`index.css`）。
 
@@ -118,7 +118,6 @@ UI 特性：
 
 - `get_initial_data()`：获取初始数据（skills、agents）。
 - `import_skill_upload(file_name, files, target_agent_ids, conflict_policy)`：上传导入 skill，支持 zip 和文件夹，直接写入选中 agent 的 skills 目录。
-- `import_from_url(url, target_agent_ids, conflict_policy)`：从 URL 下载并导入 skill，支持 zip 和 tgz 格式。
 - `detect_agents()`：检测内置 agent skills 目录。
 - `list_agents()`：读取手动保存的 agents。
 - `add_agent(profile)`：校验并保存 agent profile。

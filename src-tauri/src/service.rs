@@ -10,7 +10,6 @@ use crate::{
     store::AppStore,
 };
 use chrono::{DateTime, Utc};
-use flate2::read::GzDecoder;
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
@@ -19,7 +18,6 @@ use std::{
     path::{Component, Path, PathBuf},
     time::SystemTime,
 };
-use tar::Archive as TarArchive;
 use zip::ZipArchive;
 
 pub struct AppService {
@@ -286,32 +284,6 @@ impl AppService {
         self.import_from_source_dir(&source_root, target_agent_ids, conflict_policy)
     }
 
-    pub fn import_from_url(
-        &self,
-        url: &str,
-        target_agent_ids: &[String],
-        conflict_policy: ConflictPolicy,
-    ) -> AppResult<ImportSkillResult> {
-        if target_agent_ids.is_empty() {
-            return Err(AppError::Message("请至少选择一个目标 Agent。".to_string()));
-        }
-
-        let bytes = reqwest::blocking::get(url)
-            .map_err(|e| AppError::Message(format!("下载失败: {}", e)))?
-            .bytes()
-            .map_err(|e| AppError::Message(format!("读取响应失败: {}", e)))?
-            .to_vec();
-
-        let label = url.rsplit('/').next().unwrap_or("download");
-        let source_root = if label.ends_with(".tar.gz") || label.ends_with(".tgz") {
-            self.unpack_tgz_bytes(&bytes, label)?
-        } else {
-            self.unpack_zip_bytes(&bytes, label)?
-        };
-
-        self.import_from_source_dir(&source_root, target_agent_ids, conflict_policy)
-    }
-
     fn import_from_source_dir(
         &self,
         source_root: &Path,
@@ -457,18 +429,6 @@ impl AppService {
             file.read_to_end(&mut contents)?;
             fs::write(destination, contents)?;
         }
-
-        Ok(extracted)
-    }
-
-    fn unpack_tgz_bytes(&self, bytes: &[u8], label: &str) -> AppResult<PathBuf> {
-        let workspace = self.import_workspace(label)?;
-        let extracted = workspace.join("expanded");
-        fs::create_dir_all(&extracted)?;
-
-        let decoder = GzDecoder::new(Cursor::new(bytes));
-        let mut archive = TarArchive::new(decoder);
-        archive.unpack(&extracted)?;
 
         Ok(extracted)
     }

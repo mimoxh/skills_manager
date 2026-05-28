@@ -25,7 +25,6 @@ export function useAppState() {
   const [query, setQuery] = useState("");
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [pendingImport, setPendingImport] = useState<{ fileName: string; files: ImportSkillFile[] } | null>(null);
-  const [pendingUrlImport, setPendingUrlImport] = useState<string | null>(null);
 
   const filteredSkills = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -199,28 +198,6 @@ export function useAppState() {
     setPendingImport(null);
   }
 
-  function startUrlImport(url: string) {
-    setPendingUrlImport(url);
-  }
-
-  async function executeUrlImport(url: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) {
-    setBusy(true);
-    try {
-      const result = await api.importFromUrl(url, targetAgentIds, conflictPolicy);
-      await refreshAll();
-      setMessage(result.message);
-    } catch (error) {
-      setMessage(String(error));
-    } finally {
-      setBusy(false);
-      setPendingUrlImport(null);
-    }
-  }
-
-  function cancelUrlImport() {
-    setPendingUrlImport(null);
-  }
-
   async function handleSkillDrop(event: React.DragEvent<HTMLElement>) {
     event.preventDefault();
     const entries = [...event.dataTransfer.items]
@@ -243,7 +220,6 @@ export function useAppState() {
     busy, query, setQuery,
     isInitialLoading,
     pendingImport, executeImport, cancelImport,
-    pendingUrlImport, startUrlImport, executeUrlImport, cancelUrlImport,
     refreshAll, syncSkillToAgents, deleteAgent, uninstallSkill, uninstallSkillFromAgents,
     handleSkillDrop, importFiles, fileToUpload,
   };

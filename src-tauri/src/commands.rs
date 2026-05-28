@@ -25,16 +25,6 @@ pub fn import_skill_upload(
 }
 
 #[tauri::command]
-pub fn import_from_url(
-    url: String,
-    target_agent_ids: Vec<String>,
-    conflict_policy: ConflictPolicy,
-    service: State<AppService>,
-) -> AppResult<ImportSkillResult> {
-    service.import_from_url(&url, &target_agent_ids, conflict_policy)
-}
-
-#[tauri::command]
 pub fn detect_agents(service: State<AppService>) -> AppResult<Vec<AgentProfile>> {
     service.detect_agents()
 }
