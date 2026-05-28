@@ -10,6 +10,7 @@ use crate::{
     store::AppStore,
 };
 use chrono::{DateTime, Utc};
+use flate2::read::GzDecoder;
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
@@ -18,6 +19,7 @@ use std::{
     path::{Component, Path, PathBuf},
     time::SystemTime,
 };
+use tar::Archive as TarArchive;
 use zip::ZipArchive;
 
 pub struct AppService {
@@ -52,10 +54,6 @@ impl AppService {
 
     pub fn import_root(&self) -> PathBuf {
         self.store.import_root()
-    }
-
-    fn get_repository(&self) -> AppResult<String> {
-        self.store.get_or_create_repository()
     }
 
     pub fn detect_agents(&self) -> AppResult<Vec<AgentProfile>> {
@@ -265,28 +263,18 @@ impl AppService {
         Ok(())
     }
 
-    pub fn import_folder(&self, source_root: &Path) -> AppResult<ImportSkillResult> {
-        let repository = PathBuf::from(self.get_repository()?);
-        self.import_skill_dirs(source_root, &repository)
-    }
-
-    pub fn import_zip_file(&self, archive_path: &Path) -> AppResult<ImportSkillResult> {
-        let bytes = fs::read(archive_path)?;
-        let label = archive_path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or("zip");
-        let source_root = self.unpack_zip_bytes(&bytes, label)?;
-        self.import_folder(&source_root)
-    }
-
     pub fn import_uploaded_files(
         &self,
         file_name: &str,
         files: &[ImportSkillFile],
+        target_agent_ids: &[String],
+        conflict_policy: ConflictPolicy,
     ) -> AppResult<ImportSkillResult> {
         if files.is_empty() {
             return Err(AppError::Message("上传内容为空".to_string()));
+        }
+        if target_agent_ids.is_empty() {
+            return Err(AppError::Message("请至少选择一个目标 Agent。".to_string()));
         }
 
         let source_root = if files.len() == 1 && file_name.to_ascii_lowercase().ends_with(".zip") {
@@ -294,13 +282,41 @@ impl AppService {
         } else {
             self.write_uploaded_files(files)?
         };
-        self.import_folder(&source_root)
+
+        self.import_from_source_dir(&source_root, target_agent_ids, conflict_policy)
     }
 
-    fn import_skill_dirs(
+    pub fn import_from_url(
+        &self,
+        url: &str,
+        target_agent_ids: &[String],
+        conflict_policy: ConflictPolicy,
+    ) -> AppResult<ImportSkillResult> {
+        if target_agent_ids.is_empty() {
+            return Err(AppError::Message("请至少选择一个目标 Agent。".to_string()));
+        }
+
+        let bytes = reqwest::blocking::get(url)
+            .map_err(|e| AppError::Message(format!("下载失败: {}", e)))?
+            .bytes()
+            .map_err(|e| AppError::Message(format!("读取响应失败: {}", e)))?
+            .to_vec();
+
+        let label = url.rsplit('/').next().unwrap_or("download");
+        let source_root = if label.ends_with(".tar.gz") || label.ends_with(".tgz") {
+            self.unpack_tgz_bytes(&bytes, label)?
+        } else {
+            self.unpack_zip_bytes(&bytes, label)?
+        };
+
+        self.import_from_source_dir(&source_root, target_agent_ids, conflict_policy)
+    }
+
+    fn import_from_source_dir(
         &self,
         source_root: &Path,
-        repository: &Path,
+        target_agent_ids: &[String],
+        conflict_policy: ConflictPolicy,
     ) -> AppResult<ImportSkillResult> {
         let dirs = self.manifest_source_dirs(source_root)?;
         if dirs.is_empty() {
@@ -311,17 +327,60 @@ impl AppService {
             });
         }
 
+        let agents = self.list_agents()?;
+        let agent_map: HashMap<_, _> = agents
+            .into_iter()
+            .map(|a| (a.id.clone(), a))
+            .collect();
+
         let mut imported = 0;
         let mut skipped = 0;
-        for source in dirs {
-            let skill = read_skill(&self.manifest_path_for(&source)?)?;
-            let target = repository.join(safe_relative_path(&skill.manifest.id)?);
-            if target.exists() {
-                skipped += 1;
-                continue;
+
+        for source in &dirs {
+            let skill = read_skill(&self.manifest_path_for(source)?)?;
+            let skill_dir_name = source
+                .file_name()
+                .and_then(|v| v.to_str())
+                .ok_or_else(|| AppError::Message("skill 目录名无效".to_string()))?;
+
+            for agent_id in target_agent_ids {
+                let agent = agent_map.get(agent_id).ok_or_else(|| {
+                    AppError::Message(format!("找不到 Agent: {}", agent_id))
+                })?;
+                fs::create_dir_all(&agent.skills_path)?;
+                let mut target = Path::new(&agent.skills_path).join(skill_dir_name);
+
+                if target.exists() {
+                    match conflict_policy {
+                        ConflictPolicy::Prompt => {
+                            return Err(AppError::Message(
+                                "目标已存在。请先选择备份覆盖、跳过冲突或另存副本策略。".to_string(),
+                            ));
+                        }
+                        ConflictPolicy::Skip => {
+                            skipped += 1;
+                            continue;
+                        }
+                        ConflictPolicy::Rename => {
+                            let suffix = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
+                            target = Path::new(&agent.skills_path)
+                                .join(format!("{}-{}", skill_dir_name, suffix));
+                        }
+                        ConflictPolicy::BackupOverwrite => {
+                            let backup = self
+                                .backup_root()
+                                .join(safe_label(&agent.id))
+                                .join(safe_label(&skill.manifest.id))
+                                .join(chrono::Utc::now().format("%Y%m%d%H%M%S").to_string());
+                            copy_dir_all(&target, &backup)?;
+                            fs::remove_dir_all(&target)?;
+                        }
+                    }
+                }
+
+                copy_dir_all(source, &target)?;
+                imported += 1;
             }
-            copy_dir_all(&source, &target)?;
-            imported += 1;
         }
 
         Ok(ImportSkillResult {
@@ -398,6 +457,18 @@ impl AppService {
             file.read_to_end(&mut contents)?;
             fs::write(destination, contents)?;
         }
+
+        Ok(extracted)
+    }
+
+    fn unpack_tgz_bytes(&self, bytes: &[u8], label: &str) -> AppResult<PathBuf> {
+        let workspace = self.import_workspace(label)?;
+        let extracted = workspace.join("expanded");
+        fs::create_dir_all(&extracted)?;
+
+        let decoder = GzDecoder::new(Cursor::new(bytes));
+        let mut archive = TarArchive::new(decoder);
+        archive.unpack(&extracted)?;
 
         Ok(extracted)
     }
@@ -685,14 +756,17 @@ mod tests {
     use crate::models::SkillManifest;
     use std::io::Write;
 
-    fn test_service() -> (AppService, tempfile::TempDir) {
+    fn test_service_with_agent(agent_dir: &Path) -> AppService {
         let service = AppService::in_memory().unwrap();
-        let repository = tempfile::tempdir().unwrap();
+        let profile = AgentProfile {
+            id: "test-agent".into(),
+            name: "Test Agent".into(),
+            agent_type: crate::models::AgentType::Custom,
+            skills_path: agent_dir.to_string_lossy().to_string(),
+            adapter_config: None,
+        };
+        service.add_agent(profile).unwrap();
         service
-            .store()
-            .set_repository(&repository.path().to_string_lossy())
-            .unwrap();
-        (service, repository)
     }
 
     fn write_demo_skill(root: &Path, id: &str) {
@@ -714,6 +788,28 @@ mod tests {
         )
         .unwrap();
         fs::write(skill_dir.join("SKILL.md"), "hello").unwrap();
+    }
+
+    fn collect_upload_files(root: &Path) -> Vec<ImportSkillFile> {
+        let mut files = Vec::new();
+        collect_files_recursive(root, root, &mut files);
+        files
+    }
+
+    fn collect_files_recursive(base: &Path, dir: &Path, out: &mut Vec<ImportSkillFile>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_dir() {
+                collect_files_recursive(base, &path, out);
+            } else {
+                let relative = path.strip_prefix(base).unwrap().to_string_lossy().to_string();
+                out.push(ImportSkillFile {
+                    relative_path: relative,
+                    bytes: fs::read(&path).unwrap(),
+                });
+            }
+        }
     }
 
     fn write_agent_skill(
@@ -744,43 +840,55 @@ mod tests {
 
     #[test]
     fn imports_folder_skill() {
-        let (service, repository) = test_service();
+        let agent_dir = tempfile::tempdir().unwrap();
+        let service = test_service_with_agent(agent_dir.path());
         let upload = tempfile::tempdir().unwrap();
         write_demo_skill(upload.path(), "demo");
 
-        let result = service.import_folder(upload.path()).unwrap();
+        let files = collect_upload_files(upload.path());
+        let result = service
+            .import_uploaded_files("demo", &files, &["test-agent".into()], ConflictPolicy::Skip)
+            .unwrap();
         assert_eq!(result.imported, 1);
         assert_eq!(result.skipped, 0);
-        assert!(repository.path().join("demo").join("skill.json").exists());
+        assert!(agent_dir.path().join("demo").join("skill.json").exists());
     }
 
     #[test]
     fn skips_duplicate_skill() {
-        let (service, _repository) = test_service();
+        let agent_dir = tempfile::tempdir().unwrap();
+        let service = test_service_with_agent(agent_dir.path());
         let upload = tempfile::tempdir().unwrap();
         write_demo_skill(upload.path(), "demo");
 
-        service.import_folder(upload.path()).unwrap();
-        let result = service.import_folder(upload.path()).unwrap();
+        let files = collect_upload_files(upload.path());
+        service
+            .import_uploaded_files("demo", &files, &["test-agent".into()], ConflictPolicy::Skip)
+            .unwrap();
+        let result = service
+            .import_uploaded_files("demo", &files, &["test-agent".into()], ConflictPolicy::Skip)
+            .unwrap();
         assert_eq!(result.imported, 0);
         assert_eq!(result.skipped, 1);
     }
 
     #[test]
     fn reports_empty_upload() {
-        let (service, _repository) = test_service();
-        let upload = tempfile::tempdir().unwrap();
+        let agent_dir = tempfile::tempdir().unwrap();
+        let service = test_service_with_agent(agent_dir.path());
 
-        let result = service.import_folder(upload.path()).unwrap();
-        assert_eq!(result.imported, 0);
-        assert_eq!(result.skipped, 0);
+        let result = service
+            .import_uploaded_files("empty", &[], &["test-agent".into()], ConflictPolicy::Skip);
+        assert!(result.is_err());
     }
 
     #[test]
     fn imports_zip_skill() {
-        let (service, repository) = test_service();
+        let agent_dir = tempfile::tempdir().unwrap();
+        let service = test_service_with_agent(agent_dir.path());
         let upload = tempfile::tempdir().unwrap();
         write_demo_skill(upload.path(), "demo");
+
         let zip_path = upload.path().join("demo.zip");
         {
             let file = fs::File::create(&zip_path).unwrap();
@@ -794,9 +902,16 @@ mod tests {
             zip.finish().unwrap();
         }
 
-        let result = service.import_zip_file(&zip_path).unwrap();
+        let zip_bytes = fs::read(&zip_path).unwrap();
+        let files = vec![ImportSkillFile {
+            relative_path: "demo.zip".to_string(),
+            bytes: zip_bytes,
+        }];
+        let result = service
+            .import_uploaded_files("demo.zip", &files, &["test-agent".into()], ConflictPolicy::Skip)
+            .unwrap();
         assert_eq!(result.imported, 1);
-        assert!(repository.path().join("demo").join("skill.json").exists());
+        assert!(agent_dir.path().join("demo").join("skill.json").exists());
     }
 
     #[test]

@@ -26,11 +26,18 @@ export const api = {
       agents: [],
     }));
   },
-  importSkillUpload(fileName: string, files: ImportSkillFile[]) {
-    return command<ImportSkillResult>("import_skill_upload", { fileName, files }, () => ({
+  importSkillUpload(fileName: string, files: ImportSkillFile[], targetAgentIds: string[], conflictPolicy: ConflictPolicy) {
+    return command<ImportSkillResult>("import_skill_upload", { fileName, files, targetAgentIds, conflictPolicy }, () => ({
       imported: 0,
       skipped: 0,
       message: "Upload import is available in the desktop app",
+    }));
+  },
+  importFromUrl(url: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) {
+    return command<ImportSkillResult>("import_from_url", { url, targetAgentIds, conflictPolicy }, () => ({
+      imported: 0,
+      skipped: 0,
+      message: "URL import is available in the desktop app",
     }));
   },
   detectAgents() {

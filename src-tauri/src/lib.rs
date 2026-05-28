@@ -17,6 +17,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_initial_data,
             import_skill_upload,
+            import_from_url,
             detect_agents,
             list_agents,
             add_agent,

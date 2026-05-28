@@ -15,12 +15,13 @@ interface SkillsViewProps {
   onDrop: (event: React.DragEvent<HTMLElement>) => void;
   onFolder: () => void;
   onArchive: () => void;
+  onLink: () => void;
   onSync: (title: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) => Promise<InstallResult[]>;
   onUninstall: (skillId: string, agentIds: string[]) => Promise<void>;
   onRefresh: () => void;
 }
 
-export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, onSync, onUninstall, onRefresh }: SkillsViewProps) {
+export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, onLink, onSync, onUninstall, onRefresh }: SkillsViewProps) {
   const [selectedSkill, setSelectedSkill] = useState<GroupedSkill | null>(null);
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [conflictPolicy, setConflictPolicy] = useState<ConflictPolicy>("backupOverwrite");
@@ -34,16 +35,8 @@ export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, 
     return skills;
   }, [skills, filter]);
 
-  const totals = useMemo(() => {
-    return skills.reduce(
-      (acc, skill) => {
-        acc.installed += skill.installedAgentIds.length;
-        acc.missing += skill.missingAgentIds.length;
-        acc.copies += skill.copies.length;
-        return acc;
-      },
-      { installed: 0, missing: 0, copies: 0 },
-    );
+  const incompleteCount = useMemo(() => {
+    return skills.filter((s) => s.missingAgentIds.length > 0).length;
   }, [skills]);
 
   function openSync(skill: GroupedSkill) {
@@ -83,15 +76,13 @@ export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, 
       {/* Metrics */}
       <div className="metrics">
         <div className="metric-card"><div className="metric-value">{skills.length}</div><div className="metric-label">Skills</div></div>
-        <div className="metric-card"><div className="metric-value">{totals.copies}</div><div className="metric-label">副本</div></div>
-        <div className="metric-card"><div className="metric-value success">{totals.installed}</div><div className="metric-label">已安装</div></div>
         <div
           className="metric-card"
           onClick={() => setFilter((f) => f === "missing" ? "all" : "missing")}
           style={{ cursor: "pointer", ...(filter === "missing" ? { borderColor: "var(--warning)", background: "var(--warning-light)" } : {}) }}
         >
-          <div className="metric-value warning">{totals.missing}</div>
-          <div className="metric-label">缺失</div>
+          <div className="metric-value warning">{incompleteCount}</div>
+          <div className="metric-label">未全覆盖</div>
         </div>
       </div>
 
@@ -117,6 +108,10 @@ export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, 
         <button className="btn btn-secondary btn-sm" onClick={onArchive} disabled={busy} type="button">
           <svg className="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
           zip
+        </button>
+        <button className="btn btn-secondary btn-sm" onClick={onLink} disabled={busy} type="button">
+          <svg className="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+          链接
         </button>
       </div>
 
@@ -368,6 +363,259 @@ function ConfirmDialog({
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "14px 24px", borderTop: "1px solid var(--border)" }}>
           <button className="btn btn-secondary" onClick={onClose} disabled={busy} type="button">取消</button>
           <button className="btn btn-danger" onClick={onConfirm} disabled={busy} type="button">{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function ImportAgentDialog({
+  agents, busy, fileName,
+  onClose, onImport,
+}: {
+  agents: AgentProfile[];
+  busy: boolean;
+  fileName: string;
+  onClose: () => void;
+  onImport: (targetAgentIds: string[], conflictPolicy: ConflictPolicy) => void;
+}) {
+  const [selectedAgents, setSelectedAgents] = useState<string[]>(agents.map((a) => a.id));
+  const [conflictPolicy, setConflictPolicy] = useState<ConflictPolicy>("backupOverwrite");
+
+  function toggleAgent(agentId: string) {
+    setSelectedAgents((prev) =>
+      prev.includes(agentId) ? prev.filter((id) => id !== agentId) : [...prev, agentId],
+    );
+  }
+
+  function toggleAll() {
+    if (selectedAgents.length === agents.length) {
+      setSelectedAgents([]);
+    } else {
+      setSelectedAgents(agents.map((a) => a.id));
+    }
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(47, 48, 44, 0.28)", padding: 20 }}>
+      <div style={{ maxHeight: "88vh", width: "100%", maxWidth: 560, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(80,60,30,0.14), 0 2px 8px rgba(80,60,30,0.06)" }}>
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, borderBottom: "1px solid var(--border)", padding: "20px 24px" }}>
+          <div style={{ width: 40, height: 40, background: "var(--accent-light)", borderRadius: "var(--radius-sm)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)", flexShrink: 0 }}>
+            <svg className="icon" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text)" }}>选择导入目标</h2>
+            <p style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>{fileName}</p>
+          </div>
+          <button className="btn-icon" onClick={onClose} type="button" title="关闭" style={{ width: 36, height: 36 }}>
+            <svg className="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+          </button>
+        </div>
+
+        {/* Body */}
+        <div style={{ flex: 1, overflow: "auto", padding: "20px 24px", display: "flex", flexDirection: "column", gap: 20 }}>
+          {/* Agents */}
+          <div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)" }}>目标 Agent</p>
+              <button className="btn btn-secondary btn-sm" onClick={toggleAll} type="button" style={{ fontSize: 11, padding: "2px 8px" }}>
+                {selectedAgents.length === agents.length ? "取消全选" : "全选"}
+              </button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {agents.map((agent) => {
+                const checked = selectedAgents.includes(agent.id);
+                return (
+                  <button
+                    key={agent.id}
+                    className={`agent-item${checked ? " selected" : ""}`}
+                    onClick={() => toggleAgent(agent.id)}
+                    type="button"
+                    style={checked ? { borderColor: "var(--accent)", background: "var(--accent-soft)" } : undefined}
+                  >
+                    <span style={{
+                      width: 20, height: 20, flexShrink: 0, borderRadius: 4, border: `1px solid ${checked ? "var(--accent)" : "var(--border)"}`,
+                      background: checked ? "var(--accent)" : "transparent", display: "flex", alignItems: "center", justifyContent: "center",
+                    }}>
+                      {checked && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><polyline points="20 6 9 17 4 12" /></svg>}
+                    </span>
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ display: "block", fontSize: 14, fontWeight: 500 }}>{agent.name}</span>
+                      <span style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{agent.skillsPath}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Conflict Policy */}
+          <div>
+            <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>冲突策略</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {policyOptions.map((option) => (
+                <button
+                  key={option.value}
+                  className={`card${conflictPolicy === option.value ? " selected" : ""}`}
+                  onClick={() => setConflictPolicy(option.value)}
+                  type="button"
+                  style={{
+                    padding: 12, textAlign: "left", cursor: "pointer",
+                    ...(conflictPolicy === option.value ? { borderColor: "var(--accent)", background: "var(--accent-soft)" } : {}),
+                  }}
+                >
+                  <span style={{ display: "block", fontSize: 14, fontWeight: 500 }}>{option.label}</span>
+                  <span style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>{option.helper}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, borderTop: "1px solid var(--border)", background: "var(--surface-raised)", padding: "16px 24px" }}>
+          <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>已选择 {selectedAgents.length} 个 Agent</p>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-secondary" onClick={onClose} disabled={busy} type="button">取消</button>
+            <button className="btn btn-primary" onClick={() => onImport(selectedAgents, conflictPolicy)} disabled={busy || selectedAgents.length === 0} type="button">
+              <svg className="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
+              导入
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function UrlImportDialog({
+  agents, busy,
+  onClose, onImport,
+}: {
+  agents: AgentProfile[];
+  busy: boolean;
+  onClose: () => void;
+  onImport: (url: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) => void;
+}) {
+  const [url, setUrl] = useState("");
+  const [selectedAgents, setSelectedAgents] = useState<string[]>(agents.map((a) => a.id));
+  const [conflictPolicy, setConflictPolicy] = useState<ConflictPolicy>("backupOverwrite");
+
+  function toggleAgent(agentId: string) {
+    setSelectedAgents((prev) =>
+      prev.includes(agentId) ? prev.filter((id) => id !== agentId) : [...prev, agentId],
+    );
+  }
+
+  function toggleAll() {
+    if (selectedAgents.length === agents.length) {
+      setSelectedAgents([]);
+    } else {
+      setSelectedAgents(agents.map((a) => a.id));
+    }
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(47, 48, 44, 0.28)", padding: 20 }}>
+      <div style={{ maxHeight: "88vh", width: "100%", maxWidth: 560, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(80,60,30,0.14), 0 2px 8px rgba(80,60,30,0.06)" }}>
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, borderBottom: "1px solid var(--border)", padding: "20px 24px" }}>
+          <div style={{ width: 40, height: 40, background: "var(--accent-light)", borderRadius: "var(--radius-sm)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)", flexShrink: 0 }}>
+            <svg className="icon" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text)" }}>从链接导入</h2>
+            <p style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>粘贴下载链接或网页地址</p>
+          </div>
+          <button className="btn-icon" onClick={onClose} type="button" title="关闭" style={{ width: 36, height: 36 }}>
+            <svg className="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+          </button>
+        </div>
+
+        {/* Body */}
+        <div style={{ flex: 1, overflow: "auto", padding: "20px 24px", display: "flex", flexDirection: "column", gap: 20 }}>
+          {/* URL Input */}
+          <div>
+            <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>链接地址</p>
+            <input
+              className="input"
+              type="url"
+              placeholder="https://..."
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              style={{ width: "100%" }}
+            />
+          </div>
+
+          {/* Agents */}
+          <div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)" }}>目标 Agent</p>
+              <button className="btn btn-secondary btn-sm" onClick={toggleAll} type="button" style={{ fontSize: 11, padding: "2px 8px" }}>
+                {selectedAgents.length === agents.length ? "取消全选" : "全选"}
+              </button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {agents.map((agent) => {
+                const checked = selectedAgents.includes(agent.id);
+                return (
+                  <button
+                    key={agent.id}
+                    className={`agent-item${checked ? " selected" : ""}`}
+                    onClick={() => toggleAgent(agent.id)}
+                    type="button"
+                    style={checked ? { borderColor: "var(--accent)", background: "var(--accent-soft)" } : undefined}
+                  >
+                    <span style={{
+                      width: 20, height: 20, flexShrink: 0, borderRadius: 4, border: `1px solid ${checked ? "var(--accent)" : "var(--border)"}`,
+                      background: checked ? "var(--accent)" : "transparent", display: "flex", alignItems: "center", justifyContent: "center",
+                    }}>
+                      {checked && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><polyline points="20 6 9 17 4 12" /></svg>}
+                    </span>
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ display: "block", fontSize: 14, fontWeight: 500 }}>{agent.name}</span>
+                      <span style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{agent.skillsPath}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Conflict Policy */}
+          <div>
+            <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>冲突策略</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {policyOptions.map((option) => (
+                <button
+                  key={option.value}
+                  className={`card${conflictPolicy === option.value ? " selected" : ""}`}
+                  onClick={() => setConflictPolicy(option.value)}
+                  type="button"
+                  style={{
+                    padding: 12, textAlign: "left", cursor: "pointer",
+                    ...(conflictPolicy === option.value ? { borderColor: "var(--accent)", background: "var(--accent-soft)" } : {}),
+                  }}
+                >
+                  <span style={{ display: "block", fontSize: 14, fontWeight: 500 }}>{option.label}</span>
+                  <span style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>{option.helper}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, borderTop: "1px solid var(--border)", background: "var(--surface-raised)", padding: "16px 24px" }}>
+          <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>已选择 {selectedAgents.length} 个 Agent</p>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-secondary" onClick={onClose} disabled={busy} type="button">取消</button>
+            <button className="btn btn-primary" onClick={() => onImport(url, selectedAgents, conflictPolicy)} disabled={busy || !url.trim() || selectedAgents.length === 0} type="button">
+              <svg className="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
+              导入
+            </button>
+          </div>
         </div>
       </div>
     </div>

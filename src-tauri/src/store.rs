@@ -10,8 +10,6 @@ use std::{fs, path::PathBuf, sync::Mutex};
 #[serde(rename_all = "camelCase")]
 struct AppState {
     #[serde(default)]
-    repository: Option<String>,
-    #[serde(default)]
     agents: Vec<AgentProfile>,
     #[serde(default)]
     installs: Vec<InstallRecord>,
@@ -104,44 +102,6 @@ impl AppStore {
 
     pub fn data_dir(&self) -> PathBuf {
         self.data_dir.clone()
-    }
-
-    pub fn set_repository(&self, path: &str) -> AppResult<()> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
-        state.repository = Some(path.to_string());
-        drop(state);
-        self.save()
-    }
-
-    pub fn get_repository(&self) -> AppResult<Option<String>> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
-        Ok(state.repository.clone())
-    }
-
-    pub fn get_or_create_repository(&self) -> AppResult<String> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
-        if let Some(ref repo) = state.repository {
-            fs::create_dir_all(repo)?;
-            return Ok(repo.clone());
-        }
-        let default = dirs::home_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("skills");
-        let path = default.to_string_lossy().to_string();
-        fs::create_dir_all(&default)?;
-        state.repository = Some(path.clone());
-        drop(state);
-        self.save()?;
-        Ok(path)
     }
 
     pub fn save_agent(&self, profile: &AgentProfile) -> AppResult<()> {
@@ -304,24 +264,6 @@ impl AppStore {
 mod tests {
     use super::*;
     use crate::models::AgentType;
-
-    #[test]
-    fn stores_repository_setting() {
-        let store = AppStore::in_memory().unwrap();
-        store.set_repository("C:\\skills").unwrap();
-        assert_eq!(
-            store.get_repository().unwrap(),
-            Some("C:\\skills".to_string())
-        );
-    }
-
-    #[test]
-    fn creates_default_repository_setting() {
-        let store = AppStore::in_memory().unwrap();
-        let repository = store.get_or_create_repository().unwrap();
-        assert_eq!(store.get_repository().unwrap(), Some(repository.clone()));
-        assert!(PathBuf::from(repository).ends_with("skills"));
-    }
 
     #[test]
     fn saves_and_lists_agents() {

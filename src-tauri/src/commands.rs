@@ -17,9 +17,21 @@ pub fn get_initial_data(service: State<AppService>) -> AppResult<InitialData> {
 pub fn import_skill_upload(
     file_name: String,
     files: Vec<ImportSkillFile>,
+    target_agent_ids: Vec<String>,
+    conflict_policy: ConflictPolicy,
     service: State<AppService>,
 ) -> AppResult<ImportSkillResult> {
-    service.import_uploaded_files(&file_name, &files)
+    service.import_uploaded_files(&file_name, &files, &target_agent_ids, conflict_policy)
+}
+
+#[tauri::command]
+pub fn import_from_url(
+    url: String,
+    target_agent_ids: Vec<String>,
+    conflict_policy: ConflictPolicy,
+    service: State<AppService>,
+) -> AppResult<ImportSkillResult> {
+    service.import_from_url(&url, &target_agent_ids, conflict_policy)
 }
 
 #[tauri::command]

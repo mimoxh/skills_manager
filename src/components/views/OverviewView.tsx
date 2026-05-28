@@ -9,7 +9,7 @@ interface OverviewViewProps {
 }
 
 export function OverviewView({ skills, agents, onNavigate, onFolder, onArchive }: OverviewViewProps) {
-  const missing = skills.reduce((t, s) => t + s.missingAgentIds.length, 0);
+  const missing = skills.filter((s) => s.missingAgentIds.length > 0).length;
 
   return (
     <>
@@ -31,10 +31,10 @@ export function OverviewView({ skills, agents, onNavigate, onFolder, onArchive }
         </div>
         <div className="card">
           <div className="card-header">
-            <div className="card-desc">缺失副本</div>
+            <div className="card-desc">未全覆盖</div>
             <div className="card-title" style={{ fontSize: 28, marginTop: 4, color: "var(--warning)" }}>{missing}</div>
           </div>
-          <div className="card-body"><span style={{ fontSize: 12, color: "var(--text-secondary)" }}>Agent 缺失的 skill 副本</span></div>
+          <div className="card-body"><span style={{ fontSize: 12, color: "var(--text-secondary)" }}>至少有一个 Agent 未安装</span></div>
         </div>
       </div>
 
