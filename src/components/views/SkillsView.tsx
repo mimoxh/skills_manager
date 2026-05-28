@@ -134,6 +134,7 @@ export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, 
               <div className="skill-info">
                 <div className="skill-name">{skill.title}</div>
                 <div className="skill-meta">来源 {skill.bestCopy.agentName} · {skill.copies.length} 个副本</div>
+                {skill.description && <div className="skill-desc">{skill.description}</div>}
                 <div className="skill-tags">
                   <span className="badge badge-version">{skill.bestCopy.version ? `v${skill.bestCopy.version}` : "未声明版本"}</span>
                   <span className="badge badge-success">{skill.installedAgentIds.length} 已有</span>
@@ -270,7 +271,7 @@ function SyncSkillDialog({
         </div>
 
         {/* Footer */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, borderTop: "1px solid var(--border)", background: "var(--surface)", padding: "16px 24px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, borderTop: "1px solid var(--border)", background: "var(--surface-raised)", padding: "16px 24px" }}>
           <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>已选择 {selectedAgents.length} 个 Agent</p>
           <div style={{ display: "flex", gap: 8 }}>
             <button className="btn btn-secondary" onClick={onClose} disabled={busy} type="button">取消</button>

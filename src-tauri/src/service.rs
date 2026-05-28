@@ -456,7 +456,7 @@ fn scan_agent_skill_copies(agent: &AgentProfile) -> AppResult<Vec<AgentSkillCopy
             continue;
         }
         let metadata = fs::metadata(&path).ok();
-        let (title, version) = read_agent_skill_title(&path);
+        let (title, version, description) = read_agent_skill_info(&path);
         copies.push(AgentSkillCopy {
             agent_id: agent.id.clone(),
             agent_name: agent.name.clone(),
@@ -467,6 +467,7 @@ fn scan_agent_skill_copies(agent: &AgentProfile) -> AppResult<Vec<AgentSkillCopy
             updated_at: metadata
                 .and_then(|metadata| metadata.modified().ok())
                 .map(system_time_to_rfc3339),
+            description,
         });
     }
     Ok(copies)
@@ -504,6 +505,7 @@ fn group_agent_skills(agents: &[AgentProfile], copies: Vec<AgentSkillCopy>) -> V
             installed_agent_ids.sort();
             GroupedSkill {
                 title: best_copy.title.clone(),
+                description: best_copy.description.clone(),
                 best_copy,
                 copies,
                 installed_agent_ids,
@@ -515,7 +517,7 @@ fn group_agent_skills(agents: &[AgentProfile], copies: Vec<AgentSkillCopy>) -> V
     values
 }
 
-fn read_agent_skill_title(skill_path: &Path) -> (String, Option<String>) {
+fn read_agent_skill_info(skill_path: &Path) -> (String, Option<String>, Option<String>) {
     for name in ["skill.json", "skill.yaml", "skill.yml"] {
         let manifest_path = skill_path.join(name);
         if !manifest_path.exists() {
@@ -538,8 +540,14 @@ fn read_agent_skill_title(skill_path: &Path) -> (String, Option<String>) {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(ToString::to_string);
+                let description = value
+                    .get("description")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToString::to_string);
                 if let Some(title) = title {
-                    return (title.to_string(), version);
+                    return (title.to_string(), version, description);
                 }
             }
         }
@@ -547,11 +555,11 @@ fn read_agent_skill_title(skill_path: &Path) -> (String, Option<String>) {
 
     let skill_md = skill_path.join("SKILL.md");
     if let Ok(text) = fs::read_to_string(skill_md) {
-        if let Some((title, version)) = read_markdown_frontmatter_title(&text) {
-            return (title, version);
+        if let Some((title, version, description)) = read_markdown_frontmatter(&text) {
+            return (title, version, description);
         }
         if let Some(title) = read_markdown_heading(&text) {
-            return (title, None);
+            return (title, None, None);
         }
     }
 
@@ -562,16 +570,18 @@ fn read_agent_skill_title(skill_path: &Path) -> (String, Option<String>) {
             .unwrap_or("Untitled Skill")
             .to_string(),
         None,
+        None,
     )
 }
 
-fn read_markdown_frontmatter_title(text: &str) -> Option<(String, Option<String>)> {
+fn read_markdown_frontmatter(text: &str) -> Option<(String, Option<String>, Option<String>)> {
     let mut lines = text.lines();
     if lines.next()?.trim() != "---" {
         return None;
     }
     let mut title = None;
     let mut version = None;
+    let mut description = None;
     for line in lines {
         let line = line.trim();
         if line == "---" {
@@ -587,10 +597,11 @@ fn read_markdown_frontmatter_title(text: &str) -> Option<(String, Option<String>
         match key.trim() {
             "title" | "name" => title = Some(value.to_string()),
             "version" => version = Some(value.to_string()),
+            "description" => description = Some(value.to_string()),
             _ => {}
         }
     }
-    title.map(|title| (title, version))
+    title.map(|title| (title, version, description))
 }
 
 fn read_markdown_heading(text: &str) -> Option<String> {
@@ -790,20 +801,20 @@ mod tests {
         fs::create_dir_all(root.path().join("directory")).unwrap();
 
         assert_eq!(
-            read_agent_skill_title(&root.path().join("manifest")),
-            ("Manifest Title".to_string(), Some("2.0.0".to_string()))
+            read_agent_skill_info(&root.path().join("manifest")),
+            ("Manifest Title".to_string(), Some("2.0.0".to_string()), None)
         );
         assert_eq!(
-            read_agent_skill_title(&root.path().join("frontmatter")),
-            ("Frontmatter Title".to_string(), Some("1.2.3".to_string()))
+            read_agent_skill_info(&root.path().join("frontmatter")),
+            ("Frontmatter Title".to_string(), Some("1.2.3".to_string()), None)
         );
         assert_eq!(
-            read_agent_skill_title(&root.path().join("heading")),
-            ("Heading Title".to_string(), None)
+            read_agent_skill_info(&root.path().join("heading")),
+            ("Heading Title".to_string(), None, None)
         );
         assert_eq!(
-            read_agent_skill_title(&root.path().join("directory")),
-            ("directory".to_string(), None)
+            read_agent_skill_info(&root.path().join("directory")),
+            ("directory".to_string(), None, None)
         );
     }
 
@@ -832,6 +843,7 @@ mod tests {
                 version: Some("1.0.0".into()),
                 fingerprint: "a".into(),
                 updated_at: Some("2026-05-01T00:00:00Z".into()),
+                description: None,
             },
             AgentSkillCopy {
                 agent_id: "b".into(),
@@ -841,6 +853,7 @@ mod tests {
                 version: Some("2.0.0".into()),
                 fingerprint: "b".into(),
                 updated_at: Some("2026-05-02T00:00:00Z".into()),
+                description: None,
             },
         ];
 

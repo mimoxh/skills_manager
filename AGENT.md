@@ -70,8 +70,7 @@ npm run test:rust        # cargo test
 │   │   │   └── tooltip.tsx
 │   │   ├── layout/               # 布局组件
 │   │   │   ├── Titlebar.tsx      # 自定义无边框标题栏
-│   │   │   ├── Sidebar.tsx       # 侧边栏导航
-│   │   │   └── CommandBar.tsx    # 搜索栏 + 操作按钮
+│   │   │   └── Sidebar.tsx       # 侧边栏导航
 │   │   └── views/                # 页面视图
 │   │       ├── OverviewView.tsx
 │   │       ├── SkillsView.tsx
@@ -97,13 +96,13 @@ npm run test:rust        # cargo test
 
 ## 主 UI 概览（Tauri + React）
 
-`src/App.tsx` 是应用根组件，组合 Titlebar、Sidebar、CommandBar 和页面视图。默认进入 `skills`，所有状态逻辑提取到 `hooks/useAppState.ts`。
+`src/App.tsx` 是应用根组件，组合 Titlebar、Sidebar 和页面视图。默认进入 `skills`，所有状态逻辑提取到 `hooks/useAppState.ts`。
 
 三个视图：
 
 - **概览（OverviewView）**：指标卡、快速操作（导入文件夹/zip）和入口跳转。
-- **Skills（SkillsView）**：控制台式首屏，包含导入区域、指标、可滚动 skill 列表和状态 badge。点击某个 skill 会打开同步模态弹窗，在弹窗内勾选目标 agent（默认勾选已安装的 agents），并选择 `backupOverwrite` / `skip` / `rename` 冲突策略后执行 `syncGroupedSkill(title, null, targetAgentIds, conflictPolicy)`。
-- **Agents（AgentsView）**：双栏布局，左侧 agent 列表，右侧详情面板。详情面板头部（agent 信息）和"已安装"/"缺失"标题固定不动，skill 条目列表在各自区域内独立滚动。缺失 skills 支持点击多选，选中后底部出现"添加"按钮批量安装到当前 agent。支持自定义 agent 添加和删除 agent。
+- **Skills（SkillsView）**：控制台式首屏，包含导入区域、指标卡（"缺失"可点击筛选可同步 skills）、可滚动 skill 列表和状态 badge。每个 skill 条目显示标题、来源、版本、描述（description）和同步状态。标题栏右侧有刷新按钮。点击某个 skill 会打开同步模态弹窗，在弹窗内勾选目标 agent（默认勾选已安装的 agents），并选择 `backupOverwrite` / `skip` / `rename` 冲突策略后执行 `syncGroupedSkill(title, null, targetAgentIds, conflictPolicy)`。
+- **Agents（AgentsView）**：双栏布局，左侧 agent 列表（标题栏右侧有刷新按钮），右侧详情面板。详情面板头部（agent 信息）和"已安装"/"缺失"标题固定不动，skill 条目在各自区域内独立滚动，每条显示标题和描述。缺失 skills 支持点击多选，选中后底部出现"添加"按钮批量安装到当前 agent。支持自定义 agent 添加；删除 agent 时弹出确认对话框（显示 agent 名称，二次确认后执行删除）。
 
 UI 特性：
 
@@ -193,7 +192,7 @@ manifest 字段：
 - `AgentProfile`：agent 配置（id、name、agent_type、skills_path、adapter_config）。
 - `SkillManifest`：skill 清单。
 - `SkillSummary`：扫描结果（manifest、source_path、fingerprint、manifest_path）。
-- `GroupedSkill`：按标题聚合的 skill 分组（title、best_copy、copies、installed_agent_ids、missing_agent_ids）。
+- `GroupedSkill`：按标题聚合的 skill 分组（title、best_copy、copies、installed_agent_ids、missing_agent_ids、description）。
 - `ConflictPolicy` 枚举：Prompt / BackupOverwrite / Skip / Rename。
 - `InstallResult`：安装/同步操作结果。
 - `ImportSkillFile` / `ImportSkillResult`：上传导入相关。
@@ -214,8 +213,9 @@ manifest 字段：
 - 当前 React UI 有三个视图：概览、Skills、Agents。同步入口在 `SkillsView` 的单个 skill 点击模态弹窗中。
 - AgentsView 采用双栏布局：左侧 agent 列表，右侧详情面板（显示已安装/缺失 skills）。详情面板采用 flex 纵向布局，card-header 固定顶部，card-body 内部"已安装"/"缺失"标题固定，skill 条目列表各自独立滚动（`overflow-y: auto`）。缺失 skills 支持单击多选，选中后显示"添加"按钮批量同步。
 - 同步弹窗默认勾选已安装该 skill 的 agents（`installedAgentIds`），而非未安装的。
-- AgentsView 支持删除 agent（点击垃圾桶图标，再次点击确认删除）。
+- AgentsView 支持删除 agent（点击垃圾桶图标，弹出确认对话框显示 agent 名称，确认后执行删除）。
 - `manifest.files` 目前只做非空校验；实际安装使用整个 skill 目录复制，不按 `files` 白名单过滤。
+- skill 的 `description` 字段从 `skill.json`/`skill.yaml`/`skill.yml` 的 `description` 字段读取，也支持从 `SKILL.md` frontmatter 的 `description` 字段读取。description 会传递到前端的 `GroupedSkill` 和 `AgentSkillCopy` 中显示。
 - `rename` 策略会把 skill 安装到带时间戳的新目录，但记录的 `skill_id` 仍是原 manifest id。后续卸载逻辑使用 `{skillsPath}/{skill_id}`，因此对 renamed 安装的卸载/回滚语义需要特别小心。
 - `rollback_last()` 恢复文件系统但不更新 `installs` 中的 fingerprint。
 - Tauri capability 当前只有 `core:default`。commands 是本应用自定义 invoke，不依赖额外 shell/fs 插件权限。

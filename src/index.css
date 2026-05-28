@@ -290,6 +290,7 @@ input { cursor: text; outline: none; }
 .skill-info { flex: 1; min-width: 0; }
 .skill-name { font-size: 13.5px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .skill-meta { font-size: 12px; color: var(--text-secondary); margin-top: 3px; }
+.skill-desc { font-size: 12px; color: var(--text-tertiary); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .skill-tags { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
 
 /* ===== Badge ===== */

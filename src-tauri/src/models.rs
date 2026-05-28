@@ -36,6 +36,8 @@ pub struct AgentSkillCopy {
     pub version: Option<String>,
     pub fingerprint: String,
     pub updated_at: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -46,6 +48,8 @@ pub struct GroupedSkill {
     pub copies: Vec<AgentSkillCopy>,
     pub installed_agent_ids: Vec<String>,
     pub missing_agent_ids: Vec<String>,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

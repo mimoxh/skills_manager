@@ -27,6 +27,7 @@ export interface AgentSkillCopy {
   version?: string | null;
   fingerprint: string;
   updatedAt?: string | null;
+  description?: string;
 }
 
 export interface GroupedSkill {
@@ -35,6 +36,7 @@ export interface GroupedSkill {
   copies: AgentSkillCopy[];
   installedAgentIds: string[];
   missingAgentIds: string[];
+  description?: string;
 }
 
 export interface ImportSkillFile {

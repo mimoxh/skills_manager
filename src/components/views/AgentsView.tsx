@@ -22,7 +22,7 @@ interface AgentsViewProps {
 
 export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, onSaveCustom, onDelete, onSync, onRefresh }: AgentsViewProps) {
   const [detailAgentId, setDetailAgentId] = useState<string | null>(null);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deleteDialogAgent, setDeleteDialogAgent] = useState<AgentProfile | null>(null);
   const [selectedMissing, setSelectedMissing] = useState<string[]>([]);
 
   const detailAgent = detailAgentId ? agents.find((a) => a.id === detailAgentId) : null;
@@ -31,19 +31,19 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
 
   function handleAgentClick(agentId: string) {
     setDetailAgentId((prev) => (prev === agentId ? null : agentId));
-    setConfirmDeleteId(null);
     setSelectedMissing([]);
   }
 
-  function handleDelete(e: React.MouseEvent, agentId: string) {
+  function handleDeleteClick(e: React.MouseEvent, agent: AgentProfile) {
     e.stopPropagation();
-    if (confirmDeleteId === agentId) {
-      onDelete(agentId);
-      setConfirmDeleteId(null);
-      setDetailAgentId(null);
-    } else {
-      setConfirmDeleteId(agentId);
-    }
+    setDeleteDialogAgent(agent);
+  }
+
+  function confirmDelete() {
+    if (!deleteDialogAgent) return;
+    onDelete(deleteDialogAgent.id);
+    setDeleteDialogAgent(null);
+    setDetailAgentId(null);
   }
 
   function toggleMissing(title: string) {
@@ -75,7 +75,6 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {agents.map((agent) => {
               const isDetail = detailAgentId === agent.id;
-              const isConfirming = confirmDeleteId === agent.id;
               const installedCount = skills.filter((s) => s.installedAgentIds.includes(agent.id)).length;
               const missingCount = skills.filter((s) => s.missingAgentIds.includes(agent.id)).length;
               return (
@@ -98,12 +97,11 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
                     </div>
                   </div>
                   <button
-                    className={`btn-icon${isConfirming ? " danger" : ""}`}
-                    onClick={(e) => handleDelete(e, agent.id)}
+                    className="btn-icon"
+                    onClick={(e) => handleDeleteClick(e, agent)}
                     disabled={busy}
-                    title={isConfirming ? "确认删除" : "删除"}
+                    title="删除"
                     type="button"
-                    style={isConfirming ? { background: "var(--danger-light)", color: "var(--danger)" } : undefined}
                   >
                     <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
                   </button>
@@ -140,7 +138,10 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
               <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
                 {installedSkills.map((s) => (
                   <div key={s.title} className="detail-item">
-                    <span className="detail-item-name">{s.title}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <span className="detail-item-name">{s.title}</span>
+                      {s.description && <div style={{ fontSize: 12, color: "var(--text-tertiary)", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.description}</div>}
+                    </div>
                     <span className="badge badge-version">{s.bestCopy.version ? `v${s.bestCopy.version}` : "-"}</span>
                   </div>
                 ))}
@@ -161,7 +162,10 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
                           role="button"
                           tabIndex={0}
                         >
-                          <span className="detail-item-name">{s.title}</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <span className="detail-item-name">{s.title}</span>
+                            {s.description && <div style={{ fontSize: 12, color: "var(--text-tertiary)", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.description}</div>}
+                          </div>
                           <span className={isSelected ? "badge badge-syncable" : "badge badge-warning"}>{isSelected ? "已选" : "缺失"}</span>
                         </div>
                       );
@@ -231,6 +235,30 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
           </div>
         )}
       </div>
+
+      {/* Delete Confirm Dialog */}
+      {deleteDialogAgent && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(47, 48, 44, 0.28)", padding: 20 }}>
+          <div style={{ width: "100%", maxWidth: 420, borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(80,60,30,0.14), 0 2px 8px rgba(80,60,30,0.06)", overflow: "hidden" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "20px 24px", borderBottom: "1px solid var(--border)" }}>
+              <div style={{ width: 40, height: 40, background: "var(--danger-light)", borderRadius: "var(--radius-sm)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--danger)", flexShrink: 0 }}>
+                <svg className="icon" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text)" }}>确认删除</h2>
+                <p style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4 }}>是否确定删除「{deleteDialogAgent.name}」？此操作不可撤销。</p>
+              </div>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "12px 24px", background: "var(--surface-raised)" }}>
+              <button className="btn btn-secondary" onClick={() => setDeleteDialogAgent(null)} disabled={busy} type="button">取消</button>
+              <button className="btn btn-primary" onClick={confirmDelete} disabled={busy} type="button" style={{ background: "var(--danger)", borderColor: "var(--danger)" }}>
+                <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+                确认删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
