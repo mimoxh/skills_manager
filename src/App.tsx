@@ -2,7 +2,6 @@ import { ChangeEvent, Suspense, lazy, useEffect, useRef, useState } from "react"
 import { TooltipProvider } from "./components/ui/tooltip";
 import { Titlebar } from "./components/layout/Titlebar";
 import { Sidebar } from "./components/layout/Sidebar";
-import { CommandBar } from "./components/layout/CommandBar";
 import { SkillsView } from "./components/views/SkillsView";
 import { useAppState } from "./hooks/useAppState";
 import type { ImportSkillFile } from "./types";
@@ -49,8 +48,6 @@ export default function App() {
     if (archiveInputRef.current) archiveInputRef.current.value = "";
   }
 
-  const showSearch = view === "skills" || view === "agents";
-
   function renderView() {
     switch (view) {
       case "skills":
@@ -63,6 +60,7 @@ export default function App() {
             onFolder={() => folderInputRef.current?.click()}
             onArchive={() => archiveInputRef.current?.click()}
             onSync={state.syncSkillToAgents}
+            onRefresh={state.refreshAll}
           />
         );
       case "agents":
@@ -77,6 +75,7 @@ export default function App() {
               onSaveCustom={state.saveCustomAgent}
               onDelete={state.deleteAgent}
               onSync={state.syncSkillToAgents}
+              onRefresh={state.refreshAll}
             />
           </Suspense>
         );
@@ -101,22 +100,6 @@ export default function App() {
         <Sidebar view={view} onNavigate={setView} skillCount={state.skills.length} agentCount={state.agents.length} />
         <div className="main">
           <Titlebar />
-          {showSearch && (
-            <CommandBar
-              query={state.query}
-              onQueryChange={state.setQuery}
-              busy={state.busy}
-              onRefresh={state.refreshAll}
-              onFolder={() => folderInputRef.current?.click()}
-              onArchive={() => archiveInputRef.current?.click()}
-            />
-          )}
-          {showSearch && (
-            <div className="statusbar">
-              <span className={`status-dot${state.isInitialLoading || state.busy ? " busy" : ""}`} />
-              <span>{state.isInitialLoading ? "正在加载..." : state.busy ? "正在处理..." : state.message}</span>
-            </div>
-          )}
           <div className="content">
             {state.isInitialLoading ? (
               <div style={{ display: "flex", height: "100%", alignItems: "center", justifyContent: "center" }}>

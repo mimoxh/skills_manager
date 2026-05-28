@@ -15,21 +15,14 @@ interface SkillsViewProps {
   onFolder: () => void;
   onArchive: () => void;
   onSync: (title: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) => Promise<InstallResult[]>;
-  onRefresh: () => void;
 }
 
-export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, onSync, onRefresh }: SkillsViewProps) {
+export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, onSync }: SkillsViewProps) {
   const [selectedSkill, setSelectedSkill] = useState<GroupedSkill | null>(null);
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [conflictPolicy, setConflictPolicy] = useState<ConflictPolicy>("backupOverwrite");
   const [lastResults, setLastResults] = useState<InstallResult[]>([]);
   const [dragging, setDragging] = useState(false);
-  const [filter, setFilter] = useState<"all" | "missing">("all");
-
-  const displayedSkills = useMemo(() => {
-    if (filter === "missing") return skills.filter((s) => s.missingAgentIds.length > 0);
-    return skills;
-  }, [skills, filter]);
 
   const totals = useMemo(() => {
     return skills.reduce(
@@ -45,7 +38,7 @@ export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, 
 
   function openSync(skill: GroupedSkill) {
     setSelectedSkill(skill);
-    setSelectedAgents(skill.installedAgentIds);
+    setSelectedAgents(skill.missingAgentIds);
     setConflictPolicy("backupOverwrite");
     setLastResults([]);
   }
@@ -70,14 +63,7 @@ export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, 
         <div className="metric-card"><div className="metric-value">{skills.length}</div><div className="metric-label">Skills</div></div>
         <div className="metric-card"><div className="metric-value">{totals.copies}</div><div className="metric-label">副本</div></div>
         <div className="metric-card"><div className="metric-value success">{totals.installed}</div><div className="metric-label">已安装</div></div>
-        <div
-          className="metric-card"
-          onClick={() => setFilter((f) => f === "missing" ? "all" : "missing")}
-          style={{ cursor: "pointer", ...(filter === "missing" ? { borderColor: "var(--warning)", background: "var(--warning-light)" } : {}) }}
-        >
-          <div className="metric-value warning">{totals.missing}</div>
-          <div className="metric-label">缺失</div>
-        </div>
+        <div className="metric-card"><div className="metric-value warning">{totals.missing}</div><div className="metric-label">缺失</div></div>
       </div>
 
       {/* Import Zone */}
@@ -112,15 +98,10 @@ export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, 
             <div className="card-title">Skills 控制台</div>
             <div className="card-desc">点击任意 skill 选择目标 Agent 同步</div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span className="skills-header-badge">{displayedSkills.length} 个可见项目</span>
-            <button className="btn btn-secondary btn-sm" onClick={onRefresh} disabled={busy} type="button" title="刷新">
-              <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>
-            </button>
-          </div>
+          <span className="skills-header-badge">{skills.length} 个可见项目</span>
         </div>
         <div className="skills-list">
-          {displayedSkills.map((skill) => (
+          {skills.map((skill) => (
             <div
               key={skill.title}
               className="skill-item"
@@ -147,7 +128,7 @@ export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, 
               </span>
             </div>
           ))}
-          {!displayedSkills.length && (
+          {!skills.length && (
             <div style={{ textAlign: "center", padding: "48px 0", color: "var(--text-secondary)" }}>
               <p style={{ fontSize: 14, fontWeight: 500 }}>没有找到 skills</p>
               <p style={{ fontSize: 12, color: "var(--text-tertiary)", marginTop: 4 }}>设置主仓库或导入包含 manifest 的文件夹后会显示在这里</p>

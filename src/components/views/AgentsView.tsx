@@ -17,9 +17,10 @@ interface AgentsViewProps {
   onSaveCustom: () => void;
   onDelete: (agentId: string) => void;
   onSync: (title: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) => Promise<InstallResult[]>;
+  onRefresh: () => void;
 }
 
-export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, onSaveCustom, onDelete, onSync }: AgentsViewProps) {
+export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, onSaveCustom, onDelete, onSync, onRefresh }: AgentsViewProps) {
   const [detailAgentId, setDetailAgentId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [selectedMissing, setSelectedMissing] = useState<string[]>([]);
@@ -61,9 +62,14 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
     <div className="grid-main-side" style={{ height: "100%", minHeight: 0 }}>
       {/* Agent List */}
       <div className="card flex-col" style={{ minHeight: 0 }}>
-        <div className="card-header">
-          <div className="card-title">Agents</div>
-          <div className="card-desc">{agents.length} 个本地 Agent 配置</div>
+        <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <div className="card-title">Agents</div>
+            <div className="card-desc">{agents.length} 个本地 Agent 配置</div>
+          </div>
+          <button className="btn btn-secondary btn-sm" onClick={onRefresh} disabled={busy} type="button" title="刷新">
+            <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>
+          </button>
         </div>
         <div className="card-body flex-1 overflow-auto" style={{ padding: 8 }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
