@@ -1,29 +1,5 @@
 import { useMemo, useState } from "react";
-import {
-  Archive,
-  Check,
-  FolderPlus,
-  Layers3,
-  RefreshCw,
-  UploadCloud,
-  X,
-} from "lucide-react";
-import { Badge } from "../ui/badge";
-import { Button } from "../ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "../ui/card";
-import { cn } from "../../lib/utils";
-import type {
-  AgentProfile,
-  ConflictPolicy,
-  GroupedSkill,
-  InstallResult,
-} from "../../types";
+import type { AgentProfile, ConflictPolicy, GroupedSkill, InstallResult } from "../../types";
 
 const policyOptions: Array<{ value: ConflictPolicy; label: string; helper: string }> = [
   { value: "backupOverwrite", label: "备份覆盖", helper: "保留备份后更新目标目录" },
@@ -36,32 +12,17 @@ interface SkillsViewProps {
   agents: AgentProfile[];
   busy: boolean;
   onDrop: (event: React.DragEvent<HTMLElement>) => void;
-  onDrag: (dragging: boolean) => void;
-  dragging: boolean;
   onFolder: () => void;
   onArchive: () => void;
-  onSync: (
-    title: string,
-    targetAgentIds: string[],
-    conflictPolicy: ConflictPolicy,
-  ) => Promise<InstallResult[]>;
+  onSync: (title: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) => Promise<InstallResult[]>;
 }
 
-export function SkillsView({
-  skills,
-  agents,
-  busy,
-  onDrop,
-  onDrag,
-  dragging,
-  onFolder,
-  onArchive,
-  onSync,
-}: SkillsViewProps) {
+export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, onSync }: SkillsViewProps) {
   const [selectedSkill, setSelectedSkill] = useState<GroupedSkill | null>(null);
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [conflictPolicy, setConflictPolicy] = useState<ConflictPolicy>("backupOverwrite");
   const [lastResults, setLastResults] = useState<InstallResult[]>([]);
+  const [dragging, setDragging] = useState(false);
 
   const totals = useMemo(() => {
     return skills.reduce(
@@ -77,7 +38,7 @@ export function SkillsView({
 
   function openSync(skill: GroupedSkill) {
     setSelectedSkill(skill);
-    setSelectedAgents(skill.missingAgentIds);
+    setSelectedAgents(skill.installedAgentIds);
     setConflictPolicy("backupOverwrite");
     setLastResults([]);
   }
@@ -96,112 +57,94 @@ export function SkillsView({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-5">
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <Metric label="Skills" value={skills.length} />
-        <Metric label="副本" value={totals.copies} />
-        <Metric label="已安装" value={totals.installed} tone="success" />
-        <Metric label="缺失" value={totals.missing} tone="warning" />
+    <>
+      {/* Metrics */}
+      <div className="metrics">
+        <div className="metric-card"><div className="metric-value">{skills.length}</div><div className="metric-label">Skills</div></div>
+        <div className="metric-card"><div className="metric-value">{totals.copies}</div><div className="metric-label">副本</div></div>
+        <div className="metric-card"><div className="metric-value success">{totals.installed}</div><div className="metric-label">已安装</div></div>
+        <div className="metric-card"><div className="metric-value warning">{totals.missing}</div><div className="metric-label">缺失</div></div>
       </div>
 
+      {/* Import Zone */}
       <div
-        className={cn(
-          "flex min-h-[76px] items-center gap-4 rounded-lg border border-dashed px-5 py-4 transition-[background,border-color,box-shadow]",
-          dragging
-            ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)] shadow-[var(--shadow-soft)]"
-            : "border-[var(--color-border)] bg-[var(--color-surface-raised)]",
-        )}
-        onDragOver={(e) => {
-          e.preventDefault();
-          onDrag(true);
-        }}
-        onDragLeave={() => onDrag(false)}
+        className="import-zone"
+        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
+        style={dragging ? { borderColor: "var(--accent)", background: "var(--accent-soft)" } : undefined}
       >
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-[var(--color-surface)] text-[var(--color-text-secondary)]">
-          <UploadCloud size={18} />
+        <div className="import-zone-icon">
+          <svg className="icon icon-lg" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
         </div>
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-[var(--color-text)]">导入 Skill</p>
-          <p className="mt-1 text-xs leading-relaxed text-[var(--color-text-secondary)]">
-            拖拽文件夹或 zip 到这里，或选择本地文件
-          </p>
+        <div className="import-zone-text">
+          <div className="import-zone-title">导入 Skill</div>
+          <div className="import-zone-desc">拖拽文件夹或 zip 到这里，或选择本地文件</div>
         </div>
-        <Button variant="secondary" size="sm" onClick={onFolder} disabled={busy}>
-          <FolderPlus size={14} />
+        <button className="btn btn-secondary btn-sm" onClick={onFolder} disabled={busy} type="button">
+          <svg className="icon icon-sm" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg>
           文件夹
-        </Button>
-        <Button variant="secondary" size="sm" onClick={onArchive} disabled={busy}>
-          <Archive size={14} />
+        </button>
+        <button className="btn btn-secondary btn-sm" onClick={onArchive} disabled={busy} type="button">
+          <svg className="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
           zip
-        </Button>
+        </button>
       </div>
 
-      <Card className="flex min-h-0 flex-1 flex-col">
-        <CardHeader className="shrink-0">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <CardTitle>Skills 控制台</CardTitle>
-              <CardDescription>点击任意 skill 选择目标 Agent 同步</CardDescription>
-            </div>
-            <Badge variant="secondary">{skills.length} 个可见项目</Badge>
+      {/* Skills Panel */}
+      <div className="skills-panel">
+        <div className="skills-header">
+          <div>
+            <div className="card-title">Skills 控制台</div>
+            <div className="card-desc">点击任意 skill 选择目标 Agent 同步</div>
           </div>
-        </CardHeader>
-        <CardContent className="min-h-0 flex-1 overflow-auto px-4 pb-4">
-          <div className="flex flex-col gap-2.5">
-            {skills.map((skill) => (
-              <button
-                key={skill.title}
-                className="group flex w-full items-center gap-4 rounded-md border border-transparent bg-[var(--color-surface-raised)] px-3 py-3 text-left transition-[background,border-color,box-shadow] hover:border-[var(--color-border-hover)] hover:bg-[var(--color-surface)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color-mix(in_srgb,var(--color-accent)_24%,transparent)]"
-                onClick={() => openSync(skill)}
-                type="button"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-[var(--color-accent-light)] text-[var(--color-accent)]">
-                  <Layers3 size={16} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-[var(--color-text)]">{skill.title}</p>
-                  <p className="mt-1 truncate text-xs text-[var(--color-text-secondary)]">
-                    来源 {skill.bestCopy.agentName} · {skill.copies.length} 个副本
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    <Badge variant="secondary">
-                      {skill.bestCopy.version ? `v${skill.bestCopy.version}` : "未声明版本"}
-                    </Badge>
-                    <Badge variant="success">{skill.installedAgentIds.length} 已有</Badge>
-                    {skill.missingAgentIds.length > 0 && (
-                      <Badge variant="warning">{skill.missingAgentIds.length} 缺失</Badge>
-                    )}
-                  </div>
-                </div>
-                <Badge
-                  className="shrink-0"
-                  variant={skill.missingAgentIds.length > 0 ? "warning" : "success"}
-                >
-                  {skill.missingAgentIds.length > 0 ? "可同步" : "已覆盖"}
-                </Badge>
-              </button>
-            ))}
-            {!skills.length && (
-              <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] py-12 text-center">
-                <p className="text-sm font-medium text-[var(--color-text-secondary)]">
-                  没有找到 skills
-                </p>
-                <p className="text-xs text-[var(--color-text-tertiary)]">
-                  设置主仓库或导入包含 manifest 的文件夹后会显示在这里
-                </p>
+          <span className="skills-header-badge">{skills.length} 个可见项目</span>
+        </div>
+        <div className="skills-list">
+          {skills.map((skill) => (
+            <div
+              key={skill.title}
+              className="skill-item"
+              onClick={() => openSync(skill)}
+              role="button"
+              tabIndex={0}
+            >
+              <div className="skill-icon">
+                <svg className="icon" viewBox="0 0 24 24"><polygon points="12 2 2 7 12 12 22 7 12 2" /><polyline points="2 17 12 22 22 17" /><polyline points="2 12 12 17 22 12" /></svg>
               </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+              <div className="skill-info">
+                <div className="skill-name">{skill.title}</div>
+                <div className="skill-meta">来源 {skill.bestCopy.agentName} · {skill.copies.length} 个副本</div>
+                <div className="skill-tags">
+                  <span className="badge badge-version">{skill.bestCopy.version ? `v${skill.bestCopy.version}` : "未声明版本"}</span>
+                  <span className="badge badge-success">{skill.installedAgentIds.length} 已有</span>
+                  {skill.missingAgentIds.length > 0 && (
+                    <span className="badge badge-warning">{skill.missingAgentIds.length} 缺失</span>
+                  )}
+                </div>
+              </div>
+              <span className={`badge ${skill.missingAgentIds.length > 0 ? "badge-syncable" : "badge-synced"}`}>
+                {skill.missingAgentIds.length > 0 ? "可同步" : "已覆盖"}
+              </span>
+            </div>
+          ))}
+          {!skills.length && (
+            <div style={{ textAlign: "center", padding: "48px 0", color: "var(--text-secondary)" }}>
+              <p style={{ fontSize: 14, fontWeight: 500 }}>没有找到 skills</p>
+              <p style={{ fontSize: 12, color: "var(--text-tertiary)", marginTop: 4 }}>设置主仓库或导入包含 manifest 的文件夹后会显示在这里</p>
+            </div>
+          )}
+        </div>
+      </div>
 
+      {/* Last results */}
       {lastResults.length > 0 && (
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-raised)] px-4 py-3 text-xs text-[var(--color-text-secondary)] shadow-sm">
+        <div style={{ marginTop: 16, padding: "12px 16px", background: "var(--surface-raised)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: 12, color: "var(--text-secondary)" }}>
           最近同步完成 {lastResults.length} 个任务
         </div>
       )}
 
+      {/* Sync Dialog */}
       {selectedSkill && (
         <SyncSkillDialog
           agents={agents}
@@ -215,43 +158,13 @@ export function SkillsView({
           onToggleAgent={toggleAgent}
         />
       )}
-    </div>
-  );
-}
-
-function Metric({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number;
-  tone?: "success" | "warning";
-}) {
-  const color =
-    tone === "success"
-      ? "text-[var(--color-success)]"
-      : tone === "warning"
-        ? "text-[var(--color-warning)]"
-        : "text-[var(--color-text)]";
-  return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-raised)] px-4 py-3 shadow-sm">
-      <p className={cn("text-2xl font-semibold leading-none", color)}>{value}</p>
-      <p className="mt-2 text-xs text-[var(--color-text-secondary)]">{label}</p>
-    </div>
+    </>
   );
 }
 
 function SyncSkillDialog({
-  agents,
-  busy,
-  conflictPolicy,
-  selectedAgents,
-  skill,
-  onClose,
-  onPolicy,
-  onSync,
-  onToggleAgent,
+  agents, busy, conflictPolicy, selectedAgents, skill,
+  onClose, onPolicy, onSync, onToggleAgent,
 }: {
   agents: AgentProfile[];
   busy: boolean;
@@ -264,122 +177,88 @@ function SyncSkillDialog({
   onToggleAgent: (agentId: string) => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgb(47_48_44_/_0.28)] px-5">
-      <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-raised)] shadow-[var(--shadow-float)]">
-        <div className="flex items-start gap-3 border-b border-[var(--color-border)] px-6 py-5">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-[var(--color-accent-light)] text-[var(--color-accent)]">
-            <RefreshCw size={16} />
+    <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(47, 48, 44, 0.28)", padding: 20 }}>
+      <div style={{ maxHeight: "88vh", width: "100%", maxWidth: 720, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(80,60,30,0.14), 0 2px 8px rgba(80,60,30,0.06)" }}>
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 12, borderBottom: "1px solid var(--border)", padding: "20px 24px" }}>
+          <div style={{ width: 40, height: 40, background: "var(--accent-light)", borderRadius: "var(--radius-sm)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)", flexShrink: 0 }}>
+            <svg className="icon" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>
           </div>
-          <div className="min-w-0 flex-1">
-            <h2 className="truncate text-base font-semibold text-[var(--color-text)]">{skill.title}</h2>
-            <p className="mt-1 text-xs text-[var(--color-text-secondary)]">
-              来源 {skill.bestCopy.agentName} · {skill.copies.length} 个副本
-            </p>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text)" }}>{skill.title}</h2>
+            <p style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>来源 {skill.bestCopy.agentName} · {skill.copies.length} 个副本</p>
           </div>
-          <button
-            className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
-            onClick={onClose}
-            type="button"
-            title="关闭"
-          >
-            <X size={15} />
+          <button className="btn-icon" onClick={onClose} type="button" title="关闭" style={{ width: 36, height: 36 }}>
+            <svg className="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
           </button>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto px-6 py-5">
-          <div className="mb-5">
-            <p className="mb-2 text-xs font-semibold text-[var(--color-text-secondary)]">
-              目标 Agent
-            </p>
-            <div className="flex flex-col gap-2.5">
+        {/* Body */}
+        <div style={{ flex: 1, overflow: "auto", padding: "20px 24px" }}>
+          {/* Agents */}
+          <div style={{ marginBottom: 20 }}>
+            <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>目标 Agent</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {agents.map((agent) => {
                 const checked = selectedAgents.includes(agent.id);
                 const installed = skill.installedAgentIds.includes(agent.id);
                 return (
                   <button
                     key={agent.id}
-                    className={cn(
-                      "flex min-h-[68px] items-center gap-3 rounded-md border px-3 py-3 text-left transition-[background,border-color,box-shadow]",
-                      checked
-                        ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)] shadow-sm"
-                        : "border-[var(--color-border)] bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface)]",
-                    )}
+                    className={`agent-item${checked ? " selected" : ""}`}
                     onClick={() => onToggleAgent(agent.id)}
                     type="button"
+                    style={checked ? { borderColor: "var(--accent)", background: "var(--accent-soft)" } : undefined}
                   >
-                    <span
-                      className={cn(
-                        "flex h-5 w-5 shrink-0 items-center justify-center rounded border",
-                        checked
-                          ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-white"
-                          : "border-[var(--color-border)]",
-                      )}
-                    >
-                      {checked && <Check size={13} />}
+                    <span style={{
+                      width: 20, height: 20, flexShrink: 0, borderRadius: 4, border: `1px solid ${checked ? "var(--accent)" : "var(--border)"}`,
+                      background: checked ? "var(--accent)" : "transparent", display: "flex", alignItems: "center", justifyContent: "center",
+                    }}>
+                      {checked && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><polyline points="20 6 9 17 4 12" /></svg>}
                     </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium">{agent.name}</span>
-                      <span className="block truncate text-xs text-[var(--color-text-secondary)]">
-                        {agent.skillsPath}
-                      </span>
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ display: "block", fontSize: 14, fontWeight: 500 }}>{agent.name}</span>
+                      <span style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{agent.skillsPath}</span>
                     </span>
-                    <Badge variant={installed ? "success" : "warning"}>
-                      {installed ? "已安装" : "未安装"}
-                    </Badge>
+                    <span className={`badge ${installed ? "badge-success" : "badge-warning"}`}>{installed ? "已安装" : "未安装"}</span>
                   </button>
                 );
               })}
-              {!agents.length && (
-                <p className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] py-8 text-center text-sm text-[var(--color-text-secondary)]">
-                  没有可用 Agent
-                </p>
-              )}
             </div>
           </div>
 
+          {/* Conflict Policy */}
           <div>
-            <p className="mb-2 text-xs font-semibold text-[var(--color-text-secondary)]">
-              冲突策略
-            </p>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>冲突策略</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
               {policyOptions.map((option) => (
                 <button
                   key={option.value}
-                  className={cn(
-                    "min-h-[76px] rounded-md border p-3 text-left transition-[background,border-color,box-shadow]",
-                    conflictPolicy === option.value
-                      ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)] shadow-sm"
-                      : "border-[var(--color-border)] bg-[var(--color-surface-raised)] hover:bg-[var(--color-surface)]",
-                  )}
+                  className={`card${conflictPolicy === option.value ? " selected" : ""}`}
                   onClick={() => onPolicy(option.value)}
                   type="button"
+                  style={{
+                    padding: 12, textAlign: "left", cursor: "pointer",
+                    ...(conflictPolicy === option.value ? { borderColor: "var(--accent)", background: "var(--accent-soft)" } : {}),
+                  }}
                 >
-                  <span className="block text-sm font-medium">{option.label}</span>
-                  <span className="mt-1 block text-xs text-[var(--color-text-secondary)]">
-                    {option.helper}
-                  </span>
+                  <span style={{ display: "block", fontSize: 14, fontWeight: 500 }}>{option.label}</span>
+                  <span style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>{option.helper}</span>
                 </button>
               ))}
             </div>
           </div>
         </div>
 
-        <div className="flex items-center justify-between gap-3 border-t border-[var(--color-border)] bg-[var(--color-surface)] px-6 py-4">
-          <p className="text-xs text-[var(--color-text-secondary)]">
-            已选择 {selectedAgents.length} 个 Agent
-          </p>
-          <div className="flex gap-2">
-            <Button variant="secondary" onClick={onClose} disabled={busy}>
-              取消
-            </Button>
-            <Button
-              variant="primary"
-              onClick={onSync}
-              disabled={busy || selectedAgents.length === 0}
-            >
-              <RefreshCw size={14} />
+        {/* Footer */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, borderTop: "1px solid var(--border)", background: "var(--surface)", padding: "16px 24px" }}>
+          <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>已选择 {selectedAgents.length} 个 Agent</p>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-secondary" onClick={onClose} disabled={busy} type="button">取消</button>
+            <button className="btn btn-primary" onClick={onSync} disabled={busy || selectedAgents.length === 0} type="button">
+              <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>
               同步
-            </Button>
+            </button>
           </div>
         </div>
       </div>
