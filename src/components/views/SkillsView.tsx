@@ -74,7 +74,14 @@ export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, 
     <>
       {/* Metrics */}
       <div className="metrics">
-        <div className="metric-card"><div className="metric-value">{skills.length}</div><div className="metric-label">Skills</div></div>
+        <div
+          className="metric-card"
+          onClick={() => { if (filter === "missing") setFilter("all"); }}
+          style={{ cursor: filter === "missing" ? "pointer" : "default" }}
+        >
+          <div className="metric-value">{skills.length}</div>
+          <div className="metric-label">Skills</div>
+        </div>
         <div
           className="metric-card"
           onClick={() => setFilter((f) => f === "missing" ? "all" : "missing")}

@@ -396,7 +396,7 @@ input { cursor: text; outline: none; }
 .separator { height: 1px; background: var(--border); margin: 18px 0; }
 
 /* ===== Grid layouts ===== */
-.grid-main-side { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 280px); gap: 20px; height: 100%; min-height: 0; min-width: 0; }
+.grid-main-side { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 320px); gap: 20px; height: 100%; min-height: 0; min-width: 0; }
 .flex-col { display: flex; flex-direction: column; }
 .gap-5 { gap: 20px; }
 .gap-3 { gap: 12px; }

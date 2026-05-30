@@ -100,7 +100,7 @@ npm run test:rust        # cargo test
 三个视图：
 
 - **概览（OverviewView）**：指标卡（Skills 总数、Agents 数、未全覆盖数）、快速操作（导入文件夹/zip）和入口跳转。
-- **Skills（SkillsView）**：控制台式首屏，包含导入区域（支持文件夹/zip 两种方式）、指标卡（Skills 总数和"未全覆盖"数，后者可点击筛选）、可滚动 skill 列表和状态 badge。导入时弹出 agent 选择对话框（多选+全选+冲突策略），直接写入选中 agent 的 skills 目录。每个 skill 条目显示标题、来源、版本、描述（description）和同步状态，右侧有删除按钮（点击弹出确认对话框后从所有 agent 删除）。标题栏右侧有刷新按钮。点击某个 skill 会打开双栏模态弹窗：左侧用 Markdown 渲染器展示 SKILL.md 说明（`readme` 字段），右侧勾选目标 agent（默认勾选已安装的 agents）并选择冲突策略。取消选中 agent 后点同步会同时为未选中的 agent 删除该 skill；全部取消选中时按钮变为红色"全部删除"。
+- **Skills（SkillsView）**：控制台式首屏，包含导入区域（支持文件夹/zip 两种方式）、指标卡（Skills 总数和"未全覆盖"数，后者可点击筛选，筛选激活时点击 "Skills" 卡片也可取消筛选）、可滚动 skill 列表和状态 badge。导入时弹出 agent 选择对话框（多选+全选+冲突策略），直接写入选中 agent 的 skills 目录。每个 skill 条目显示标题、来源、版本、描述（description）和同步状态，右侧有删除按钮（点击弹出确认对话框后从所有 agent 删除）。标题栏右侧有刷新按钮。点击某个 skill 会打开双栏模态弹窗：左侧用 Markdown 渲染器展示 SKILL.md 说明（`readme` 字段），右侧勾选目标 agent（默认勾选已安装的 agents）并选择冲突策略。取消选中 agent 后点同步会同时为未选中的 agent 删除该 skill；全部取消选中时按钮变为红色"全部删除"。
 - **Agents（AgentsView）**：双栏布局，左侧 agent 列表（标题栏右侧有刷新按钮），右侧详情面板。详情面板头部（agent 信息）和"已安装"/"缺失"标题固定不动，skill 条目在各自区域内独立滚动，每条显示标题和描述。缺失 skills 支持点击多选，选中后底部出现"添加"按钮批量安装到当前 agent。支持自定义 agent 添加；删除 agent 时弹出确认对话框（显示 agent 名称，二次确认后执行删除）。
 
 UI 特性：
