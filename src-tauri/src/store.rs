@@ -4,7 +4,7 @@ use crate::{
 };
 
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf, sync::Mutex};
+use std::{collections::HashSet, fs, path::PathBuf, sync::Mutex};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -19,6 +19,8 @@ struct AppState {
     operations: Vec<OperationRecord>,
     #[serde(default)]
     next_operation_id: i64,
+    #[serde(default)]
+    no_full_coverage_titles: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -256,6 +258,31 @@ impl AppStore {
                     && op.backup_path.is_some()
             })
             .map(|op| (op.target_path.clone(), op.backup_path.clone().unwrap())))
+    }
+
+    pub fn toggle_no_full_coverage(&self, title: &str) -> AppResult<bool> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let is_now_marked = if state.no_full_coverage_titles.contains(title) {
+            state.no_full_coverage_titles.remove(title);
+            false
+        } else {
+            state.no_full_coverage_titles.insert(title.to_string());
+            true
+        };
+        drop(state);
+        self.save()?;
+        Ok(is_now_marked)
+    }
+
+    pub fn list_no_full_coverage(&self) -> AppResult<Vec<String>> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        Ok(state.no_full_coverage_titles.iter().cloned().collect())
     }
 
 }

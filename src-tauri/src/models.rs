@@ -153,4 +153,6 @@ pub struct InstallResult {
 pub struct InitialData {
     pub skills: Vec<GroupedSkill>,
     pub agents: Vec<AgentProfile>,
+    #[serde(default)]
+    pub no_full_coverage_titles: Vec<String>,
 }

@@ -12,31 +12,43 @@ interface SkillsViewProps {
   skills: GroupedSkill[];
   agents: AgentProfile[];
   busy: boolean;
+  noFullCoverageTitles: Set<string>;
   onDrop: (event: React.DragEvent<HTMLElement>) => void;
   onFolder: () => void;
   onArchive: () => void;
   onSync: (title: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) => Promise<InstallResult[]>;
   onUninstall: (skillId: string, agentIds: string[]) => Promise<void>;
   onRefresh: () => void;
+  onToggleNoFullCoverage: (title: string) => Promise<void>;
 }
 
-export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, onSync, onUninstall, onRefresh }: SkillsViewProps) {
+export function SkillsView({ skills, agents, busy, noFullCoverageTitles, onDrop, onFolder, onArchive, onSync, onUninstall, onRefresh, onToggleNoFullCoverage }: SkillsViewProps) {
   const [selectedSkill, setSelectedSkill] = useState<GroupedSkill | null>(null);
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [conflictPolicy, setConflictPolicy] = useState<ConflictPolicy>("backupOverwrite");
   const [lastResults, setLastResults] = useState<InstallResult[]>([]);
   const [dragging, setDragging] = useState(false);
-  const [filter, setFilter] = useState<"all" | "missing">("all");
+  const [filter, setFilter] = useState<"all" | "covered" | "partial" | "needed">("all");
   const [deleteTarget, setDeleteTarget] = useState<GroupedSkill | null>(null);
 
   const displayedSkills = useMemo(() => {
-    if (filter === "missing") return skills.filter((s) => s.missingAgentIds.length > 0);
+    if (filter === "covered") return skills.filter((s) => s.missingAgentIds.length === 0);
+    if (filter === "partial") return skills.filter((s) => s.missingAgentIds.length > 0 && noFullCoverageTitles.has(s.title));
+    if (filter === "needed") return skills.filter((s) => s.missingAgentIds.length > 0 && !noFullCoverageTitles.has(s.title));
     return skills;
-  }, [skills, filter]);
+  }, [skills, filter, noFullCoverageTitles]);
 
-  const incompleteCount = useMemo(() => {
-    return skills.filter((s) => s.missingAgentIds.length > 0).length;
+  const coveredCount = useMemo(() => {
+    return skills.filter((s) => s.missingAgentIds.length === 0).length;
   }, [skills]);
+
+  const partialCount = useMemo(() => {
+    return skills.filter((s) => s.missingAgentIds.length > 0 && noFullCoverageTitles.has(s.title)).length;
+  }, [skills, noFullCoverageTitles]);
+
+  const neededCount = useMemo(() => {
+    return skills.filter((s) => s.missingAgentIds.length > 0 && !noFullCoverageTitles.has(s.title)).length;
+  }, [skills, noFullCoverageTitles]);
 
   function openSync(skill: GroupedSkill) {
     setSelectedSkill(skill);
@@ -76,19 +88,35 @@ export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, 
       <div className="metrics">
         <div
           className="metric-card"
-          onClick={() => { if (filter === "missing") setFilter("all"); }}
-          style={{ cursor: filter === "missing" ? "pointer" : "default" }}
+          onClick={() => setFilter("all")}
+          style={{ cursor: filter !== "all" ? "pointer" : "default" }}
         >
           <div className="metric-value">{skills.length}</div>
           <div className="metric-label">Skills</div>
         </div>
         <div
           className="metric-card"
-          onClick={() => setFilter((f) => f === "missing" ? "all" : "missing")}
-          style={{ cursor: "pointer", ...(filter === "missing" ? { borderColor: "var(--warning)", background: "var(--warning-light)" } : {}) }}
+          onClick={() => setFilter((f) => f === "covered" ? "all" : "covered")}
+          style={{ cursor: "pointer", ...(filter === "covered" ? { borderColor: "var(--success)", background: "var(--success-light)" } : {}) }}
         >
-          <div className="metric-value warning">{incompleteCount}</div>
-          <div className="metric-label">未全覆盖</div>
+          <div className="metric-value success">{coveredCount}</div>
+          <div className="metric-label">完全覆盖</div>
+        </div>
+        <div
+          className="metric-card"
+          onClick={() => setFilter((f) => f === "partial" ? "all" : "partial")}
+          style={{ cursor: "pointer", ...(filter === "partial" ? { borderColor: "var(--accent)", background: "var(--accent-light)" } : {}) }}
+        >
+          <div className="metric-value">{partialCount}</div>
+          <div className="metric-label">已部分覆盖</div>
+        </div>
+        <div
+          className="metric-card"
+          onClick={() => setFilter((f) => f === "needed" ? "all" : "needed")}
+          style={{ cursor: "pointer", ...(filter === "needed" ? { borderColor: "var(--warning)", background: "var(--warning-light)" } : {}) }}
+        >
+          <div className="metric-value warning">{neededCount}</div>
+          <div className="metric-label">需同步</div>
         </div>
       </div>
 
@@ -150,14 +178,27 @@ export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, 
                 <div className="skill-tags">
                   <span className="badge badge-version">{skill.bestCopy.version ? `v${skill.bestCopy.version}` : "未声明版本"}</span>
                   <span className="badge badge-success">{skill.installedAgentIds.length} 已有</span>
-                  {skill.missingAgentIds.length > 0 && (
+                  {skill.missingAgentIds.length > 0 && !noFullCoverageTitles.has(skill.title) && (
                     <span className="badge badge-warning">{skill.missingAgentIds.length} 缺失</span>
+                  )}
+                  {noFullCoverageTitles.has(skill.title) && (
+                    <span className="badge badge-muted">无需全覆盖</span>
                   )}
                 </div>
               </div>
-              <span className={`badge ${skill.missingAgentIds.length > 0 ? "badge-syncable" : "badge-synced"}`}>
-                {skill.missingAgentIds.length > 0 ? "可同步" : "已覆盖"}
+              <span className={`badge ${skill.missingAgentIds.length > 0 && !noFullCoverageTitles.has(skill.title) ? "badge-syncable" : "badge-synced"}`}>
+                {skill.missingAgentIds.length > 0 && !noFullCoverageTitles.has(skill.title) ? "需同步" : noFullCoverageTitles.has(skill.title) ? "已部分覆盖" : "已覆盖"}
               </span>
+              <button
+                className="btn-icon"
+                title={noFullCoverageTitles.has(skill.title) ? "取消无需全覆盖" : "标记无需全覆盖"}
+                style={{ width: 32, height: 32, flexShrink: 0, ...(noFullCoverageTitles.has(skill.title) ? { color: "var(--accent)" } : {}) }}
+                onClick={(e) => { e.stopPropagation(); onToggleNoFullCoverage(skill.title); }}
+                disabled={busy}
+                type="button"
+              >
+                <svg className="icon icon-sm" viewBox="0 0 24 24"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" /></svg>
+              </button>
               <button
                 className="btn-icon danger"
                 title="删除"
@@ -194,10 +235,12 @@ export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, 
           conflictPolicy={conflictPolicy}
           selectedAgents={selectedAgents}
           skill={selectedSkill}
+          isNoFullCoverage={noFullCoverageTitles.has(selectedSkill.title)}
           onClose={() => setSelectedSkill(null)}
           onPolicy={setConflictPolicy}
           onSync={executeSync}
           onToggleAgent={toggleAgent}
+          onToggleNoFullCoverage={async () => { await onToggleNoFullCoverage(selectedSkill.title); setSelectedSkill(null); }}
         />
       )}
 
@@ -217,18 +260,20 @@ export function SkillsView({ skills, agents, busy, onDrop, onFolder, onArchive, 
 }
 
 function SyncSkillDialog({
-  agents, busy, conflictPolicy, selectedAgents, skill,
-  onClose, onPolicy, onSync, onToggleAgent,
+  agents, busy, conflictPolicy, selectedAgents, skill, isNoFullCoverage,
+  onClose, onPolicy, onSync, onToggleAgent, onToggleNoFullCoverage,
 }: {
   agents: AgentProfile[];
   busy: boolean;
   conflictPolicy: ConflictPolicy;
   selectedAgents: string[];
   skill: GroupedSkill;
+  isNoFullCoverage: boolean;
   onClose: () => void;
   onPolicy: (policy: ConflictPolicy) => void;
   onSync: () => void;
   onToggleAgent: (agentId: string) => void;
+  onToggleNoFullCoverage: () => void;
 }) {
   const readmeContent = skill.readme || skill.description;
 
@@ -326,6 +371,16 @@ function SyncSkillDialog({
           <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>已选择 {selectedAgents.length} 个 Agent</p>
           <div style={{ display: "flex", gap: 8 }}>
             <button className="btn btn-secondary" onClick={onClose} disabled={busy} type="button">取消</button>
+            <button
+              className="btn btn-secondary"
+              onClick={onToggleNoFullCoverage}
+              disabled={busy}
+              type="button"
+              style={isNoFullCoverage ? { borderColor: "var(--accent)", color: "var(--accent)" } : {}}
+            >
+              <svg className="icon icon-sm" viewBox="0 0 24 24"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" /></svg>
+              {isNoFullCoverage ? "取消无需全覆盖" : "无需全覆盖"}
+            </button>
             {selectedAgents.length === 0 ? (
               <button className="btn btn-danger" onClick={onSync} disabled={busy} type="button">
                 <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>

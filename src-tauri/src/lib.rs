@@ -25,7 +25,8 @@ pub fn run() {
             sync_grouped_skill,
             uninstall_skill,
             uninstall_skill_from_agents,
-            rollback_last
+            rollback_last,
+            toggle_no_full_coverage
         ])
         .run(tauri::generate_context!())
         .expect("error while running Skills Manager");

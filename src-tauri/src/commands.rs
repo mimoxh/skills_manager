@@ -91,3 +91,11 @@ pub fn rollback_last(
 ) -> AppResult<()> {
     service.rollback_last(&agent_id, &skill_id)
 }
+
+#[tauri::command]
+pub fn toggle_no_full_coverage(
+    title: String,
+    service: State<AppService>,
+) -> AppResult<bool> {
+    service.toggle_no_full_coverage(&title)
+}

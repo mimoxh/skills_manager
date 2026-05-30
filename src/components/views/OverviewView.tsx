@@ -3,13 +3,14 @@ import type { GroupedSkill, AgentProfile } from "../../types";
 interface OverviewViewProps {
   skills: GroupedSkill[];
   agents: AgentProfile[];
+  noFullCoverageTitles: Set<string>;
   onNavigate: (view: "skills") => void;
   onFolder: () => void;
   onArchive: () => void;
 }
 
-export function OverviewView({ skills, agents, onNavigate, onFolder, onArchive }: OverviewViewProps) {
-  const missing = skills.filter((s) => s.missingAgentIds.length > 0).length;
+export function OverviewView({ skills, agents, noFullCoverageTitles, onNavigate, onFolder, onArchive }: OverviewViewProps) {
+  const missing = skills.filter((s) => s.missingAgentIds.length > 0 && !noFullCoverageTitles.has(s.title)).length;
 
   return (
     <>
@@ -20,21 +21,18 @@ export function OverviewView({ skills, agents, onNavigate, onFolder, onArchive }
             <div className="card-desc">Skills</div>
             <div className="card-title" style={{ fontSize: 28, marginTop: 4 }}>{skills.length}</div>
           </div>
-          <div className="card-body"><span style={{ fontSize: 12, color: "var(--text-secondary)" }}>按标题去重后的项目</span></div>
         </div>
         <div className="card">
           <div className="card-header">
             <div className="card-desc">Agents</div>
             <div className="card-title" style={{ fontSize: 28, marginTop: 4 }}>{agents.length}</div>
           </div>
-          <div className="card-body"><span style={{ fontSize: 12, color: "var(--text-secondary)" }}>已识别的本地配置</span></div>
         </div>
         <div className="card">
           <div className="card-header">
-            <div className="card-desc">未全覆盖</div>
+            <div className="card-desc">需同步</div>
             <div className="card-title" style={{ fontSize: 28, marginTop: 4, color: "var(--warning)" }}>{missing}</div>
           </div>
-          <div className="card-body"><span style={{ fontSize: 12, color: "var(--text-secondary)" }}>至少有一个 Agent 未安装</span></div>
         </div>
       </div>
 

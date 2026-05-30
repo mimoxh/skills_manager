@@ -24,6 +24,7 @@ export const api = {
     return command<InitialData>("get_initial_data", {}, () => ({
       skills: [],
       agents: [],
+      noFullCoverageTitles: [],
     }));
   },
   importSkillUpload(fileName: string, files: ImportSkillFile[], targetAgentIds: string[], conflictPolicy: ConflictPolicy) {
@@ -60,5 +61,8 @@ export const api = {
   },
   rollbackLast(agentId: string, skillId: string) {
     return command<void>("rollback_last", { agentId, skillId }, () => undefined);
+  },
+  toggleNoFullCoverage(title: string) {
+    return command<boolean>("toggle_no_full_coverage", { title }, () => false);
   },
 };

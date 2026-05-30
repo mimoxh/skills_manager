@@ -25,6 +25,7 @@ export function useAppState() {
   const [query, setQuery] = useState("");
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [pendingImport, setPendingImport] = useState<{ fileName: string; files: ImportSkillFile[] } | null>(null);
+  const [noFullCoverageTitles, setNoFullCoverageTitles] = useState<Set<string>>(new Set());
 
   const filteredSkills = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -47,6 +48,7 @@ export function useAppState() {
       const data = await api.getInitialData();
       setSkills(data.skills);
       setAgents(data.agents);
+      setNoFullCoverageTitles(new Set(data.noFullCoverageTitles));
       setMessage(`已识别 ${data.skills.length} 个去重 skills，${data.agents.length} 个 agent 配置。`);
     } catch (error) {
       setMessage(String(error));
@@ -212,6 +214,18 @@ export function useAppState() {
     await importFiles(files[0]?.name ?? "upload", await Promise.all(files.map((f) => fileToUpload(f))));
   }
 
+  async function toggleNoFullCoverage(title: string) {
+    setBusy(true);
+    try {
+      await api.toggleNoFullCoverage(title);
+      await refreshAll();
+    } catch (error) {
+      setMessage(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return {
     skills, filteredSkills,
     agents, filteredAgents,
@@ -222,5 +236,6 @@ export function useAppState() {
     pendingImport, executeImport, cancelImport,
     refreshAll, syncSkillToAgents, deleteAgent, uninstallSkill, uninstallSkillFromAgents,
     handleSkillDrop, importFiles, fileToUpload,
+    noFullCoverageTitles, toggleNoFullCoverage,
   };
 }

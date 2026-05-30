@@ -56,12 +56,14 @@ export default function App() {
             skills={state.filteredSkills}
             agents={state.agents}
             busy={state.busy}
+            noFullCoverageTitles={state.noFullCoverageTitles}
             onDrop={state.handleSkillDrop}
             onFolder={() => folderInputRef.current?.click()}
             onArchive={() => archiveInputRef.current?.click()}
             onSync={state.syncSkillToAgents}
             onUninstall={state.uninstallSkillFromAgents}
             onRefresh={state.refreshAll}
+            onToggleNoFullCoverage={state.toggleNoFullCoverage}
           />
         );
       case "agents":
@@ -86,6 +88,7 @@ export default function App() {
             <OverviewView
               skills={state.skills}
               agents={state.agents}
+              noFullCoverageTitles={state.noFullCoverageTitles}
               onNavigate={setView}
               onFolder={() => folderInputRef.current?.click()}
               onArchive={() => archiveInputRef.current?.click()}

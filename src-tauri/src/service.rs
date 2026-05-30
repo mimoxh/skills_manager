@@ -65,7 +65,16 @@ impl AppService {
     pub fn get_initial_data(&self) -> AppResult<InitialData> {
         let agents = self.list_agents().unwrap_or_default();
         let skills = self.scan_agent_skills().unwrap_or_default();
-        Ok(InitialData { skills, agents })
+        let no_full_coverage_titles = self.store.list_no_full_coverage().unwrap_or_default();
+        Ok(InitialData {
+            skills,
+            agents,
+            no_full_coverage_titles,
+        })
+    }
+
+    pub fn toggle_no_full_coverage(&self, title: &str) -> AppResult<bool> {
+        self.store.toggle_no_full_coverage(title)
     }
 
     pub fn list_saved_agents(&self) -> AppResult<Vec<AgentProfile>> {

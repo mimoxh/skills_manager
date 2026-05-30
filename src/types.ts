@@ -72,4 +72,5 @@ export interface InstallResult {
 export interface InitialData {
   skills: GroupedSkill[];
   agents: AgentProfile[];
+  noFullCoverageTitles: string[];
 }
