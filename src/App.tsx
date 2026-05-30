@@ -10,6 +10,7 @@ const OverviewView = lazy(() => import("./components/views/OverviewView").then((
 const AgentsView = lazy(() => import("./components/views/AgentsView").then((m) => ({ default: m.AgentsView })));
 
 export type View = "overview" | "skills" | "agents";
+export type SkillsFilter = "all" | "covered" | "partial" | "needed";
 
 function ViewLoading() {
   return (
@@ -23,6 +24,7 @@ export default function App() {
   const folderInputRef = useRef<HTMLInputElement>(null);
   const archiveInputRef = useRef<HTMLInputElement>(null);
   const [view, setView] = useState<View>("skills");
+  const [skillsFilter, setSkillsFilter] = useState<SkillsFilter>("all");
 
   const state = useAppState();
 
@@ -48,6 +50,13 @@ export default function App() {
     if (archiveInputRef.current) archiveInputRef.current.value = "";
   }
 
+  function navigateTo(view: View, filter?: SkillsFilter) {
+    setView(view);
+    if (view === "skills" && filter) {
+      setSkillsFilter(filter);
+    }
+  }
+
   function renderView() {
     switch (view) {
       case "skills":
@@ -57,6 +66,7 @@ export default function App() {
             agents={state.agents}
             busy={state.busy}
             noFullCoverageTitles={state.noFullCoverageTitles}
+            initialFilter={skillsFilter}
             onDrop={state.handleSkillDrop}
             onFolder={() => folderInputRef.current?.click()}
             onArchive={() => archiveInputRef.current?.click()}
@@ -89,7 +99,7 @@ export default function App() {
               skills={state.skills}
               agents={state.agents}
               noFullCoverageTitles={state.noFullCoverageTitles}
-              onNavigate={setView}
+              onNavigate={navigateTo}
               onFolder={() => folderInputRef.current?.click()}
               onArchive={() => archiveInputRef.current?.click()}
             />

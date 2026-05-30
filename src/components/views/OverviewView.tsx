@@ -4,7 +4,7 @@ interface OverviewViewProps {
   skills: GroupedSkill[];
   agents: AgentProfile[];
   noFullCoverageTitles: Set<string>;
-  onNavigate: (view: "skills") => void;
+  onNavigate: (view: "skills" | "agents", filter?: "all" | "covered" | "partial" | "needed") => void;
   onFolder: () => void;
   onArchive: () => void;
 }
@@ -16,19 +16,19 @@ export function OverviewView({ skills, agents, noFullCoverageTitles, onNavigate,
     <>
       {/* Stats */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 24 }}>
-        <div className="card">
+        <div className="card" onClick={() => onNavigate("skills")} style={{ cursor: "pointer" }}>
           <div className="card-header">
             <div className="card-desc">Skills</div>
             <div className="card-title" style={{ fontSize: 28, marginTop: 4 }}>{skills.length}</div>
           </div>
         </div>
-        <div className="card">
+        <div className="card" onClick={() => onNavigate("agents")} style={{ cursor: "pointer" }}>
           <div className="card-header">
             <div className="card-desc">Agents</div>
             <div className="card-title" style={{ fontSize: 28, marginTop: 4 }}>{agents.length}</div>
           </div>
         </div>
-        <div className="card">
+        <div className="card" onClick={() => onNavigate("skills", "needed")} style={{ cursor: "pointer" }}>
           <div className="card-header">
             <div className="card-desc">需同步</div>
             <div className="card-title" style={{ fontSize: 28, marginTop: 4, color: "var(--warning)" }}>{missing}</div>

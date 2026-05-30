@@ -13,6 +13,7 @@ interface SkillsViewProps {
   agents: AgentProfile[];
   busy: boolean;
   noFullCoverageTitles: Set<string>;
+  initialFilter?: "all" | "covered" | "partial" | "needed";
   onDrop: (event: React.DragEvent<HTMLElement>) => void;
   onFolder: () => void;
   onArchive: () => void;
@@ -22,13 +23,13 @@ interface SkillsViewProps {
   onToggleNoFullCoverage: (title: string) => Promise<void>;
 }
 
-export function SkillsView({ skills, agents, busy, noFullCoverageTitles, onDrop, onFolder, onArchive, onSync, onUninstall, onRefresh, onToggleNoFullCoverage }: SkillsViewProps) {
+export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initialFilter = "all", onDrop, onFolder, onArchive, onSync, onUninstall, onRefresh, onToggleNoFullCoverage }: SkillsViewProps) {
   const [selectedSkill, setSelectedSkill] = useState<GroupedSkill | null>(null);
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [conflictPolicy, setConflictPolicy] = useState<ConflictPolicy>("backupOverwrite");
   const [lastResults, setLastResults] = useState<InstallResult[]>([]);
   const [dragging, setDragging] = useState(false);
-  const [filter, setFilter] = useState<"all" | "covered" | "partial" | "needed">("all");
+  const [filter, setFilter] = useState<"all" | "covered" | "partial" | "needed">(initialFilter);
   const [deleteTarget, setDeleteTarget] = useState<GroupedSkill | null>(null);
 
   const displayedSkills = useMemo(() => {
