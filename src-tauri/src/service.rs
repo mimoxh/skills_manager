@@ -549,6 +549,11 @@ fn group_agent_skills(agents: &[AgentProfile], copies: Vec<AgentSkillCopy>) -> V
     values
 }
 
+/// Check if a description contains meaningful text (not just symbols/punctuation).
+fn is_valid_description(desc: &str) -> bool {
+    desc.chars().any(|c| c.is_alphanumeric() || c.is_ascii_alphabetic() || ('\u{4e00}'..='\u{9fff}').contains(&c))
+}
+
 fn read_agent_skill_info(skill_path: &Path) -> (String, Option<String>, Option<String>, Option<String>) {
     for name in ["skill.json", "skill.yaml", "skill.yml"] {
         let manifest_path = skill_path.join(name);
@@ -576,7 +581,7 @@ fn read_agent_skill_info(skill_path: &Path) -> (String, Option<String>, Option<S
                     .get("description")
                     .and_then(|value| value.as_str())
                     .map(str::trim)
-                    .filter(|value| !value.is_empty())
+                    .filter(|value| !value.is_empty() && is_valid_description(value))
                     .map(ToString::to_string);
                 if let Some(title) = title {
                     let readme = fs::read_to_string(skill_path.join("SKILL.md"))
@@ -636,23 +641,73 @@ fn read_markdown_frontmatter(text: &str) -> Option<(String, Option<String>, Opti
     let mut title = None;
     let mut version = None;
     let mut description = None;
+    let mut collecting_block: Option<String> = None;
+    let mut block_lines: Vec<String> = Vec::new();
     for line in lines {
-        let line = line.trim();
-        if line == "---" {
+        let trimmed = line.trim();
+        if trimmed == "---" {
             break;
         }
-        let Some((key, value)) = line.split_once(':') else {
+        // If collecting a block scalar, gather indented continuation lines
+        if let Some(ref key) = collecting_block {
+            if line.starts_with(' ') || line.starts_with('\t') {
+                block_lines.push(trimmed.to_string());
+                continue;
+            } else {
+                // Block scalar ended; store collected value
+                let block_value = block_lines.join("\n");
+                if !block_value.is_empty() {
+                    match key.as_str() {
+                        "title" | "name" => title = Some(block_value.clone()),
+                        "version" => version = Some(block_value.clone()),
+                        "description" => description = Some(block_value.clone()),
+                        _ => {}
+                    }
+                }
+                collecting_block = None;
+                block_lines.clear();
+            }
+        }
+        let Some((key, value)) = trimmed.split_once(':') else {
             continue;
         };
-        let value = value.trim().trim_matches('"').trim_matches('\'');
+        let key = key.trim();
+        let value = value.trim();
+        // Detect YAML block scalar indicators (| or >)
+        if value == "|" || value == ">" || value == "|-" || value == ">-" || value == "|+" || value == ">+" {
+            collecting_block = Some(key.to_string());
+            block_lines.clear();
+            continue;
+        }
+        let value = value.trim_matches('"').trim_matches('\'');
         if value.is_empty() {
             continue;
         }
-        match key.trim() {
+        match key {
             "title" | "name" => title = Some(value.to_string()),
             "version" => version = Some(value.to_string()),
-            "description" => description = Some(value.to_string()),
+            "description" => {
+                if is_valid_description(value) {
+                    description = Some(value.to_string());
+                }
+            }
             _ => {}
+        }
+    }
+    // Handle block scalar that extends to the end of frontmatter
+    if let Some(ref key) = collecting_block {
+        let block_value = block_lines.join("\n");
+        if !block_value.is_empty() {
+            match key.as_str() {
+                "title" | "name" => title = Some(block_value),
+                "version" => version = Some(block_value),
+                "description" => {
+                    if is_valid_description(&block_value) {
+                        description = Some(block_value);
+                    }
+                }
+                _ => {}
+            }
         }
     }
     title.map(|title| (title, version, description))
@@ -913,6 +968,62 @@ mod tests {
         assert_eq!(
             read_agent_skill_info(&root.path().join("directory")),
             ("directory".to_string(), None, None, None)
+        );
+    }
+
+    #[test]
+    fn reads_yaml_block_scalar_description() {
+        let root = tempfile::tempdir().unwrap();
+
+        // Test block scalar with |
+        fs::create_dir_all(root.path().join("block-pipe")).unwrap();
+        fs::write(
+            root.path().join("block-pipe").join("SKILL.md"),
+            "---\nname: humanizer\nversion: 2.1.1\ndescription: |\n  去除文本中的 AI 写作痕迹。\n  适用于润色、审阅。\n---\n# Body",
+        )
+        .unwrap();
+
+        let (title, version, description, readme) =
+            read_agent_skill_info(&root.path().join("block-pipe"));
+        assert_eq!(title, "humanizer");
+        assert_eq!(version, Some("2.1.1".to_string()));
+        assert_eq!(
+            description,
+            Some("去除文本中的 AI 写作痕迹。\n适用于润色、审阅。".to_string())
+        );
+        assert_eq!(readme, Some("# Body".to_string()));
+
+        // Test block scalar with >
+        fs::create_dir_all(root.path().join("block-gt")).unwrap();
+        fs::write(
+            root.path().join("block-gt").join("SKILL.md"),
+            "---\nname: test-skill\ndescription: >\n  This is a\n  folded description.\nversion: 1.0.0\n---\n# Content",
+        )
+        .unwrap();
+
+        let (title, version, description, _) =
+            read_agent_skill_info(&root.path().join("block-gt"));
+        assert_eq!(title, "test-skill");
+        assert_eq!(version, Some("1.0.0".to_string()));
+        assert_eq!(
+            description,
+            Some("This is a\nfolded description.".to_string())
+        );
+
+        // Test block scalar extending to end of frontmatter
+        fs::create_dir_all(root.path().join("block-eof")).unwrap();
+        fs::write(
+            root.path().join("block-eof").join("SKILL.md"),
+            "---\nname: end-skill\ndescription: |\n  Line one.\n  Line two.\n---",
+        )
+        .unwrap();
+
+        let (title, _, description, _) =
+            read_agent_skill_info(&root.path().join("block-eof"));
+        assert_eq!(title, "end-skill");
+        assert_eq!(
+            description,
+            Some("Line one.\nLine two.".to_string())
         );
     }
 

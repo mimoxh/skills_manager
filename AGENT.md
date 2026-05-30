@@ -215,7 +215,7 @@ manifest 字段：
 - 同步弹窗默认勾选已安装该 skill 的 agents（`installedAgentIds`），而非未安装的。
 - AgentsView 支持删除 agent（点击垃圾桶图标，弹出确认对话框显示 agent 名称，确认后执行删除）。
 - `manifest.files` 目前只做非空校验；实际安装使用整个 skill 目录复制，不按 `files` 白名单过滤。
-- skill 的 `description` 字段从 `skill.json`/`skill.yaml`/`skill.yml` 的 `description` 字段读取，也支持从 `SKILL.md` frontmatter 的 `description` 字段读取。`readme` 字段从 SKILL.md 正文提取（去除 frontmatter），当 skill.json 和 SKILL.md 共存时两者都会读取。两者传递到前端的 `GroupedSkill` 和 `AgentSkillCopy` 中。
+- skill 的 `description` 字段从 `skill.json`/`skill.yaml`/`skill.yml` 的 `description` 字段读取，也支持从 `SKILL.md` frontmatter 的 `description` 字段读取。frontmatter 解析支持 YAML 块标量语法（`|`、`>`、`|-`、`>-`、`|+`、`>+`），可正确解析多行描述。无效描述（仅包含符号/标点，不含字母或汉字）会被过滤。`readme` 字段从 SKILL.md 正文提取（去除 frontmatter），当 skill.json 和 SKILL.md 共存时两者都会读取。两者传递到前端的 `GroupedSkill` 和 `AgentSkillCopy` 中。
 - `rename` 策略会把 skill 安装到带时间戳的新目录，但记录的 `skill_id` 仍是原 manifest id。后续卸载逻辑使用 `{skillsPath}/{skill_id}`，因此对 renamed 安装的卸载语义需要特别小心。
 - 卸载（`uninstall_skill`）直接删除目标目录，不创建备份。`rollback_last()` 恢复文件系统但不更新 `installs` 中的 fingerprint。
 - SkillsView 支持批量删除：列表中每个 skill 右侧有删除按钮，点击弹出确认对话框后从所有 agent 删除；弹窗中取消选中 agent 后点同步也会为未选中的 agent 执行删除。
