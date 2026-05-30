@@ -23,7 +23,7 @@ function ViewLoading() {
 export default function App() {
   const folderInputRef = useRef<HTMLInputElement>(null);
   const archiveInputRef = useRef<HTMLInputElement>(null);
-  const [view, setView] = useState<View>("skills");
+  const [view, setView] = useState<View>("overview");
   const [skillsFilter, setSkillsFilter] = useState<SkillsFilter>("all");
 
   const state = useAppState();
