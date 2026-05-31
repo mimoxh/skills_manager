@@ -62,6 +62,9 @@ impl AgentAdapter for DirectoryAdapter {
             AgentType::Windsurf => vec![Self::home_path(&[".windsurf", "skills"])],
             AgentType::Aider => vec![Self::home_path(&[".aider", "skills"])],
             AgentType::Custom => vec![],
+            AgentType::CherryStudio => vec![env::var_os("APPDATA")
+                .map(PathBuf::from)
+                .map(|path| path.join("CherryStudio").join("Data").join("Skills"))],
         };
 
         candidates
@@ -80,6 +83,7 @@ impl AgentAdapter for DirectoryAdapter {
                         AgentType::Windsurf => "Windsurf".to_string(),
                         AgentType::Aider => "Aider".to_string(),
                         AgentType::Custom => "Custom".to_string(),
+                        AgentType::CherryStudio => "Cherry Studio".to_string(),
                     },
                     agent_type: self.agent_type.clone(),
                     skills_path: path.to_string_lossy().to_string(),
@@ -126,7 +130,13 @@ pub fn built_in_adapters() -> Vec<DirectoryAdapter> {
         DirectoryAdapter::new(AgentType::Cursor),
         DirectoryAdapter::new(AgentType::Windsurf),
         DirectoryAdapter::new(AgentType::Aider),
+        DirectoryAdapter::new(AgentType::CherryStudio),
     ]
+}
+
+/// Check if a profile represents a Cherry Studio agent.
+pub fn is_cherry_studio(profile: &AgentProfile) -> bool {
+    profile.agent_type == AgentType::CherryStudio
 }
 
 #[cfg(test)]

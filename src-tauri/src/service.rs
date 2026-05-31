@@ -1,10 +1,11 @@
 use crate::{
     adapter::{adapter_for, built_in_adapters, AgentAdapter},
+    cherry_studio::CherryStudioAdapter,
     error::{AppError, AppResult},
     hash::{copy_dir_all, hash_dir},
     manifest::{read_skill, scan_repository},
     models::{
-        AgentProfile, AgentSkillCopy, ConflictPolicy, GroupedSkill, ImportSkillFile,
+        AgentProfile, AgentSkillCopy, AgentType, ConflictPolicy, GroupedSkill, ImportSkillFile,
         ImportSkillResult, InitialData, InstallResult,
     },
     store::AppStore,
@@ -212,7 +213,13 @@ impl AppService {
                 }
             }
 
-            copy_dir_all(source_path, &target)?;
+            if agent.agent_type == AgentType::CherryStudio {
+                if let Some(cs) = CherryStudioAdapter::new() {
+                    cs.install_skill(source_path, source_dir_name)?;
+                }
+            } else {
+                copy_dir_all(source_path, &target)?;
+            }
             self.store.record_install(
                 &agent.id,
                 title,
@@ -239,8 +246,16 @@ impl AppService {
             .into_iter()
             .find(|agent| agent.id == agent_id)
             .ok_or_else(|| AppError::Message(format!("找不到 Agent: {}", agent_id)))?;
-        let adapter = adapter_for(&agent);
-        adapter.uninstall(skill_id, &agent, &self.backup_root())?;
+
+        if agent.agent_type == AgentType::CherryStudio {
+            if let Some(cs) = CherryStudioAdapter::new() {
+                cs.uninstall_skill(skill_id)?;
+            }
+        } else {
+            let adapter = adapter_for(&agent);
+            adapter.uninstall(skill_id, &agent, &self.backup_root())?;
+        }
+
         let target_path = Path::new(&agent.skills_path)
             .join(skill_id)
             .to_string_lossy()
@@ -359,7 +374,13 @@ impl AppService {
                     }
                 }
 
-                copy_dir_all(source, &target)?;
+                if agent.agent_type == AgentType::CherryStudio {
+                    if let Some(cs) = CherryStudioAdapter::new() {
+                        cs.install_skill(source, skill_dir_name)?;
+                    }
+                } else {
+                    copy_dir_all(source, &target)?;
+                }
                 imported += 1;
             }
         }

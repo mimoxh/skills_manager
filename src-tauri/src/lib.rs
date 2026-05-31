@@ -1,4 +1,6 @@
 pub mod adapter;
+pub mod cherry_db;
+pub mod cherry_studio;
 mod commands;
 pub mod error;
 pub mod hash;

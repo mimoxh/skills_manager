@@ -88,6 +88,8 @@ pub enum AgentType {
     Aider,
     #[serde(rename = "custom")]
     Custom,
+    #[serde(rename = "cherryStudio")]
+    CherryStudio,
 }
 
 impl AgentType {
@@ -100,6 +102,7 @@ impl AgentType {
             AgentType::Windsurf => "windsurf",
             AgentType::Aider => "aider",
             AgentType::Custom => "custom",
+            AgentType::CherryStudio => "cherryStudio",
         }
     }
 }

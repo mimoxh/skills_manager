@@ -1,4 +1,4 @@
-export type AgentType = "codex" | "claude" | "claudeCode" | "cursor" | "windsurf" | "aider" | "custom";
+export type AgentType = "codex" | "claude" | "claudeCode" | "cursor" | "windsurf" | "aider" | "custom" | "cherryStudio";
 export type ConflictPolicy = "prompt" | "backupOverwrite" | "skip" | "rename";
 
 export interface SkillManifest {

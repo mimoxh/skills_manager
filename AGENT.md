@@ -135,7 +135,9 @@ UI 特性：
 - `lib.rs`：模块导出，提供 `run()` 入口。
 - `service.rs`：`AppService` 业务逻辑层，封装 store + adapter，提供所有业务操作。
 - `commands.rs`：Tauri command 编排层，每个 command 委托给 `AppService`。
-- `adapter.rs`：agent 适配层。当前实现是 `DirectoryAdapter`，支持 Codex、Claude、ClaudeCode、Cursor、Windsurf、Aider 和 custom。
+- `adapter.rs`：agent 适配层。当前实现是 `DirectoryAdapter`，支持 Codex、Claude、ClaudeCode、Cursor、Windsurf、Aider、custom 和 cherryStudio。
+- `cherry_db.rs`：Cherry Studio SQLite 数据库封装（`agents.db`），提供 skills/agent_skills 表的 CRUD 操作。
+- `cherry_studio.rs`：Cherry Studio 适配器，处理 skill 的安装（文件复制 + DB 注册）和卸载（文件删除 + DB 清理），以及 SKILL.md frontmatter 解析。
 - `store.rs`：JSON 文件持久化层，状态存储在 `state.json` 中（无主仓库概念，skill 直接写入 agent 目录）。AppState 包含 agents、installs、discovery_paths、operations、next_operation_id 和 no_full_coverage_titles（HashSet，存储"无需全覆盖"标记）。
 - `manifest.rs`：扫描和解析 `skill.json`、`skill.yaml`、`skill.yml`，并做基础 manifest 校验。
 - `hash.rs`：计算目录 SHA-256 fingerprint，递归复制目录。
@@ -159,7 +161,7 @@ manifest 字段：
   "version": "1.0.0",
   "description": "Optional description",
   "tags": ["optional"],
-  "supportedAgents": ["codex", "claude", "claudeCode", "cursor", "windsurf", "aider", "custom"],
+  "supportedAgents": ["codex", "claude", "claudeCode", "cursor", "windsurf", "aider", "custom", "cherryStudio"],
   "entry": "SKILL.md",
   "files": ["SKILL.md"]
 }
@@ -182,14 +184,23 @@ manifest 字段：
 - Cursor：`%USERPROFILE%\.cursor\skills`
 - Windsurf：`%USERPROFILE%\.windsurf\skills`
 - Aider：`%USERPROFILE%\.aider\skills`
+- Cherry Studio：`%APPDATA%\CherryStudio\Data\Skills`
 
 只有路径已存在时才会被自动检测到。自定义 agent 通过前端保存，后端会创建其 `skillsPath`。
+
+### Cherry Studio 特殊处理
+
+Cherry Studio 使用 SQLite 数据库（`agents.db`）注册 skill，安装时需同时写文件和写数据库：
+
+- **安装**：复制文件到 `Data\Skills\{folder_name}\` + 插入 `skills` 表 + 插入 `agent_skills` 关联表
+- **卸载**：删除 `skills` 表记录（CASCADE 自动清理 `agent_skills`）+ 删除文件目录
+- **扫描**：读取 `Data\Skills\` 子目录的 SKILL.md frontmatter（name、description、version）
 
 ## 数据模型
 
 `models.rs` 定义的主要类型：
 
-- `AgentType` 枚举：Codex / Claude / ClaudeCode / Cursor / Windsurf / Aider / Custom。
+- `AgentType` 枚举：Codex / Claude / ClaudeCode / Cursor / Windsurf / Aider / Custom / CherryStudio。
 - `AgentProfile`：agent 配置（id、name、agent_type、skills_path、adapter_config）。
 - `SkillManifest`：skill 清单。
 - `SkillSummary`：扫描结果（manifest、source_path、fingerprint、manifest_path）。
