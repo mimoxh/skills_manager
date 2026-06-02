@@ -1,8 +1,8 @@
 use crate::{
     error::AppResult,
     models::{
-        AgentProfile, ConflictPolicy, GroupedSkill, ImportSkillFile, ImportSkillResult,
-        InitialData, InstallResult,
+        AgentProfile, ConflictPolicy, GroupedMcpServer, GroupedSkill, ImportSkillFile,
+        ImportSkillResult, InitialData, InstallResult, McpOperationResult, McpServerConfig,
     },
     service::AppService,
 };
@@ -98,4 +98,85 @@ pub fn toggle_no_full_coverage(
     service: State<AppService>,
 ) -> AppResult<bool> {
     service.toggle_no_full_coverage(&title)
+}
+
+#[tauri::command]
+pub fn toggle_no_full_coverage_mcp(
+    title: String,
+    service: State<AppService>,
+) -> AppResult<bool> {
+    service.toggle_no_full_coverage_mcp(&title)
+}
+
+// ── MCP Commands ──────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn scan_mcp_servers(service: State<AppService>) -> AppResult<Vec<GroupedMcpServer>> {
+    let agents = service.list_agents()?;
+    service.mcp().scan_mcp_servers(&agents)
+}
+
+#[tauri::command]
+pub fn add_mcp_server(
+    agent_ids: Vec<String>,
+    config: McpServerConfig,
+    conflict_policy: ConflictPolicy,
+    service: State<AppService>,
+) -> AppResult<Vec<McpOperationResult>> {
+    let agents = service.list_agents()?;
+    service.mcp().add_mcp_server(&agents, &agent_ids, &config, conflict_policy)
+}
+
+#[tauri::command]
+pub fn update_mcp_server(
+    agent_id: String,
+    original_name: String,
+    config: McpServerConfig,
+    service: State<AppService>,
+) -> AppResult<McpOperationResult> {
+    let agents = service.list_agents()?;
+    service.mcp().update_mcp_server(&agents, &agent_id, &original_name, &config)
+}
+
+#[tauri::command]
+pub fn remove_mcp_server(
+    agent_id: String,
+    name: String,
+    service: State<AppService>,
+) -> AppResult<McpOperationResult> {
+    let agents = service.list_agents()?;
+    service.mcp().remove_mcp_server(&agents, &agent_id, &name)
+}
+
+#[tauri::command]
+pub fn toggle_mcp_server(
+    agent_id: String,
+    name: String,
+    disabled: bool,
+    service: State<AppService>,
+) -> AppResult<McpOperationResult> {
+    let agents = service.list_agents()?;
+    service.mcp().toggle_mcp_server(&agents, &agent_id, &name, disabled)
+}
+
+#[tauri::command]
+pub fn sync_mcp_server(
+    server_name: String,
+    source_agent_id: String,
+    target_agent_ids: Vec<String>,
+    conflict_policy: ConflictPolicy,
+    service: State<AppService>,
+) -> AppResult<Vec<McpOperationResult>> {
+    let agents = service.list_agents()?;
+    service.mcp().sync_mcp_server(&agents, &server_name, &source_agent_id, &target_agent_ids, conflict_policy)
+}
+
+#[tauri::command]
+pub fn remove_mcp_server_from_agents(
+    server_name: String,
+    agent_ids: Vec<String>,
+    service: State<AppService>,
+) -> AppResult<Vec<McpOperationResult>> {
+    let agents = service.list_agents()?;
+    service.mcp().remove_mcp_server_from_agents(&agents, &server_name, &agent_ids)
 }

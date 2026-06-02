@@ -10,6 +10,8 @@ pub enum AppError {
     Json(#[from] serde_json::Error),
     #[error("YAML error: {0}")]
     Yaml(#[from] serde_yaml::Error),
+    #[error("TOML error: {0}")]
+    Toml(#[from] toml::de::Error),
     #[error("Zip error: {0}")]
     Zip(#[from] zip::result::ZipError),
 }

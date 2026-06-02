@@ -2,10 +2,13 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AgentProfile,
   ConflictPolicy,
+  GroupedMcpServer,
   ImportSkillFile,
   ImportSkillResult,
   InitialData,
   InstallResult,
+  McpOperationResult,
+  McpServerConfig,
 } from "./types";
 
 function hasTauriRuntime() {
@@ -25,6 +28,7 @@ export const api = {
       skills: [],
       agents: [],
       noFullCoverageTitles: [],
+      noFullCoverageMcpTitles: [],
     }));
   },
   importSkillUpload(fileName: string, files: ImportSkillFile[], targetAgentIds: string[], conflictPolicy: ConflictPolicy) {
@@ -64,5 +68,45 @@ export const api = {
   },
   toggleNoFullCoverage(title: string) {
     return command<boolean>("toggle_no_full_coverage", { title }, () => false);
+  },
+  toggleMcpNoFullCoverage(title: string) {
+    return command<boolean>("toggle_no_full_coverage_mcp", { title }, () => false);
+  },
+  // ── MCP API ──
+  scanMcpServers() {
+    return command<GroupedMcpServer[]>("scan_mcp_servers", {}, () => []);
+  },
+  addMcpServer(agentIds: string[], config: McpServerConfig, conflictPolicy: ConflictPolicy) {
+    return command<McpOperationResult[]>("add_mcp_server", { agentIds, config, conflictPolicy }, () => []);
+  },
+  updateMcpServer(agentId: string, originalName: string, config: McpServerConfig) {
+    return command<McpOperationResult>("update_mcp_server", { agentId, originalName, config }, () => ({
+      agentId,
+      serverName: config.name,
+      action: "skipped",
+      message: "Desktop only",
+    }));
+  },
+  removeMcpServer(agentId: string, name: string) {
+    return command<McpOperationResult>("remove_mcp_server", { agentId, name }, () => ({
+      agentId,
+      serverName: name,
+      action: "skipped",
+      message: "Desktop only",
+    }));
+  },
+  toggleMcpServer(agentId: string, name: string, disabled: boolean) {
+    return command<McpOperationResult>("toggle_mcp_server", { agentId, name, disabled }, () => ({
+      agentId,
+      serverName: name,
+      action: "skipped",
+      message: "Desktop only",
+    }));
+  },
+  syncMcpServer(serverName: string, sourceAgentId: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) {
+    return command<McpOperationResult[]>("sync_mcp_server", { serverName, sourceAgentId, targetAgentIds, conflictPolicy }, () => []);
+  },
+  removeMcpServerFromAgents(serverName: string, agentIds: string[]) {
+    return command<McpOperationResult[]>("remove_mcp_server_from_agents", { serverName, agentIds }, () => []);
   },
 };

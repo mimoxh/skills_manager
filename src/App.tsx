@@ -3,13 +3,14 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import { Titlebar } from "./components/layout/Titlebar";
 import { Sidebar } from "./components/layout/Sidebar";
 import { SkillsView, ImportAgentDialog } from "./components/views/SkillsView";
+import { McpView } from "./components/views/McpView";
 import { useAppState } from "./hooks/useAppState";
 import type { ImportSkillFile } from "./types";
 
 const OverviewView = lazy(() => import("./components/views/OverviewView").then((m) => ({ default: m.OverviewView })));
 const AgentsView = lazy(() => import("./components/views/AgentsView").then((m) => ({ default: m.AgentsView })));
 
-export type View = "overview" | "skills" | "agents";
+export type View = "overview" | "skills" | "agents" | "mcp";
 export type SkillsFilter = "all" | "covered" | "partial" | "needed";
 
 function ViewLoading() {
@@ -86,11 +87,29 @@ export default function App() {
               busy={state.busy}
               onCustomChange={state.setCustomAgent}
               onSaveCustom={state.saveCustomAgent}
+              onSaveAgent={state.saveAgent}
               onDelete={state.deleteAgent}
               onSync={state.syncSkillToAgents}
               onRefresh={state.refreshAll}
             />
           </Suspense>
+        );
+      case "mcp":
+        return (
+          <McpView
+            servers={state.mcpServers}
+            agents={state.agents}
+            busy={state.busy}
+            noFullCoverageMcpTitles={state.noFullCoverageMcpTitles}
+            onAdd={state.addMcpServer}
+            onUpdate={state.updateMcpServer}
+            onRemove={state.removeMcpServer}
+            onToggle={state.toggleMcpServer}
+            onRefresh={state.refreshMcpServers}
+            onSyncToAgents={state.syncMcpServerToAgents}
+            onRemoveFromAgents={state.removeMcpServerFromAgents}
+            onToggleNoFullCoverage={state.toggleMcpNoFullCoverage}
+          />
         );
       default:
         return (

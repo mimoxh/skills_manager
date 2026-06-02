@@ -21,6 +21,8 @@ struct AppState {
     next_operation_id: i64,
     #[serde(default)]
     no_full_coverage_titles: HashSet<String>,
+    #[serde(default)]
+    no_full_coverage_mcp_titles: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,6 +285,31 @@ impl AppStore {
             .lock()
             .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
         Ok(state.no_full_coverage_titles.iter().cloned().collect())
+    }
+
+    pub fn toggle_no_full_coverage_mcp(&self, title: &str) -> AppResult<bool> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let is_now_marked = if state.no_full_coverage_mcp_titles.contains(title) {
+            state.no_full_coverage_mcp_titles.remove(title);
+            false
+        } else {
+            state.no_full_coverage_mcp_titles.insert(title.to_string());
+            true
+        };
+        drop(state);
+        self.save()?;
+        Ok(is_now_marked)
+    }
+
+    pub fn list_no_full_coverage_mcp(&self) -> AppResult<Vec<String>> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        Ok(state.no_full_coverage_mcp_titles.iter().cloned().collect())
     }
 
 }

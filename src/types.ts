@@ -1,4 +1,4 @@
-export type AgentType = "codex" | "claude" | "claudeCode" | "cursor" | "windsurf" | "aider" | "custom" | "cherryStudio";
+export type AgentType = "codex" | "claude" | "claudeCode" | "cursor" | "trae" | "custom" | "cherryStudio" | "opencode";
 export type ConflictPolicy = "prompt" | "backupOverwrite" | "skip" | "rename";
 
 export interface SkillManifest {
@@ -73,4 +73,44 @@ export interface InitialData {
   skills: GroupedSkill[];
   agents: AgentProfile[];
   noFullCoverageTitles: string[];
+  noFullCoverageMcpTitles: string[];
+}
+
+// ── MCP 类型 ──────────────────────────────────────────────────────────
+
+export type McpTransport = "stdio" | "http" | "sse";
+
+export interface McpServerConfig {
+  name: string;
+  transport: McpTransport;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  disabled?: boolean;
+  timeoutSec?: number;
+}
+
+export interface AgentMcpServer {
+  agentId: string;
+  agentName: string;
+  configPath: string;
+  config: McpServerConfig;
+  fingerprint: string;
+  rawConfig?: string;
+}
+
+export interface GroupedMcpServer {
+  name: string;
+  copies: AgentMcpServer[];
+  agentIds: string[];
+  disabledAgentIds?: string[];
+}
+
+export interface McpOperationResult {
+  agentId: string;
+  serverName: string;
+  action: string;
+  message: string;
 }

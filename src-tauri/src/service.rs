@@ -4,6 +4,7 @@ use crate::{
     error::{AppError, AppResult},
     hash::{copy_dir_all, hash_dir},
     manifest::{read_skill, scan_repository},
+    mcp_service::McpService,
     models::{
         AgentProfile, AgentSkillCopy, AgentType, ConflictPolicy, GroupedSkill, ImportSkillFile,
         ImportSkillResult, InitialData, InstallResult,
@@ -17,30 +18,42 @@ use std::{
     fs,
     io::{Cursor, Read},
     path::{Component, Path, PathBuf},
+    sync::Arc,
     time::SystemTime,
 };
 use zip::ZipArchive;
 
 pub struct AppService {
     store: AppStore,
+    mcp_service: McpService,
 }
 
 impl AppService {
     pub fn new() -> AppResult<Self> {
+        let store = AppStore::new()?;
+        let store_ref = Arc::new(AppStore::new()?);
         Ok(Self {
-            store: AppStore::new()?,
+            store,
+            mcp_service: McpService::new(store_ref),
         })
     }
 
     #[cfg(test)]
     pub fn in_memory() -> AppResult<Self> {
+        let store = AppStore::in_memory()?;
+        let store_ref = Arc::new(AppStore::in_memory()?);
         Ok(Self {
-            store: AppStore::in_memory()?,
+            store,
+            mcp_service: McpService::new(store_ref),
         })
     }
 
     pub fn store(&self) -> &AppStore {
         &self.store
+    }
+
+    pub fn mcp(&self) -> &McpService {
+        &self.mcp_service
     }
 
     pub fn data_dir(&self) -> PathBuf {
@@ -67,15 +80,21 @@ impl AppService {
         let agents = self.list_agents().unwrap_or_default();
         let skills = self.scan_agent_skills().unwrap_or_default();
         let no_full_coverage_titles = self.store.list_no_full_coverage().unwrap_or_default();
+        let no_full_coverage_mcp_titles = self.store.list_no_full_coverage_mcp().unwrap_or_default();
         Ok(InitialData {
             skills,
             agents,
             no_full_coverage_titles,
+            no_full_coverage_mcp_titles,
         })
     }
 
     pub fn toggle_no_full_coverage(&self, title: &str) -> AppResult<bool> {
         self.store.toggle_no_full_coverage(title)
+    }
+
+    pub fn toggle_no_full_coverage_mcp(&self, title: &str) -> AppResult<bool> {
+        self.store.toggle_no_full_coverage_mcp(title)
     }
 
     pub fn list_saved_agents(&self) -> AppResult<Vec<AgentProfile>> {

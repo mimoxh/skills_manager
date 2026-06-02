@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-native/
 target/
 src-tauri/target/
 src-tauri/gen/
@@ -8,3 +9,17 @@ src-tauri/gen/
 *.db
 *.db-shm
 *.db-wal
+*.exe
+*.zip
+*.pdb
+*.lib
+*.rlib
+*.rmeta
+doc/
+.claude/
+.dev-logs/
+.npm-cache/
+.sisyphus/
+Users16617Documentssunsetholmescodeprojectskills_manager.tmp-opencode/
+*冲突副本*
+*MimoX*Desktop*

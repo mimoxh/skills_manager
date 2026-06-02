@@ -5,6 +5,12 @@ mod commands;
 pub mod error;
 pub mod hash;
 pub mod manifest;
+pub mod mcp_adapter;
+pub mod mcp_claude;
+pub mod mcp_codex;
+pub mod mcp_opencode;
+pub mod mcp_service;
+pub mod mcp_trae;
 pub mod models;
 pub mod service;
 pub mod store;
@@ -28,7 +34,15 @@ pub fn run() {
             uninstall_skill,
             uninstall_skill_from_agents,
             rollback_last,
-            toggle_no_full_coverage
+            toggle_no_full_coverage,
+            toggle_no_full_coverage_mcp,
+            scan_mcp_servers,
+            add_mcp_server,
+            update_mcp_server,
+            remove_mcp_server,
+            toggle_mcp_server,
+            sync_mcp_server,
+            remove_mcp_server_from_agents
         ])
         .run(tauri::generate_context!())
         .expect("error while running Skills Manager");

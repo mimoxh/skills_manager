@@ -31,6 +31,7 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
   const [dragging, setDragging] = useState(false);
   const [filter, setFilter] = useState<"all" | "covered" | "partial" | "needed">(initialFilter);
   const [deleteTarget, setDeleteTarget] = useState<GroupedSkill | null>(null);
+  const [discardConfirm, setDiscardConfirm] = useState(false);
 
   const displayedSkills = useMemo(() => {
     if (filter === "covered") return skills.filter((s) => s.missingAgentIds.length === 0);
@@ -81,6 +82,22 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
     if (!deleteTarget) return;
     await onUninstall(deleteTarget.title, deleteTarget.installedAgentIds);
     setDeleteTarget(null);
+  }
+
+  const hasSyncChanges = useMemo(() => {
+    if (!selectedSkill) return false;
+    const initial = selectedSkill.installedAgentIds;
+    if (selectedAgents.length !== initial.length || selectedAgents.some((id) => !initial.includes(id))) return true;
+    if (conflictPolicy !== "backupOverwrite") return true;
+    return false;
+  }, [selectedSkill, selectedAgents, conflictPolicy]);
+
+  function requestClose() {
+    if (hasSyncChanges) {
+      setDiscardConfirm(true);
+    } else {
+      setSelectedSkill(null);
+    }
   }
 
   return (
@@ -237,7 +254,7 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
           selectedAgents={selectedAgents}
           skill={selectedSkill}
           isNoFullCoverage={noFullCoverageTitles.has(selectedSkill.title)}
-          onClose={() => setSelectedSkill(null)}
+          onClose={requestClose}
           onPolicy={setConflictPolicy}
           onSync={executeSync}
           onToggleAgent={toggleAgent}
@@ -254,6 +271,17 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
           busy={busy}
           onClose={() => setDeleteTarget(null)}
           onConfirm={confirmDelete}
+        />
+      )}
+
+      {discardConfirm && (
+        <ConfirmDialog
+          title="放弃更改"
+          message="当前有未保存的更改，确定要放弃吗？"
+          confirmLabel="放弃"
+          busy={busy}
+          onClose={() => setDiscardConfirm(false)}
+          onConfirm={() => { setDiscardConfirm(false); setSelectedSkill(null); }}
         />
       )}
     </>
@@ -279,8 +307,8 @@ function SyncSkillDialog({
   const readmeContent = skill.readme || skill.description;
 
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(47, 48, 44, 0.28)", padding: 20 }}>
-      <div style={{ maxHeight: "88vh", width: "100%", maxWidth: 960, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(80,60,30,0.14), 0 2px 8px rgba(80,60,30,0.06)" }}>
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(47, 48, 44, 0.28)", padding: 20 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ maxHeight: "88vh", width: "100%", maxWidth: 960, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(80,60,30,0.14), 0 2px 8px rgba(80,60,30,0.06)" }}>
         {/* Header */}
         <div style={{ display: "flex", alignItems: "flex-start", gap: 12, borderBottom: "1px solid var(--border)", padding: "20px 24px" }}>
           <div style={{ width: 40, height: 40, background: "var(--accent-light)", borderRadius: "var(--radius-sm)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)", flexShrink: 0 }}>
@@ -371,7 +399,6 @@ function SyncSkillDialog({
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, borderTop: "1px solid var(--border)", background: "var(--surface-raised)", padding: "16px 24px" }}>
           <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>已选择 {selectedAgents.length} 个 Agent</p>
           <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn btn-secondary" onClick={onClose} disabled={busy} type="button">取消</button>
             <button
               className="btn btn-secondary"
               onClick={onToggleNoFullCoverage}
@@ -412,8 +439,8 @@ function ConfirmDialog({
   onConfirm: () => void;
 }) {
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(47, 48, 44, 0.36)", padding: 20 }}>
-      <div style={{ width: "100%", maxWidth: 420, borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(80,60,30,0.14)" }}>
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(47, 48, 44, 0.36)", padding: 20 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 420, borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(80,60,30,0.14)" }}>
         <div style={{ padding: "20px 24px" }}>
           <h3 style={{ fontSize: 15, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>{title}</h3>
           <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6 }}>{message}</p>
@@ -455,8 +482,8 @@ export function ImportAgentDialog({
   }
 
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(47, 48, 44, 0.28)", padding: 20 }}>
-      <div style={{ maxHeight: "88vh", width: "100%", maxWidth: 560, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(80,60,30,0.14), 0 2px 8px rgba(80,60,30,0.06)" }}>
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(47, 48, 44, 0.28)", padding: 20 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ maxHeight: "88vh", width: "100%", maxWidth: 560, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(80,60,30,0.14), 0 2px 8px rgba(80,60,30,0.06)" }}>
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", gap: 12, borderBottom: "1px solid var(--border)", padding: "20px 24px" }}>
           <div style={{ width: 40, height: 40, background: "var(--accent-light)", borderRadius: "var(--radius-sm)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)", flexShrink: 0 }}>
@@ -535,7 +562,6 @@ export function ImportAgentDialog({
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, borderTop: "1px solid var(--border)", background: "var(--surface-raised)", padding: "16px 24px" }}>
           <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>已选择 {selectedAgents.length} 个 Agent</p>
           <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn btn-secondary" onClick={onClose} disabled={busy} type="button">取消</button>
             <button className="btn btn-primary" onClick={() => onImport(selectedAgents, conflictPolicy)} disabled={busy || selectedAgents.length === 0} type="button">
               <svg className="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
               导入

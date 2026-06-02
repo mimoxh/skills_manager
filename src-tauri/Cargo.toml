@@ -26,6 +26,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 thiserror = "1"
 walkdir = "2"
+toml = "0.8"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
