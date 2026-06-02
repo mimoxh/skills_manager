@@ -1,5 +1,7 @@
 # Skills Manager
 
+[中文版](README.zh-CN.md)
+
 Skills Manager is a local desktop tool for managing agent skills across multiple AI clients. It scans skill directories, shows coverage across configured agents, and helps sync or import skills without manually copying folders one by one.
 
 ## Features
