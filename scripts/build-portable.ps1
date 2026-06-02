@@ -28,9 +28,9 @@ $Readme = @(
   "2. The app creates a default repository and reuses existing local state.",
   "",
   "Notes:",
-  "- Native Rust egui/eframe desktop app.",
-  "- No browser or localhost preview service is required.",
-  "- Legacy Web/Tauri files remain in the source tree for migration reference."
+  "- Tauri 2 desktop app with a Rust backend.",
+  "- This portable package does not require a browser or localhost preview service.",
+  "- Source development uses React, TypeScript, Vite, and Rust."
 )
 $Readme | Set-Content -LiteralPath (Join-Path $ReleaseDir "README.txt") -Encoding UTF8
 
