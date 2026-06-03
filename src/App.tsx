@@ -142,6 +142,15 @@ export default function App() {
               renderView()
             )}
           </div>
+          {state.message && (
+            <div className="status-bar" onClick={() => state.setMessage("")} style={{
+              padding: "6px 32px", fontSize: 12.5, color: "var(--text-secondary)",
+              borderTop: "1px solid var(--border)", background: "var(--surface)",
+              cursor: "pointer", userSelect: "none", flexShrink: 0,
+            }} title="点击关闭">
+              {state.message}
+            </div>
+          )}
         </div>
       </div>
 

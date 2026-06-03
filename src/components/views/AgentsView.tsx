@@ -398,7 +398,7 @@ function AddAgentPanel({ customAgent, busy, onCustomChange, onSaveCustom, pickFo
             <p style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>{mcpHint(customAgent.type)}</p>
           </div>
         )}
-        <button className="btn btn-primary" onClick={onSaveCustom} disabled={busy} type="button" style={{ marginTop: 4 }}>
+        <button className="btn btn-primary" onClick={() => onSaveCustom()} disabled={busy} type="button" style={{ marginTop: 4 }}>
           <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12" /></svg>
           添加 Agent
         </button>
