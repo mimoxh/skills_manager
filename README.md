@@ -70,7 +70,7 @@ dist-native\Skills Manager\
 To create a zip package for GitHub Releases:
 
 ```powershell
-Compress-Archive -LiteralPath "dist-native\Skills Manager" -DestinationPath "SkillsManager-v0.1.0-windows-portable.zip" -Force
+Compress-Archive -LiteralPath "dist-native\Skills Manager" -DestinationPath "SkillsManager-v0.1.1-windows-portable.zip" -Force
 ```
 
 The zip package is intentionally ignored by Git and should be uploaded as a GitHub Release asset instead of committed to the repository.

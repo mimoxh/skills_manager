@@ -70,7 +70,7 @@ dist-native\Skills Manager\
 生成 GitHub Releases 可上传的 zip 包：
 
 ```powershell
-Compress-Archive -LiteralPath "dist-native\Skills Manager" -DestinationPath "SkillsManager-v0.1.0-windows-portable.zip" -Force
+Compress-Archive -LiteralPath "dist-native\Skills Manager" -DestinationPath "SkillsManager-v0.1.1-windows-portable.zip" -Force
 ```
 
 zip 发布包会被 Git 忽略，不应提交到仓库；它适合作为 GitHub Release 附件上传。
