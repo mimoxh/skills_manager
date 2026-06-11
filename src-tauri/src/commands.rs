@@ -1,7 +1,7 @@
 use crate::{
     error::{AppError, AppResult},
     models::{
-        AgentProfile, CatalogFilters, CatalogRefreshResult, CatalogSkill, CatalogSort,
+        AgentProfile, CatalogFilters, CatalogRefreshResult, CatalogSearchResult, CatalogSort,
         CatalogSource, ConflictPolicy, GroupedMcpServer, GroupedSkill, ImportSkillFile,
         ImportSkillResult, InitialData, InstallResult, McpOperationResult, McpServerConfig,
     },
@@ -148,10 +148,15 @@ pub async fn search_catalog_skills(
     query: Option<String>,
     sort: CatalogSort,
     filters: CatalogFilters,
+    page: Option<usize>,
+    page_size: Option<usize>,
     service: State<'_, AppService>,
-) -> AppResult<Vec<CatalogSkill>> {
+) -> AppResult<CatalogSearchResult> {
     let service = service.inner().clone();
-    run_blocking(move || service.search_catalog_skills(query.as_deref(), sort, filters)).await
+    run_blocking(move || {
+        service.search_catalog_skills(query.as_deref(), sort, filters, page, page_size)
+    })
+    .await
 }
 
 #[tauri::command]

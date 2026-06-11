@@ -1,4 +1,4 @@
-﻿use crate::{
+use crate::{
     adapter::{adapter_for, built_in_adapters, AgentAdapter},
     catalog::{
         scan_catalog_repository, scan_clawhub_api_cache, sort_catalog_skills,
@@ -11,13 +11,15 @@
     mcp_service::McpService,
     models::{
         AgentProfile, AgentSkillCopy, AgentType, CatalogFilters, CatalogInstallStatus,
-        CatalogRefreshResult, CatalogSkill, CatalogSort, CatalogSource, CatalogSourceKind,
-        ConflictPolicy, GroupedSkill, ImportSkillFile, ImportSkillResult, InitialData,
-        InstallResult,
+        CatalogRefreshResult, CatalogSearchResult, CatalogSkill, CatalogSort, CatalogSource,
+        CatalogSourceKind, ConflictPolicy, GroupedSkill, ImportSkillFile, ImportSkillResult,
+        InitialData, InstallResult,
     },
     store::AppStore,
 };
 use chrono::{DateTime, Utc};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
@@ -28,8 +30,6 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime},
 };
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 use zip::ZipArchive;
 
 #[derive(Clone)]
@@ -245,7 +245,9 @@ impl AppService {
         query: Option<&str>,
         sort: CatalogSort,
         filters: CatalogFilters,
-    ) -> AppResult<Vec<CatalogSkill>> {
+        page: Option<usize>,
+        page_size: Option<usize>,
+    ) -> AppResult<CatalogSearchResult> {
         let sources = self.list_catalog_sources()?;
         let installed = self.scan_agent_skills().unwrap_or_default();
         let installed_titles = installed
@@ -279,7 +281,11 @@ impl AppService {
             .filter(|skill| catalog_matches_query(skill, &q))
             .filter(|skill| catalog_matches_filters(skill, &filters))
             .collect::<Vec<_>>();
-        Ok(sort_catalog_skills(filtered, sort))
+        Ok(page_catalog_skills(
+            sort_catalog_skills(filtered, sort),
+            page,
+            page_size,
+        ))
     }
 
     pub fn install_catalog_skill(
@@ -292,7 +298,14 @@ impl AppService {
             return Err(AppError::Message("请至少选择一个目标 Agent。".to_string()));
         }
         let skill = self
-            .search_catalog_skills(None, CatalogSort::UpdatedDesc, CatalogFilters::default())?
+            .search_catalog_skills(
+                None,
+                CatalogSort::UpdatedDesc,
+                CatalogFilters::default(),
+                Some(1),
+                Some(usize::MAX),
+            )?
+            .items
             .into_iter()
             .find(|skill| skill.id == catalog_skill_id)
             .ok_or_else(|| {
@@ -754,32 +767,21 @@ impl AppService {
         let agent = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(45))
             .build();
-        let mut cursor: Option<String> = None;
-        let mut items = Vec::new();
-
-        for _ in 0..20 {
+        let items = collect_clawhub_api_pages(|cursor| {
             let mut request = agent
                 .get("https://clawhub.ai/api/v1/skills")
-                .query("limit", "100");
-            if let Some(cursor_value) = cursor.as_deref() {
+                .query("limit", "100")
+                .query("sort", "downloads")
+                .query("dir", "desc");
+            if let Some(cursor_value) = cursor {
                 request = request.query("cursor", cursor_value);
             }
             let response = request.call().map_err(clawhub_http_error)?;
             let text = response.into_string().map_err(|error| {
                 AppError::Message(format!("读取 ClawHub API 响应失败: {}", error))
             })?;
-            let value = serde_json::from_str::<serde_json::Value>(&text)?;
-            if let Some(page_items) = value.get("items").and_then(|value| value.as_array()) {
-                items.extend(page_items.iter().cloned());
-            }
-            cursor = value
-                .get("nextCursor")
-                .and_then(|value| value.as_str())
-                .map(ToString::to_string);
-            if cursor.is_none() {
-                break;
-            }
-        }
+            Ok(serde_json::from_str::<serde_json::Value>(&text)?)
+        })?;
 
         let cache = serde_json::json!({
             "items": items,
@@ -1011,6 +1013,35 @@ fn catalog_matches_query(skill: &CatalogSkill, query: &str) -> bool {
             .any(|tag| tag.to_ascii_lowercase().contains(query))
 }
 
+fn page_catalog_skills(
+    skills: Vec<CatalogSkill>,
+    page: Option<usize>,
+    page_size: Option<usize>,
+) -> CatalogSearchResult {
+    let total = skills.len();
+    let page = page.unwrap_or(1).max(1);
+    let page_size = match page_size {
+        Some(usize::MAX) => usize::MAX,
+        Some(value) => value.clamp(1, 500),
+        None => 100,
+    };
+    let start = page.saturating_sub(1).saturating_mul(page_size);
+    let items = skills
+        .into_iter()
+        .skip(start)
+        .take(page_size)
+        .collect::<Vec<_>>();
+    let has_more = start.saturating_add(items.len()) < total;
+
+    CatalogSearchResult {
+        items,
+        total,
+        page,
+        page_size,
+        has_more,
+    }
+}
+
 fn catalog_matches_filters(skill: &CatalogSkill, filters: &CatalogFilters) -> bool {
     if !filters.source_ids.is_empty() && !filters.source_ids.contains(&skill.source_id) {
         return false;
@@ -1068,6 +1099,57 @@ fn catalog_matches_filters(skill: &CatalogSkill, filters: &CatalogFilters) -> bo
         }
     }
     true
+}
+
+fn collect_clawhub_api_pages<F>(mut fetch_page: F) -> AppResult<Vec<serde_json::Value>>
+where
+    F: FnMut(Option<&str>) -> AppResult<serde_json::Value>,
+{
+    const MAX_CLAWHUB_PAGES: usize = 1_000;
+    const MAX_EMPTY_PAGES: usize = 3;
+
+    let mut cursor: Option<String> = None;
+    let mut seen_cursors = HashSet::new();
+    let mut empty_pages = 0usize;
+    let mut items = Vec::new();
+
+    for _ in 0..MAX_CLAWHUB_PAGES {
+        let value = fetch_page(cursor.as_deref())?;
+        let page_items = value
+            .get("items")
+            .and_then(|value| value.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        if page_items.is_empty() {
+            empty_pages += 1;
+            if empty_pages >= MAX_EMPTY_PAGES {
+                break;
+            }
+        } else {
+            empty_pages = 0;
+            items.extend(page_items);
+        }
+
+        let next_cursor = value
+            .get("nextCursor")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+
+        let Some(next_cursor) = next_cursor else {
+            break;
+        };
+        if !seen_cursors.insert(next_cursor.clone()) {
+            return Err(AppError::Message(
+                "ClawHub API 返回了重复的分页 cursor，已停止刷新以避免无限循环。".to_string(),
+            ));
+        }
+        cursor = Some(next_cursor);
+    }
+
+    Ok(items)
 }
 
 /// Sanitize a raw zip entry path for safe extraction.
@@ -1232,7 +1314,9 @@ fn read_agent_skill_info(
                     .filter(|value| !value.is_empty() && is_valid_description(value))
                     .map(ToString::to_string);
                 if let Some(title) = title {
-                    let readme = include_readme.then(|| read_agent_skill_readme(skill_path)).flatten();
+                    let readme = include_readme
+                        .then(|| read_agent_skill_readme(skill_path))
+                        .flatten();
                     return (title.to_string(), version, description, readme);
                 }
             }
@@ -1241,7 +1325,9 @@ fn read_agent_skill_info(
 
     let skill_md = skill_path.join("SKILL.md");
     if let Ok(text) = fs::read_to_string(&skill_md) {
-        let readme = include_readme.then(|| extract_markdown_body(&text)).flatten();
+        let readme = include_readme
+            .then(|| extract_markdown_body(&text))
+            .flatten();
         if let Some((title, version, description)) = read_markdown_frontmatter(&text) {
             return (title, version, description, readme);
         }
@@ -1479,6 +1565,30 @@ mod tests {
         files
     }
 
+    fn catalog_test_skill(index: usize) -> CatalogSkill {
+        CatalogSkill {
+            id: format!("test::{index:03}"),
+            name: format!("Skill {index:03}"),
+            source_id: "test".to_string(),
+            source_name: "Test".to_string(),
+            source_icon: "test".to_string(),
+            source_path: format!("test://skill-{index:03}"),
+            relative_path: format!("skill-{index:03}"),
+            description: None,
+            tags: Vec::new(),
+            supported_agents: Vec::new(),
+            published_at: None,
+            updated_at: None,
+            download_count: None,
+            install_count: None,
+            has_skill_md: true,
+            has_scripts: false,
+            has_references: false,
+            has_assets: false,
+            install_status: CatalogInstallStatus::NotInstalled,
+        }
+    }
+
     fn collect_files_recursive(base: &Path, dir: &Path, out: &mut Vec<ImportSkillFile>) {
         for entry in fs::read_dir(dir).unwrap() {
             let entry = entry.unwrap();
@@ -1577,6 +1687,46 @@ mod tests {
         let agents = clone.list_saved_agents().unwrap();
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].id, "shared-agent");
+    }
+
+    #[test]
+    fn collects_clawhub_pages_beyond_twenty_until_cursor_ends() {
+        let mut calls = 0usize;
+        let items = collect_clawhub_api_pages(|cursor| {
+            if calls == 0 {
+                assert!(cursor.is_none());
+            } else {
+                assert_eq!(cursor, Some(format!("cursor-{calls}").as_str()));
+            }
+            calls += 1;
+            let next_cursor = if calls < 25 {
+                serde_json::Value::String(format!("cursor-{calls}"))
+            } else {
+                serde_json::Value::Null
+            };
+            Ok(serde_json::json!({
+                "items": [{ "slug": format!("skill-{calls}") }],
+                "nextCursor": next_cursor
+            }))
+        })
+        .unwrap();
+
+        assert_eq!(calls, 25);
+        assert_eq!(items.len(), 25);
+    }
+
+    #[test]
+    fn paginates_catalog_search_results_without_dropping_total_count() {
+        let skills = (0..250).map(catalog_test_skill).collect::<Vec<_>>();
+        let result = page_catalog_skills(skills, Some(2), Some(100));
+
+        assert_eq!(result.total, 250);
+        assert_eq!(result.page, 2);
+        assert_eq!(result.page_size, 100);
+        assert!(result.has_more);
+        assert_eq!(result.items.len(), 100);
+        assert_eq!(result.items[0].id, "test::100");
+        assert_eq!(result.items[99].id, "test::199");
     }
 
     #[test]
@@ -1717,7 +1867,8 @@ mod tests {
         )
         .unwrap();
 
-        let (title, version, description, _) = read_agent_skill_info(&root.path().join("block-gt"), true);
+        let (title, version, description, _) =
+            read_agent_skill_info(&root.path().join("block-gt"), true);
         assert_eq!(title, "test-skill");
         assert_eq!(version, Some("1.0.0".to_string()));
         assert_eq!(
@@ -1733,7 +1884,8 @@ mod tests {
         )
         .unwrap();
 
-        let (title, _, description, _) = read_agent_skill_info(&root.path().join("block-eof"), true);
+        let (title, _, description, _) =
+            read_agent_skill_info(&root.path().join("block-eof"), true);
         assert_eq!(title, "end-skill");
         assert_eq!(description, Some("Line one.\nLine two.".to_string()));
     }

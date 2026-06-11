@@ -499,6 +499,16 @@ input { cursor: text; outline: none; }
   gap: 8px;
   min-width: 0;
 }
+.catalog-pagination {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 8px 0 2px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
 .catalog-source-icon {
   width: 30px;
   height: 30px;

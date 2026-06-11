@@ -3,7 +3,7 @@ import type {
   AgentProfile,
   CatalogFilters,
   CatalogRefreshResult,
-  CatalogSkill,
+  CatalogSearchResult,
   CatalogSort,
   CatalogSource,
   ConflictPolicy,
@@ -91,8 +91,12 @@ export const api = {
       message: "Catalog refresh is available in the desktop app",
     }));
   },
-  searchCatalogSkills(query: string, sort: CatalogSort, filters: CatalogFilters) {
-    return command<CatalogSkill[]>("search_catalog_skills", { query, sort, filters }, () => []);
+  searchCatalogSkills(query: string, sort: CatalogSort, filters: CatalogFilters, page = 1, pageSize = 100) {
+    return command<CatalogSearchResult>(
+      "search_catalog_skills",
+      { query, sort, filters, page, pageSize },
+      () => ({ items: [], total: 0, page, pageSize, hasMore: false }),
+    );
   },
   installCatalogSkill(catalogSkillId: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) {
     return command<InstallResult[]>(

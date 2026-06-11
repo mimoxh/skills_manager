@@ -113,6 +113,14 @@ export interface CatalogSkill {
   installStatus: CatalogInstallStatus;
 }
 
+export interface CatalogSearchResult {
+  items: CatalogSkill[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
 export interface CatalogFilters {
   sourceIds: string[];
   agentTypes: string[];

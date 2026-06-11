@@ -35,13 +35,18 @@ interface CatalogViewProps {
   startupRefreshing: boolean;
   sources: CatalogSource[];
   skills: CatalogSkill[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
   query: string;
   sort: CatalogSort;
   filters: CatalogFilters;
   onQuery: (query: string) => void;
   onSort: (sort: CatalogSort) => void;
   onFilters: (filters: CatalogFilters) => void;
-  onSearch: (query?: string, sort?: CatalogSort, filters?: CatalogFilters) => Promise<void>;
+  onSearch: (query?: string, sort?: CatalogSort, filters?: CatalogFilters, page?: number) => Promise<void>;
+  onPage: (page: number) => Promise<void>;
   onRefreshSource: (sourceId: string) => Promise<void>;
   onSaveSource: (source: CatalogSource) => Promise<void>;
   onInstall: (catalogSkillId: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) => Promise<InstallResult[]>;
@@ -53,6 +58,10 @@ export function CatalogView({
   startupRefreshing,
   sources,
   skills,
+  total,
+  page,
+  pageSize,
+  hasMore,
   query,
   sort,
   filters,
@@ -60,6 +69,7 @@ export function CatalogView({
   onSort,
   onFilters,
   onSearch,
+  onPage,
   onRefreshSource,
   onSaveSource,
   onInstall,
@@ -79,7 +89,7 @@ export function CatalogView({
 
   function updateFilters(next: CatalogFilters) {
     onFilters(next);
-    onSearch(query, sort, next);
+    onSearch(query, sort, next, 1);
   }
 
   function toggleArray(key: keyof Pick<CatalogFilters, "sourceIds" | "agentTypes" | "installStatuses" | "contentCapabilities">, value: string) {
@@ -90,12 +100,12 @@ export function CatalogView({
 
   async function applySearch(nextQuery: string) {
     onQuery(nextQuery);
-    await onSearch(nextQuery, sort, filters);
+    await onSearch(nextQuery, sort, filters, 1);
   }
 
   async function applySort(nextSort: CatalogSort) {
     onSort(nextSort);
-    await onSearch(query, nextSort, filters);
+    await onSearch(query, nextSort, filters, 1);
   }
 
   async function saveCustomSource() {
@@ -124,6 +134,9 @@ export function CatalogView({
     }, {});
   }, [skills]);
 
+  const firstVisible = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const lastVisible = total === 0 ? 0 : Math.min((page - 1) * pageSize + skills.length, total);
+
   return (
     <>
       <div className="catalog-view">
@@ -148,7 +161,7 @@ export function CatalogView({
             <div className="catalog-filter-header">
               <div>
                 <div className="card-title">筛选</div>
-                <div className="card-desc">{skills.length} 个可见项目</div>
+                <div className="card-desc">{firstVisible}-{lastVisible} / {total} 个项目</div>
               </div>
               <button className="btn-icon" onClick={() => onSearch(query, sort, filters)} disabled={busy} title="刷新列表" type="button">
                 <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>
@@ -277,6 +290,17 @@ export function CatalogView({
               <div className="catalog-empty">
                 <p>没有找到 catalog skills</p>
                 <span>先刷新内置源或添加自定义仓库后再搜索</span>
+              </div>
+            )}
+            {total > 0 && (
+              <div className="catalog-pagination">
+                <button className="btn btn-secondary btn-sm" onClick={() => onPage(page - 1)} disabled={busy || page <= 1} type="button">
+                  上一页
+                </button>
+                <span>第 {page} 页 · {firstVisible}-{lastVisible} / {total}</span>
+                <button className="btn btn-secondary btn-sm" onClick={() => onPage(page + 1)} disabled={busy || !hasMore} type="button">
+                  下一页
+                </button>
               </div>
             )}
           </main>

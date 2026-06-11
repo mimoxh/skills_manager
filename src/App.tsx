@@ -108,9 +108,13 @@ export default function App() {
         return (
           <CatalogView
             agents={state.agents}
-            busy={state.catalogBusy || state.catalogStartupRefreshing}
+            busy={state.catalogBusy}
             sources={state.catalogSources}
             skills={state.catalogSkills}
+            total={state.catalogTotal}
+            page={state.catalogPage}
+            pageSize={state.catalogPageSize}
+            hasMore={state.catalogHasMore}
             startupRefreshing={state.catalogStartupRefreshing}
             query={state.catalogQuery}
             sort={state.catalogSort}
@@ -119,6 +123,7 @@ export default function App() {
             onSort={state.setCatalogSort}
             onFilters={state.setCatalogFilters}
             onSearch={state.searchCatalog}
+            onPage={state.changeCatalogPage}
             onRefreshSource={state.refreshCatalogSource}
             onSaveSource={state.saveCatalogSource}
             onInstall={state.installCatalogSkill}

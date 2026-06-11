@@ -48,6 +48,10 @@ export function useAppState() {
   const [noFullCoverageMcpTitles, setNoFullCoverageMcpTitles] = useState<Set<string>>(new Set());
   const [catalogSources, setCatalogSources] = useState<CatalogSource[]>([]);
   const [catalogSkills, setCatalogSkills] = useState<CatalogSkill[]>([]);
+  const [catalogTotal, setCatalogTotal] = useState(0);
+  const [catalogPage, setCatalogPage] = useState(1);
+  const [catalogPageSize] = useState(100);
+  const [catalogHasMore, setCatalogHasMore] = useState(false);
   const [catalogQuery, setCatalogQuery] = useState("");
   const [catalogSort, setCatalogSort] = useState<CatalogSort>("updatedDesc");
   const [catalogFilters, setCatalogFilters] = useState<CatalogFilters>(emptyCatalogFilters);
@@ -116,16 +120,20 @@ export function useAppState() {
     nextQuery = catalogQuery,
     nextSort = catalogSort,
     nextFilters = catalogFilters,
+    nextPage = catalogPage,
   ) {
     setCatalogBusy(true);
     try {
-      const [sources, skills] = await Promise.all([
+      const [sources, result] = await Promise.all([
         api.listCatalogSources(),
-        api.searchCatalogSkills(nextQuery, nextSort, nextFilters),
+        api.searchCatalogSkills(nextQuery, nextSort, nextFilters, nextPage, catalogPageSize),
       ]);
       setCatalogSources(sources);
-      setCatalogSkills(skills);
-      setMessage(`仓库目录显示 ${skills.length} 个 skills。`);
+      setCatalogSkills(result.items);
+      setCatalogTotal(result.total);
+      setCatalogPage(result.page);
+      setCatalogHasMore(result.hasMore);
+      setMessage(`仓库目录显示第 ${result.page} 页 ${result.items.length} 个 skills，共 ${result.total} 个。`);
     } catch (error) {
       setMessage(String(error));
     } finally {
@@ -146,6 +154,11 @@ export function useAppState() {
     }
   }
 
+  async function changeCatalogPage(nextPage: number) {
+    const safePage = Math.max(1, nextPage);
+    await searchCatalog(catalogQuery, catalogSort, catalogFilters, safePage);
+  }
+
   async function refreshCatalogOnStartup() {
     setCatalogStartupRefreshing(true);
     try {
@@ -162,12 +175,15 @@ export function useAppState() {
       }
       const [nextSources, nextSkills] = await Promise.all([
         api.listCatalogSources(),
-        api.searchCatalogSkills(catalogQuery, catalogSort, catalogFilters),
+        api.searchCatalogSkills(catalogQuery, catalogSort, catalogFilters, catalogPage, catalogPageSize),
       ]);
       setCatalogSources(nextSources);
-      setCatalogSkills(nextSkills);
+      setCatalogSkills(nextSkills.items);
+      setCatalogTotal(nextSkills.total);
+      setCatalogPage(nextSkills.page);
+      setCatalogHasMore(nextSkills.hasMore);
       if (refreshed > 0) {
-        setMessage(`已后台更新 ${refreshed} 个仓库源，仓库目录显示 ${nextSkills.length} 个 skills。`);
+        setMessage(`已后台更新 ${refreshed} 个仓库源，仓库目录显示第 ${nextSkills.page} 页 ${nextSkills.items.length} 个 skills，共 ${nextSkills.total} 个。`);
       }
     } catch (error) {
       setMessage(`仓库目录后台更新失败: ${String(error)}`);
@@ -521,7 +537,7 @@ export function useAppState() {
 
   return {
     skills, filteredSkills,
-    catalogSources, catalogSkills, catalogQuery, catalogSort, catalogFilters,
+    catalogSources, catalogSkills, catalogTotal, catalogPage, catalogPageSize, catalogHasMore, catalogQuery, catalogSort, catalogFilters,
     agents, filteredAgents,
     customAgent, setCustomAgent, saveCustomAgent, saveAgent: saveCustomAgent,
     message, setMessage,
@@ -529,7 +545,7 @@ export function useAppState() {
     isInitialLoading,
     pendingImport, executeImport, cancelImport,
     refreshAll, loadSkillReadme, syncSkillToAgents, deleteAgent, uninstallSkill, uninstallSkillFromAgents,
-    searchCatalog, refreshCatalogSource, saveCatalogSource, installCatalogSkill,
+    searchCatalog, changeCatalogPage, refreshCatalogSource, saveCatalogSource, installCatalogSkill,
     handleSkillDrop, importFiles, fileToUpload,
     noFullCoverageTitles, toggleNoFullCoverage,
     mcpServers, refreshMcpServers, addMcpServer, updateMcpServer, removeMcpServer, toggleMcpServer,
