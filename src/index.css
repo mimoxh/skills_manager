@@ -412,11 +412,20 @@ input { cursor: text; outline: none; }
 }
 .catalog-main {
   min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.catalog-card-grid {
+  min-height: 0;
+  flex: 1;
   overflow: auto;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
   align-content: start;
   gap: 14px;
+  padding-right: 2px;
 }
 .catalog-card {
   min-height: 214px;
@@ -496,15 +505,34 @@ input { cursor: text; outline: none; }
   gap: 8px;
   min-width: 0;
 }
-.catalog-pagination {
-  grid-column: 1 / -1;
+.catalog-footer {
+  min-height: 56px;
+  flex-shrink: 0;
+  padding: 10px 12px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
   gap: 12px;
-  padding: 8px 0 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.catalog-footer-summary {
   color: var(--text-secondary);
   font-size: 12.5px;
+  font-weight: 500;
+}
+.catalog-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+.catalog-pagination.muted {
+  color: var(--text-tertiary);
 }
 .catalog-source-icon {
   width: 30px;
@@ -551,7 +579,9 @@ input { cursor: text; outline: none; }
 
 @media (max-width: 640px) {
   .catalog-toolbar { grid-template-columns: 1fr; }
-  .catalog-main { grid-template-columns: 1fr; }
+  .catalog-card-grid { grid-template-columns: 1fr; }
+  .catalog-footer { align-items: stretch; flex-direction: column; }
+  .catalog-pagination { justify-content: space-between; }
 }
 
 /* ===== Badge ===== */

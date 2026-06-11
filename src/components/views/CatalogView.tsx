@@ -247,48 +247,60 @@ export function CatalogView({
           </aside>
 
           <main className="catalog-main">
-            {skills.map((skill) => (
-              <article className="catalog-card" key={skill.id}>
-                <div className="catalog-card-top">
-                  <SourceIcon icon={skill.sourceIcon} />
-                  <span className={`badge ${skill.installStatus === "installed" ? "badge-success" : "badge-muted"}`}>
-                    {skill.installStatus === "installed" ? "已安装" : "未安装"}
-                  </span>
+            <div className="catalog-card-grid">
+              {skills.map((skill) => (
+                <article className="catalog-card" key={skill.id}>
+                  <div className="catalog-card-top">
+                    <SourceIcon icon={skill.sourceIcon} />
+                    <span className={`badge ${skill.installStatus === "installed" ? "badge-success" : "badge-muted"}`}>
+                      {skill.installStatus === "installed" ? "已安装" : "未安装"}
+                    </span>
+                  </div>
+                  <div className="catalog-card-name">{skill.name}</div>
+                  <div className="catalog-card-desc">{skill.description || "暂无描述"}</div>
+                  <div className="catalog-card-tags">
+                    {skill.hasScripts && <span>scripts</span>}
+                    {skill.hasReferences && <span>references</span>}
+                    {skill.hasAssets && <span>assets</span>}
+                  </div>
+                  <div className="catalog-card-meta">
+                    <span>{formatCatalogUsage(skill)}</span>
+                    <span className="catalog-card-source">
+                      <span>{skill.sourceName}</span>
+                      <SourceIcon icon={skill.sourceIcon} small />
+                    </span>
+                  </div>
+                </article>
+              ))}
+              {!skills.length && startupRefreshing && <div className="catalog-empty" aria-hidden="true" />}
+              {!skills.length && !startupRefreshing && (
+                <div className="catalog-empty">
+                  <p>没有找到 catalog skills</p>
+                  <span>先刷新内置源或添加自定义仓库后再搜索</span>
                 </div>
-                <div className="catalog-card-name">{skill.name}</div>
-                <div className="catalog-card-desc">{skill.description || "暂无描述"}</div>
-                <div className="catalog-card-tags">
-                  {skill.hasScripts && <span>scripts</span>}
-                  {skill.hasReferences && <span>references</span>}
-                  {skill.hasAssets && <span>assets</span>}
-                </div>
-                <div className="catalog-card-meta">
-                  <span>{formatCatalogUsage(skill)}</span>
-                  <span className="catalog-card-source">
-                    <span>{skill.sourceName}</span>
-                    <SourceIcon icon={skill.sourceIcon} small />
-                  </span>
-                </div>
-              </article>
-            ))}
-            {!skills.length && startupRefreshing && <div className="catalog-empty" aria-hidden="true" />}
-            {!skills.length && !startupRefreshing && (
-              <div className="catalog-empty">
-                <p>没有找到 catalog skills</p>
-                <span>先刷新内置源或添加自定义仓库后再搜索</span>
+              )}
+            </div>
+            <div className="catalog-footer">
+              <div className="catalog-footer-summary">
+                {total > 0 ? `${firstVisible}-${lastVisible} / ${total} 个项目` : "0 个项目"}
               </div>
-            )}
-            {total > 0 && (
-              <div className="catalog-pagination">
-                <button className="btn btn-secondary btn-sm" onClick={() => onPage(page - 1)} disabled={busy || page <= 1} type="button">
-                  上一页
-                </button>
-                <span>第 {page} 页 · {firstVisible}-{lastVisible} / {total}</span>
-                <button className="btn btn-secondary btn-sm" onClick={() => onPage(page + 1)} disabled={busy || !hasMore} type="button">
-                  下一页
-                </button>
-              </div>
-            )}
+              {total > 0 && (
+                <div className="catalog-pagination">
+                  <button className="btn btn-secondary btn-sm" onClick={() => onPage(page - 1)} disabled={busy || page <= 1} type="button">
+                    上一页
+                  </button>
+                  <span>第 {page} 页</span>
+                  <button className="btn btn-secondary btn-sm" onClick={() => onPage(page + 1)} disabled={busy || !hasMore} type="button">
+                    下一页
+                  </button>
+                </div>
+              )}
+              {total === 0 && (
+                <div className="catalog-pagination muted">
+                  <span>暂无可分页项目</span>
+                </div>
+              )}
+            </div>
           </main>
         </div>
       </div>
