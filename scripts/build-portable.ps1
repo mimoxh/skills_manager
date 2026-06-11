@@ -1,12 +1,19 @@
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $PSScriptRoot
-$Manifest = Join-Path $Root "src-tauri\Cargo.toml"
 $ReleaseDir = Join-Path $Root "dist-native\Skills Manager"
 $ExeSource = Join-Path $Root "src-tauri\target\release\skill-sync-manager.exe"
 $ExeTarget = Join-Path $ReleaseDir "Skills Manager.exe"
 
-cargo build --release --manifest-path $Manifest
+Push-Location $Root
+try {
+  npm run native:build -- --no-bundle
+  if ($LASTEXITCODE -ne 0) {
+    throw "Tauri build failed with exit code $LASTEXITCODE"
+  }
+} finally {
+  Pop-Location
+}
 
 New-Item -ItemType Directory -Force -Path $ReleaseDir | Out-Null
 try {
