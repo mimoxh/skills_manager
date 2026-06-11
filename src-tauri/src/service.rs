@@ -190,7 +190,7 @@ impl AppService {
         let cache_path = self.catalog_cache_path(&source);
         fs::create_dir_all(self.catalog_cache_root())?;
 
-        if cache_path.exists() {
+        if cache_path.join(".git").is_dir() {
             let output = Command::new("git")
                 .arg("-C")
                 .arg(&cache_path)
@@ -831,7 +831,7 @@ fn built_in_catalog_sources() -> Vec<CatalogSource> {
         CatalogSource {
             id: "clawhub".to_string(),
             name: "ClawHub".to_string(),
-            url: "https://github.com/openclaw/skills".to_string(),
+            url: "https://github.com/openclaw/clawhub".to_string(),
             kind: CatalogSourceKind::BuiltIn,
             icon: "clawhub".to_string(),
             enabled: true,

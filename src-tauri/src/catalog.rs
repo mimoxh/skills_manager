@@ -20,7 +20,7 @@ pub fn scan_catalog_repository(
 
     let mut skills = Vec::new();
     for entry in WalkDir::new(repository)
-        .max_depth(4)
+        .max_depth(6)
         .into_iter()
         .filter_map(Result::ok)
     {
@@ -345,6 +345,23 @@ mod tests {
             skills[0].source_path.ends_with("alice\\deploy")
                 || skills[0].source_path.ends_with("alice/deploy")
         );
+    }
+
+    #[test]
+    fn scans_openclaw_clawhub_agents_skill_repository() {
+        let root = tempfile::tempdir().unwrap();
+        let skill_dir = root.path().join(".agents").join("skills").join("alice").join("deploy");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: deploy\ndescription: Deploy projects safely\n---\n# Deploy\n",
+        )
+        .unwrap();
+
+        let skills = scan_catalog_repository(root.path(), &built_in_source("ClawHub")).unwrap();
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "deploy");
     }
 
     #[test]
