@@ -25,6 +25,7 @@ sha2 = "0.10"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 thiserror = "1"
+ureq = { version = "2", features = ["tls"] }
 walkdir = "2"
 toml = "0.8"
 zip = { version = "2", default-features = false, features = ["deflate"] }

@@ -446,9 +446,15 @@ input { cursor: text; outline: none; }
   color: var(--text);
   font-size: 14px;
   font-weight: 650;
+  line-height: 1.35;
+  min-height: 38px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .catalog-card-desc {
   color: var(--text-secondary);

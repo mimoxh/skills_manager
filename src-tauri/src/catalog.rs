@@ -7,6 +7,8 @@ use serde_json::Value;
 use std::{cmp::Ordering, fs, path::Path};
 use walkdir::WalkDir;
 
+pub const CLAWHUB_API_CACHE_FILE: &str = "clawhub-skills.json";
+
 pub fn scan_catalog_repository(
     repository: &Path,
     source: &CatalogSource,
@@ -44,6 +46,38 @@ pub fn scan_catalog_repository(
         skills.push(read_catalog_skill(repository, skill_dir, source)?);
     }
 
+    skills.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(skills)
+}
+
+pub fn scan_clawhub_api_cache(
+    cache_path: &Path,
+    source: &CatalogSource,
+) -> AppResult<Vec<CatalogSkill>> {
+    let cache_file = cache_path.join(CLAWHUB_API_CACHE_FILE);
+    if !cache_file.exists() {
+        return Ok(Vec::new());
+    }
+    let text = fs::read_to_string(cache_file)?;
+    parse_clawhub_api_catalog(&text, source)
+}
+
+pub fn parse_clawhub_api_catalog(
+    text: &str,
+    source: &CatalogSource,
+) -> AppResult<Vec<CatalogSkill>> {
+    let value = serde_json::from_str::<Value>(text)?;
+    let items = value
+        .get("items")
+        .or_else(|| value.get("skills"))
+        .or_else(|| value.get("results"))
+        .and_then(Value::as_array)
+        .or_else(|| value.as_array())
+        .ok_or_else(|| AppError::Message("ClawHub API 响应中没有 skills 列表。".to_string()))?;
+    let mut skills = items
+        .iter()
+        .filter_map(|item| clawhub_item_to_skill(item, source))
+        .collect::<Vec<_>>();
     skills.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(skills)
 }
@@ -166,6 +200,56 @@ fn read_catalog_skill(
     })
 }
 
+fn clawhub_item_to_skill(item: &Value, source: &CatalogSource) -> Option<CatalogSkill> {
+    let slug = read_text(item, &["slug", "name", "id"])?;
+    let title = read_text(item, &["displayName", "display_name", "title", "name"])
+        .unwrap_or_else(|| slug.clone());
+    let description = read_text(item, &["summary", "description"]);
+    let tags = read_clawhub_tags(item);
+    let published_at = read_time(
+        item,
+        &["createdAt", "created_at", "publishedAt", "published_at"],
+    );
+    let updated_at = read_time(item, &["updatedAt", "updated_at"]).or_else(|| {
+        item.get("latestVersion")
+            .and_then(|latest| read_time(latest, &["createdAt", "created_at"]))
+    });
+    let stats = item.get("stats").unwrap_or(item);
+    let download_count = read_number(stats, &["downloads", "downloadCount", "download_count"]);
+    let install_count = read_number(
+        stats,
+        &[
+            "installsAllTime",
+            "installsCurrent",
+            "installCount",
+            "install_count",
+            "installs",
+        ],
+    );
+
+    Some(CatalogSkill {
+        id: format!("{}::{}", source.id, slug),
+        name: title,
+        source_id: source.id.clone(),
+        source_name: source.name.clone(),
+        source_icon: source.icon.clone(),
+        source_path: format!("clawhub://{}", slug),
+        relative_path: slug,
+        description,
+        tags,
+        supported_agents: read_supported_agents(item),
+        published_at,
+        updated_at,
+        download_count,
+        install_count,
+        has_skill_md: true,
+        has_scripts: false,
+        has_references: false,
+        has_assets: false,
+        install_status: CatalogInstallStatus::NotInstalled,
+    })
+}
+
 #[cfg(test)]
 fn empty_catalog_skill(name: &str) -> CatalogSkill {
     CatalogSkill {
@@ -204,6 +288,111 @@ fn read_manifest_value(skill_dir: &Path) -> Option<Value> {
         };
     }
     None
+}
+
+fn read_text(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .filter_map(|key| value.get(*key))
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn read_number(value: &Value, keys: &[&str]) -> Option<u64> {
+    keys.iter()
+        .filter_map(|key| value.get(*key))
+        .find_map(|candidate| {
+            candidate
+                .as_u64()
+                .or_else(|| {
+                    candidate
+                        .as_f64()
+                        .filter(|value| *value >= 0.0)
+                        .map(|value| value as u64)
+                })
+                .or_else(|| {
+                    candidate
+                        .as_str()
+                        .and_then(|value| value.parse::<u64>().ok())
+                })
+        })
+}
+
+fn read_time(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .filter_map(|key| value.get(*key))
+        .find_map(|candidate| {
+            if let Some(text) = candidate
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                return Some(text.to_string());
+            }
+            let millis = candidate
+                .as_i64()
+                .or_else(|| candidate.as_f64().map(|value| value as i64))?;
+            DateTime::<Utc>::from_timestamp_millis(millis).map(|time| time.to_rfc3339())
+        })
+}
+
+fn read_clawhub_tags(item: &Value) -> Vec<String> {
+    let Some(tags) = item.get("tags") else {
+        return Vec::new();
+    };
+    if let Some(values) = tags.as_array() {
+        return values
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .collect();
+    }
+    tags.as_object()
+        .map(|values| {
+            values
+                .keys()
+                .filter(|key| key.as_str() != "latest")
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn read_supported_agents(item: &Value) -> Vec<String> {
+    let systems = item
+        .get("metadata")
+        .and_then(|metadata| metadata.get("systems"))
+        .or_else(|| item.get("systems"))
+        .or_else(|| item.get("supportedAgents"))
+        .or_else(|| item.get("supported_agents"));
+    let mut agents = systems
+        .and_then(|value| {
+            if let Some(values) = value.as_array() {
+                Some(
+                    values
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                value.as_str().map(|text| {
+                    text.split(',')
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                })
+            }
+        })
+        .unwrap_or_default();
+    if agents.is_empty() {
+        agents.push("openclaw".to_string());
+    }
+    agents
 }
 
 fn read_skill_md_frontmatter(text: &str) -> Option<(Option<String>, Option<String>, Vec<String>)> {
@@ -350,7 +539,12 @@ mod tests {
     #[test]
     fn scans_openclaw_clawhub_agents_skill_repository() {
         let root = tempfile::tempdir().unwrap();
-        let skill_dir = root.path().join(".agents").join("skills").join("alice").join("deploy");
+        let skill_dir = root
+            .path()
+            .join(".agents")
+            .join("skills")
+            .join("alice")
+            .join("deploy");
         fs::create_dir_all(&skill_dir).unwrap();
         fs::write(
             skill_dir.join("SKILL.md"),
@@ -362,6 +556,36 @@ mod tests {
 
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].name, "deploy");
+    }
+
+    #[test]
+    fn parses_clawhub_api_catalog_items() {
+        let source = built_in_source("clawhub");
+        let json = r#"{
+          "items": [{
+            "slug": "self-improving-agent",
+            "displayName": "self-improving agent",
+            "summary": "Captures learnings and corrections.",
+            "tags": {"latest": "3.0.23", "agent": "3.0.0", "memory": "3.0.0"},
+            "stats": {"downloads": 459820, "installsAllTime": 6825},
+            "createdAt": 1767632598365,
+            "updatedAt": 1780785432794,
+            "metadata": {"systems": ["OpenClaw", "Claude Code"]}
+          }]
+        }"#;
+
+        let skills = parse_clawhub_api_catalog(json, &source).unwrap();
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].id, "clawhub::self-improving-agent");
+        assert_eq!(skills[0].name, "self-improving agent");
+        assert_eq!(skills[0].source_path, "clawhub://self-improving-agent");
+        assert_eq!(skills[0].download_count, Some(459820));
+        assert_eq!(skills[0].install_count, Some(6825));
+        assert!(skills[0].tags.contains(&"agent".to_string()));
+        assert!(!skills[0].tags.contains(&"latest".to_string()));
+        assert!(skills[0].published_at.is_some());
+        assert!(skills[0].updated_at.is_some());
     }
 
     #[test]

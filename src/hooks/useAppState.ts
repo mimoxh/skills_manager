@@ -135,6 +135,31 @@ export function useAppState() {
     }
   }
 
+  async function refreshCatalogOnStartup() {
+    try {
+      setMessage("正在后台更新 skills 仓库目录...");
+      const sources = await api.listCatalogSources();
+      let refreshed = 0;
+      for (const source of sources.filter((source) => source.enabled)) {
+        try {
+          await api.refreshCatalogSource(source.id);
+          refreshed += 1;
+        } catch (error) {
+          console.warn(`Catalog source refresh failed: ${source.id}`, error);
+        }
+      }
+      const [nextSources, nextSkills] = await Promise.all([
+        api.listCatalogSources(),
+        api.searchCatalogSkills(catalogQuery, catalogSort, catalogFilters),
+      ]);
+      setCatalogSources(nextSources);
+      setCatalogSkills(nextSkills);
+      setMessage(`已后台更新 ${refreshed} 个仓库源，仓库目录显示 ${nextSkills.length} 个 skills。`);
+    } catch (error) {
+      setMessage(`仓库目录后台更新失败: ${String(error)}`);
+    }
+  }
+
   async function saveCatalogSource(source: CatalogSource) {
     setBusy(true);
     try {
@@ -295,7 +320,10 @@ export function useAppState() {
   }
 
   useEffect(() => {
-    void refreshAll();
+    void (async () => {
+      await refreshAll();
+      await refreshCatalogOnStartup();
+    })();
   }, []);
 
   async function saveCustomAgent(override?: AgentProfile) {

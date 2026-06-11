@@ -1,6 +1,9 @@
 use crate::{
     adapter::{adapter_for, built_in_adapters, AgentAdapter},
-    catalog::{scan_catalog_repository, sort_catalog_skills},
+    catalog::{
+        scan_catalog_repository, scan_clawhub_api_cache, sort_catalog_skills,
+        CLAWHUB_API_CACHE_FILE,
+    },
     cherry_studio::CherryStudioAdapter,
     error::{AppError, AppResult},
     hash::{copy_dir_all, hash_dir},
@@ -23,7 +26,7 @@ use std::{
     path::{Component, Path, PathBuf},
     process::Command,
     sync::Arc,
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 use zip::ZipArchive;
 
@@ -190,7 +193,9 @@ impl AppService {
         let cache_path = self.catalog_cache_path(&source);
         fs::create_dir_all(self.catalog_cache_root())?;
 
-        if cache_path.join(".git").is_dir() {
+        let skill_count = if source.id == "clawhub" {
+            self.refresh_clawhub_api_cache(&cache_path)?
+        } else if cache_path.join(".git").is_dir() {
             let output = Command::new("git")
                 .arg("-C")
                 .arg(&cache_path)
@@ -203,6 +208,7 @@ impl AppService {
                     String::from_utf8_lossy(&output.stderr)
                 )));
             }
+            scan_catalog_repository(&cache_path, &source)?.len()
         } else {
             let output = Command::new("git")
                 .arg("clone")
@@ -217,14 +223,14 @@ impl AppService {
                     String::from_utf8_lossy(&output.stderr)
                 )));
             }
-        }
+            scan_catalog_repository(&cache_path, &source)?.len()
+        };
 
         source.last_refreshed_at = Some(chrono::Utc::now().to_rfc3339());
         source.cache_path = Some(cache_path.to_string_lossy().to_string());
         if source.kind == CatalogSourceKind::Custom {
             self.store.save_catalog_source(&source)?;
         }
-        let skill_count = scan_catalog_repository(&cache_path, &source)?.len();
         Ok(CatalogRefreshResult {
             source_id: source.id,
             refreshed: true,
@@ -253,7 +259,12 @@ impl AppService {
             if !cache_path.exists() {
                 continue;
             }
-            let mut source_skills = scan_catalog_repository(&cache_path, &source)?;
+            let mut source_skills =
+                if source.id == "clawhub" && cache_path.join(CLAWHUB_API_CACHE_FILE).exists() {
+                    scan_clawhub_api_cache(&cache_path, &source)?
+                } else {
+                    scan_catalog_repository(&cache_path, &source)?
+                };
             for skill in &mut source_skills {
                 if installed_titles.contains(&normalize_title(&skill.name)) {
                     skill.install_status = CatalogInstallStatus::Installed;
@@ -286,7 +297,13 @@ impl AppService {
             .ok_or_else(|| {
                 AppError::Message(format!("找不到 catalog skill: {}", catalog_skill_id))
             })?;
-        let source_path = Path::new(&skill.source_path);
+        let materialized_source;
+        let source_path = if skill.source_path.starts_with("clawhub://") {
+            materialized_source = self.materialize_clawhub_skill(&skill)?;
+            materialized_source.as_path()
+        } else {
+            Path::new(&skill.source_path)
+        };
         let source_dir_name = source_path
             .file_name()
             .and_then(|value| value.to_str())
@@ -727,6 +744,102 @@ impl AppService {
         Ok(workspace)
     }
 
+    fn refresh_clawhub_api_cache(&self, cache_path: &Path) -> AppResult<usize> {
+        fs::create_dir_all(cache_path)?;
+        let agent = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(45))
+            .build();
+        let mut cursor: Option<String> = None;
+        let mut items = Vec::new();
+
+        for _ in 0..20 {
+            let mut request = agent
+                .get("https://clawhub.ai/api/v1/skills")
+                .query("limit", "100");
+            if let Some(cursor_value) = cursor.as_deref() {
+                request = request.query("cursor", cursor_value);
+            }
+            let response = request.call().map_err(clawhub_http_error)?;
+            let text = response.into_string().map_err(|error| {
+                AppError::Message(format!("读取 ClawHub API 响应失败: {}", error))
+            })?;
+            let value = serde_json::from_str::<serde_json::Value>(&text)?;
+            if let Some(page_items) = value.get("items").and_then(|value| value.as_array()) {
+                items.extend(page_items.iter().cloned());
+            }
+            cursor = value
+                .get("nextCursor")
+                .and_then(|value| value.as_str())
+                .map(ToString::to_string);
+            if cursor.is_none() {
+                break;
+            }
+        }
+
+        let cache = serde_json::json!({
+            "items": items,
+            "fetchedAt": chrono::Utc::now().to_rfc3339(),
+        });
+        fs::write(
+            cache_path.join(CLAWHUB_API_CACHE_FILE),
+            serde_json::to_vec_pretty(&cache)?,
+        )?;
+        Ok(cache["items"].as_array().map_or(0, Vec::len))
+    }
+
+    fn materialize_clawhub_skill(&self, skill: &CatalogSkill) -> AppResult<PathBuf> {
+        let slug = skill
+            .source_path
+            .strip_prefix("clawhub://")
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| AppError::Message("ClawHub skill 来源无效。".to_string()))?;
+        let cache_path = self
+            .catalog_cache_root()
+            .join("clawhub")
+            .join("downloaded")
+            .join(safe_label(slug));
+        if cache_path.join("SKILL.md").exists()
+            || cache_path.join("skill.json").exists()
+            || cache_path.join("skill.yaml").exists()
+            || cache_path.join("skill.yml").exists()
+        {
+            return Ok(cache_path);
+        }
+
+        let mut reader = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .get("https://clawhub.ai/api/v1/download")
+            .query("slug", slug)
+            .call()
+            .map_err(clawhub_http_error)?
+            .into_reader();
+        let mut bytes = Vec::new();
+        reader
+            .read_to_end(&mut bytes)
+            .map_err(|error| AppError::Message(format!("下载 ClawHub skill 失败: {}", error)))?;
+        let extracted = self.unpack_zip_bytes(&bytes, slug)?;
+        let source = CatalogSource {
+            id: "clawhub".to_string(),
+            name: "ClawHub".to_string(),
+            url: "https://clawhub.ai/api/v1/skills".to_string(),
+            kind: CatalogSourceKind::BuiltIn,
+            icon: "clawhub".to_string(),
+            enabled: true,
+            last_refreshed_at: None,
+            cache_path: None,
+        };
+        let mut extracted_skills = scan_catalog_repository(&extracted, &source)?;
+        let Some(extracted_skill) = extracted_skills.pop() else {
+            return Err(AppError::Message(format!(
+                "ClawHub skill {} 的下载包中没有找到 SKILL.md。",
+                slug
+            )));
+        };
+        copy_dir_all(Path::new(&extracted_skill.source_path), &cache_path)?;
+        Ok(cache_path)
+    }
+
     fn unpack_zip_bytes(&self, bytes: &[u8], label: &str) -> AppResult<PathBuf> {
         let workspace = self.import_workspace(label)?;
         let extracted = workspace.join("expanded");
@@ -826,12 +939,25 @@ fn safe_label(label: &str) -> String {
     }
 }
 
+fn clawhub_http_error(error: ureq::Error) -> AppError {
+    match error {
+        ureq::Error::Status(code, response) => AppError::Message(format!(
+            "ClawHub API 请求失败: HTTP {} {}",
+            code,
+            response.status_text()
+        )),
+        ureq::Error::Transport(error) => {
+            AppError::Message(format!("ClawHub API 请求失败: {}", error))
+        }
+    }
+}
+
 fn built_in_catalog_sources() -> Vec<CatalogSource> {
     vec![
         CatalogSource {
             id: "clawhub".to_string(),
             name: "ClawHub".to_string(),
-            url: "https://github.com/openclaw/clawhub".to_string(),
+            url: "https://clawhub.ai/api/v1/skills".to_string(),
             kind: CatalogSourceKind::BuiltIn,
             icon: "clawhub".to_string(),
             enabled: true,
