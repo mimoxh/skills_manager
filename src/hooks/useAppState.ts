@@ -2,6 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import type {
   AgentProfile,
+  CatalogFilters,
+  CatalogSkill,
+  CatalogSort,
+  CatalogSource,
   ConflictPolicy,
   GroupedMcpServer,
   GroupedSkill,
@@ -19,6 +23,15 @@ const emptyCustom: AgentProfile = {
   adapterConfig: {},
 };
 
+const emptyCatalogFilters: CatalogFilters = {
+  sourceIds: [],
+  agentTypes: [],
+  installStatuses: [],
+  hasDownloadData: null,
+  timeWindowDays: null,
+  contentCapabilities: [],
+};
+
 export function useAppState() {
   const [skills, setSkills] = useState<GroupedSkill[]>([]);
   const [agents, setAgents] = useState<AgentProfile[]>([]);
@@ -31,6 +44,11 @@ export function useAppState() {
   const [noFullCoverageTitles, setNoFullCoverageTitles] = useState<Set<string>>(new Set());
   const [mcpServers, setMcpServers] = useState<GroupedMcpServer[]>([]);
   const [noFullCoverageMcpTitles, setNoFullCoverageMcpTitles] = useState<Set<string>>(new Set());
+  const [catalogSources, setCatalogSources] = useState<CatalogSource[]>([]);
+  const [catalogSkills, setCatalogSkills] = useState<CatalogSkill[]>([]);
+  const [catalogQuery, setCatalogQuery] = useState("");
+  const [catalogSort, setCatalogSort] = useState<CatalogSort>("updatedDesc");
+  const [catalogFilters, setCatalogFilters] = useState<CatalogFilters>(emptyCatalogFilters);
 
   const filteredSkills = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -78,6 +96,77 @@ export function useAppState() {
       setMcpServers(mcpData);
     } catch (error) {
       setMessage(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function searchCatalog(
+    nextQuery = catalogQuery,
+    nextSort = catalogSort,
+    nextFilters = catalogFilters,
+  ) {
+    setBusy(true);
+    try {
+      const [sources, skills] = await Promise.all([
+        api.listCatalogSources(),
+        api.searchCatalogSkills(nextQuery, nextSort, nextFilters),
+      ]);
+      setCatalogSources(sources);
+      setCatalogSkills(skills);
+      setMessage(`仓库目录显示 ${skills.length} 个 skills。`);
+    } catch (error) {
+      setMessage(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refreshCatalogSource(sourceId: string) {
+    setBusy(true);
+    try {
+      const result = await api.refreshCatalogSource(sourceId);
+      setMessage(result.message);
+      await searchCatalog();
+    } catch (error) {
+      setMessage(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveCatalogSource(source: CatalogSource) {
+    setBusy(true);
+    try {
+      await api.saveCatalogSource(source);
+      await searchCatalog();
+      setMessage(`已保存仓库源 ${source.name}。`);
+    } catch (error) {
+      setMessage(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function installCatalogSkill(
+    catalogSkillId: string,
+    targetAgentIds: string[],
+    conflictPolicy: ConflictPolicy,
+  ): Promise<InstallResult[]> {
+    if (!targetAgentIds.length) {
+      setMessage("请至少选择一个目标 Agent。");
+      return [];
+    }
+    setBusy(true);
+    try {
+      const results = await api.installCatalogSkill(catalogSkillId, targetAgentIds, conflictPolicy);
+      await refreshAll();
+      await searchCatalog();
+      setMessage(`已完成 ${results.length} 个安装任务。`);
+      return results;
+    } catch (error) {
+      setMessage(String(error));
+      throw error;
     } finally {
       setBusy(false);
     }
@@ -388,13 +477,15 @@ export function useAppState() {
 
   return {
     skills, filteredSkills,
+    catalogSources, catalogSkills, catalogQuery, catalogSort, catalogFilters,
     agents, filteredAgents,
     customAgent, setCustomAgent, saveCustomAgent, saveAgent: saveCustomAgent,
     message, setMessage,
-    busy, query, setQuery,
+    busy, query, setQuery, setCatalogQuery, setCatalogSort, setCatalogFilters,
     isInitialLoading,
     pendingImport, executeImport, cancelImport,
     refreshAll, syncSkillToAgents, deleteAgent, uninstallSkill, uninstallSkillFromAgents,
+    searchCatalog, refreshCatalogSource, saveCatalogSource, installCatalogSkill,
     handleSkillDrop, importFiles, fileToUpload,
     noFullCoverageTitles, toggleNoFullCoverage,
     mcpServers, refreshMcpServers, addMcpServer, updateMcpServer, removeMcpServer, toggleMcpServer,

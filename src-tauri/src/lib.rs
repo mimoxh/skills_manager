@@ -1,4 +1,5 @@
 pub mod adapter;
+pub mod catalog;
 pub mod cherry_db;
 pub mod cherry_studio;
 mod commands;
@@ -36,6 +37,11 @@ pub fn run() {
             rollback_last,
             toggle_no_full_coverage,
             toggle_no_full_coverage_mcp,
+            list_catalog_sources,
+            save_catalog_source,
+            refresh_catalog_source,
+            search_catalog_skills,
+            install_catalog_skill,
             scan_mcp_servers,
             add_mcp_server,
             update_mcp_server,

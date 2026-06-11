@@ -1,13 +1,16 @@
 use crate::{
     adapter::{adapter_for, built_in_adapters, AgentAdapter},
+    catalog::{scan_catalog_repository, sort_catalog_skills},
     cherry_studio::CherryStudioAdapter,
     error::{AppError, AppResult},
     hash::{copy_dir_all, hash_dir},
     manifest::{read_skill, scan_repository},
     mcp_service::McpService,
     models::{
-        AgentProfile, AgentSkillCopy, AgentType, ConflictPolicy, GroupedSkill, ImportSkillFile,
-        ImportSkillResult, InitialData, InstallResult,
+        AgentProfile, AgentSkillCopy, AgentType, CatalogFilters, CatalogInstallStatus,
+        CatalogRefreshResult, CatalogSkill, CatalogSort, CatalogSource, CatalogSourceKind,
+        ConflictPolicy, GroupedSkill, ImportSkillFile, ImportSkillResult, InitialData,
+        InstallResult,
     },
     store::AppStore,
 };
@@ -18,6 +21,7 @@ use std::{
     fs,
     io::{Cursor, Read},
     path::{Component, Path, PathBuf},
+    process::Command,
     sync::Arc,
     time::SystemTime,
 };
@@ -60,6 +64,18 @@ impl AppService {
         self.store.data_dir()
     }
 
+    pub fn catalog_cache_root(&self) -> PathBuf {
+        self.data_dir().join("catalog-repositories")
+    }
+
+    fn catalog_cache_path(&self, source: &CatalogSource) -> PathBuf {
+        source
+            .cache_path
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.catalog_cache_root().join(safe_label(&source.id)))
+    }
+
     pub fn backup_root(&self) -> PathBuf {
         self.store.backup_root()
     }
@@ -80,7 +96,8 @@ impl AppService {
         let agents = self.list_agents().unwrap_or_default();
         let skills = self.scan_agent_skills().unwrap_or_default();
         let no_full_coverage_titles = self.store.list_no_full_coverage().unwrap_or_default();
-        let no_full_coverage_mcp_titles = self.store.list_no_full_coverage_mcp().unwrap_or_default();
+        let no_full_coverage_mcp_titles =
+            self.store.list_no_full_coverage_mcp().unwrap_or_default();
         Ok(InitialData {
             skills,
             agents,
@@ -123,6 +140,235 @@ impl AppService {
 
     pub fn remove_agent(&self, agent_id: &str) -> AppResult<()> {
         self.store.remove_agent(agent_id)
+    }
+
+    pub fn list_catalog_sources(&self) -> AppResult<Vec<CatalogSource>> {
+        let mut sources = built_in_catalog_sources();
+        sources.extend(self.store.list_catalog_sources()?);
+        for source in &mut sources {
+            let cache_path = self.catalog_cache_path(source);
+            if source.cache_path.is_none() {
+                source.cache_path = Some(cache_path.to_string_lossy().to_string());
+            }
+            if source.last_refreshed_at.is_none() && cache_path.exists() {
+                source.last_refreshed_at = fs::metadata(&cache_path)
+                    .ok()
+                    .and_then(|metadata| metadata.modified().ok())
+                    .map(|time| DateTime::<Utc>::from(time).to_rfc3339());
+            }
+        }
+        Ok(sources)
+    }
+
+    pub fn save_catalog_source(&self, mut source: CatalogSource) -> AppResult<CatalogSource> {
+        if source.id.trim().is_empty() {
+            source.id = format!("custom-{}", chrono::Utc::now().timestamp_millis());
+        }
+        source.kind = CatalogSourceKind::Custom;
+        source.icon = if source.icon.trim().is_empty() {
+            "custom".to_string()
+        } else {
+            source.icon
+        };
+        source.enabled = true;
+        source.cache_path = Some(
+            self.catalog_cache_root()
+                .join(safe_label(&source.id))
+                .to_string_lossy()
+                .to_string(),
+        );
+        self.store.save_catalog_source(&source)?;
+        Ok(source)
+    }
+
+    pub fn refresh_catalog_source(&self, source_id: &str) -> AppResult<CatalogRefreshResult> {
+        let mut source = self
+            .list_catalog_sources()?
+            .into_iter()
+            .find(|source| source.id == source_id)
+            .ok_or_else(|| AppError::Message(format!("找不到仓库源: {}", source_id)))?;
+        let cache_path = self.catalog_cache_path(&source);
+        fs::create_dir_all(self.catalog_cache_root())?;
+
+        if cache_path.exists() {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(&cache_path)
+                .arg("pull")
+                .arg("--ff-only")
+                .output()?;
+            if !output.status.success() {
+                return Err(AppError::Message(format!(
+                    "刷新仓库失败: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )));
+            }
+        } else {
+            let output = Command::new("git")
+                .arg("clone")
+                .arg("--depth")
+                .arg("1")
+                .arg(&source.url)
+                .arg(&cache_path)
+                .output()?;
+            if !output.status.success() {
+                return Err(AppError::Message(format!(
+                    "克隆仓库失败: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )));
+            }
+        }
+
+        source.last_refreshed_at = Some(chrono::Utc::now().to_rfc3339());
+        source.cache_path = Some(cache_path.to_string_lossy().to_string());
+        if source.kind == CatalogSourceKind::Custom {
+            self.store.save_catalog_source(&source)?;
+        }
+        let skill_count = scan_catalog_repository(&cache_path, &source)?.len();
+        Ok(CatalogRefreshResult {
+            source_id: source.id,
+            refreshed: true,
+            skill_count,
+            message: format!("已刷新 {} 个 catalog skills。", skill_count),
+        })
+    }
+
+    pub fn search_catalog_skills(
+        &self,
+        query: Option<&str>,
+        sort: CatalogSort,
+        filters: CatalogFilters,
+    ) -> AppResult<Vec<CatalogSkill>> {
+        let sources = self.list_catalog_sources()?;
+        let installed = self.scan_agent_skills().unwrap_or_default();
+        let installed_titles = installed
+            .iter()
+            .map(|skill| normalize_title(&skill.title))
+            .collect::<HashSet<_>>();
+        let q = query.unwrap_or("").trim().to_ascii_lowercase();
+        let mut skills = Vec::new();
+
+        for source in sources.into_iter().filter(|source| source.enabled) {
+            let cache_path = self.catalog_cache_path(&source);
+            if !cache_path.exists() {
+                continue;
+            }
+            let mut source_skills = scan_catalog_repository(&cache_path, &source)?;
+            for skill in &mut source_skills {
+                if installed_titles.contains(&normalize_title(&skill.name)) {
+                    skill.install_status = CatalogInstallStatus::Installed;
+                }
+            }
+            skills.extend(source_skills);
+        }
+
+        let filtered = skills
+            .into_iter()
+            .filter(|skill| catalog_matches_query(skill, &q))
+            .filter(|skill| catalog_matches_filters(skill, &filters))
+            .collect::<Vec<_>>();
+        Ok(sort_catalog_skills(filtered, sort))
+    }
+
+    pub fn install_catalog_skill(
+        &self,
+        catalog_skill_id: &str,
+        target_agent_ids: Vec<String>,
+        conflict_policy: ConflictPolicy,
+    ) -> AppResult<Vec<InstallResult>> {
+        if target_agent_ids.is_empty() {
+            return Err(AppError::Message("请至少选择一个目标 Agent。".to_string()));
+        }
+        let skill = self
+            .search_catalog_skills(None, CatalogSort::UpdatedDesc, CatalogFilters::default())?
+            .into_iter()
+            .find(|skill| skill.id == catalog_skill_id)
+            .ok_or_else(|| {
+                AppError::Message(format!("找不到 catalog skill: {}", catalog_skill_id))
+            })?;
+        let source_path = Path::new(&skill.source_path);
+        let source_dir_name = source_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| AppError::Message("来源 skill 路径无效".to_string()))?;
+        let source_fingerprint = hash_dir(source_path).unwrap_or_default();
+        let agents = self.list_agents()?;
+        let agent_map: HashMap<_, _> = agents
+            .into_iter()
+            .map(|agent| (agent.id.clone(), agent))
+            .collect();
+        let mut results = Vec::new();
+
+        for agent_id in target_agent_ids {
+            let agent = agent_map
+                .get(&agent_id)
+                .ok_or_else(|| AppError::Message(format!("找不到 Agent: {}", agent_id)))?;
+            fs::create_dir_all(&agent.skills_path)?;
+            let mut target = Path::new(&agent.skills_path).join(source_dir_name);
+            let mut action = if target.exists() {
+                "updated"
+            } else {
+                "installed"
+            }
+            .to_string();
+            let mut backup_path = None;
+
+            if target.exists() {
+                match conflict_policy {
+                    ConflictPolicy::Prompt => {
+                        return Err(AppError::Message(
+                            "目标已存在。请先选择备份覆盖、跳过冲突或另存副本策略。".to_string(),
+                        ));
+                    }
+                    ConflictPolicy::Skip => {
+                        results.push(InstallResult {
+                            agent_id: agent.id.clone(),
+                            skill_id: skill.name.clone(),
+                            action: "skipped".to_string(),
+                            target_path: target.to_string_lossy().to_string(),
+                            backup_path: None,
+                            message: format!("已跳过 {}", skill.name),
+                        });
+                        continue;
+                    }
+                    ConflictPolicy::Rename => {
+                        let suffix = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
+                        target = Path::new(&agent.skills_path)
+                            .join(format!("{}-{}", source_dir_name, suffix));
+                        action = "renamed".to_string();
+                    }
+                    ConflictPolicy::BackupOverwrite => {
+                        let backup = self
+                            .backup_root()
+                            .join(safe_label(&agent.id))
+                            .join(safe_label(&skill.name))
+                            .join(chrono::Utc::now().format("%Y%m%d%H%M%S").to_string());
+                        copy_dir_all(&target, &backup)?;
+                        backup_path = Some(backup.to_string_lossy().to_string());
+                    }
+                }
+            }
+
+            copy_dir_all(source_path, &target)?;
+            self.store.record_install(
+                &agent.id,
+                &skill.name,
+                &source_fingerprint,
+                &target.to_string_lossy(),
+                &action,
+                backup_path.as_deref(),
+            )?;
+            results.push(InstallResult {
+                agent_id: agent.id.clone(),
+                skill_id: skill.name.clone(),
+                action,
+                target_path: target.to_string_lossy().to_string(),
+                backup_path,
+                message: format!("已安装 {} 到 {}", skill.name, agent.name),
+            });
+        }
+        Ok(results)
     }
 
     pub fn scan_agent_skills(&self) -> AppResult<Vec<GroupedSkill>> {
@@ -279,10 +525,15 @@ impl AppService {
             .join(skill_id)
             .to_string_lossy()
             .to_string();
-        self.store.record_uninstall(agent_id, skill_id, &target_path, None)
+        self.store
+            .record_uninstall(agent_id, skill_id, &target_path, None)
     }
 
-    pub fn uninstall_skill_from_agents(&self, skill_id: &str, agent_ids: &[String]) -> AppResult<()> {
+    pub fn uninstall_skill_from_agents(
+        &self,
+        skill_id: &str,
+        agent_ids: &[String],
+    ) -> AppResult<()> {
         for agent_id in agent_ids {
             self.uninstall_skill(skill_id, agent_id)?;
         }
@@ -335,18 +586,37 @@ impl AppService {
     ) -> AppResult<ImportSkillResult> {
         let dirs = self.manifest_source_dirs(source_root)?;
         if dirs.is_empty() {
-            return Ok(ImportSkillResult {
-                imported: 0,
-                skipped: 0,
-                message: "没有发现可识别的 skill manifest。".to_string(),
-            });
+            // Provide a more descriptive error with directory contents hint
+            let mut hint = String::new();
+            if let Ok(entries) = fs::read_dir(source_root) {
+                let names: Vec<String> = entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| {
+                        let name = e.file_name().to_string_lossy().to_string();
+                        if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                            format!("{}/", name)
+                        } else {
+                            name
+                        }
+                    })
+                    .collect();
+                if !names.is_empty() {
+                    let preview = if names.len() > 5 {
+                        format!("{}... 等 {} 项", names[..5].join(", "), names.len())
+                    } else {
+                        names.join(", ")
+                    };
+                    hint = format!("，目录内容：[{}]", preview);
+                }
+            }
+            return Err(AppError::Message(format!(
+                "没有发现可识别的 skill manifest（需要 skill.json、skill.yaml 或 skill.yml）{}。",
+                hint
+            )));
         }
 
         let agents = self.list_agents()?;
-        let agent_map: HashMap<_, _> = agents
-            .into_iter()
-            .map(|a| (a.id.clone(), a))
-            .collect();
+        let agent_map: HashMap<_, _> = agents.into_iter().map(|a| (a.id.clone(), a)).collect();
 
         let mut imported = 0;
         let mut skipped = 0;
@@ -359,9 +629,9 @@ impl AppService {
                 .ok_or_else(|| AppError::Message("skill 目录名无效".to_string()))?;
 
             for agent_id in target_agent_ids {
-                let agent = agent_map.get(agent_id).ok_or_else(|| {
-                    AppError::Message(format!("找不到 Agent: {}", agent_id))
-                })?;
+                let agent = agent_map
+                    .get(agent_id)
+                    .ok_or_else(|| AppError::Message(format!("找不到 Agent: {}", agent_id)))?;
                 fs::create_dir_all(&agent.skills_path)?;
                 let mut target = Path::new(&agent.skills_path).join(skill_dir_name);
 
@@ -369,7 +639,8 @@ impl AppService {
                     match conflict_policy {
                         ConflictPolicy::Prompt => {
                             return Err(AppError::Message(
-                                "目标已存在。请先选择备份覆盖、跳过冲突或另存副本策略。".to_string(),
+                                "目标已存在。请先选择备份覆盖、跳过冲突或另存副本策略。"
+                                    .to_string(),
                             ));
                         }
                         ConflictPolicy::Skip => {
@@ -462,21 +733,58 @@ impl AppService {
         fs::create_dir_all(&extracted)?;
         let mut archive = ZipArchive::new(Cursor::new(bytes))?;
 
+        let mut extracted_count = 0u32;
+        let mut skipped_count = 0u32;
+
         for index in 0..archive.len() {
             let mut file = archive.by_index(index)?;
             if file.is_dir() {
                 continue;
             }
-            let Some(enclosed) = file.enclosed_name().map(PathBuf::from) else {
-                continue;
+
+            // Try enclosed_name first (safest), fall back to sanitized raw name
+            let file_path = match file.enclosed_name().map(PathBuf::from) {
+                Some(path) => path,
+                None => {
+                    // Fall back to raw name with manual sanitization
+                    let raw_name = file.name().replace('\\', "/");
+                    let sanitized = sanitize_zip_path(&raw_name);
+                    match sanitized {
+                        Some(path) => path,
+                        None => {
+                            skipped_count += 1;
+                            continue;
+                        }
+                    }
+                }
             };
-            let destination = extracted.join(enclosed);
+
+            // Skip empty paths
+            if file_path.as_os_str().is_empty() {
+                skipped_count += 1;
+                continue;
+            }
+
+            let destination = extracted.join(&file_path);
             if let Some(parent) = destination.parent() {
                 fs::create_dir_all(parent)?;
             }
             let mut contents = Vec::new();
             file.read_to_end(&mut contents)?;
             fs::write(destination, contents)?;
+            extracted_count += 1;
+        }
+
+        if extracted_count == 0 {
+            let detail = if skipped_count > 0 {
+                format!("（{} 个文件因路径不安全被跳过）", skipped_count)
+            } else {
+                String::new()
+            };
+            return Err(AppError::Message(format!(
+                "zip 文件中没有可提取的文件{}。",
+                detail
+            )));
         }
 
         Ok(extracted)
@@ -516,6 +824,161 @@ fn safe_label(label: &str) -> String {
     } else {
         value
     }
+}
+
+fn built_in_catalog_sources() -> Vec<CatalogSource> {
+    vec![
+        CatalogSource {
+            id: "clawhub".to_string(),
+            name: "ClawHub".to_string(),
+            url: "https://github.com/openclaw/skills".to_string(),
+            kind: CatalogSourceKind::BuiltIn,
+            icon: "clawhub".to_string(),
+            enabled: true,
+            last_refreshed_at: None,
+            cache_path: None,
+        },
+        CatalogSource {
+            id: "claude".to_string(),
+            name: "Claude".to_string(),
+            url: "https://github.com/anthropics/skills".to_string(),
+            kind: CatalogSourceKind::BuiltIn,
+            icon: "claude".to_string(),
+            enabled: true,
+            last_refreshed_at: None,
+            cache_path: None,
+        },
+        CatalogSource {
+            id: "codex".to_string(),
+            name: "Codex".to_string(),
+            url: "https://github.com/openai/skills".to_string(),
+            kind: CatalogSourceKind::BuiltIn,
+            icon: "codex".to_string(),
+            enabled: true,
+            last_refreshed_at: None,
+            cache_path: None,
+        },
+    ]
+}
+
+fn catalog_matches_query(skill: &CatalogSkill, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    let fields = [
+        skill.name.as_str(),
+        skill.description.as_deref().unwrap_or(""),
+        skill.source_name.as_str(),
+        skill.relative_path.as_str(),
+    ];
+    fields
+        .iter()
+        .any(|field| field.to_ascii_lowercase().contains(query))
+        || skill
+            .tags
+            .iter()
+            .any(|tag| tag.to_ascii_lowercase().contains(query))
+}
+
+fn catalog_matches_filters(skill: &CatalogSkill, filters: &CatalogFilters) -> bool {
+    if !filters.source_ids.is_empty() && !filters.source_ids.contains(&skill.source_id) {
+        return false;
+    }
+    if !filters.agent_types.is_empty()
+        && !filters.agent_types.iter().any(|agent| {
+            skill
+                .supported_agents
+                .iter()
+                .any(|supported| supported.eq_ignore_ascii_case(agent))
+        })
+    {
+        return false;
+    }
+    if !filters.install_statuses.is_empty()
+        && !filters.install_statuses.contains(&skill.install_status)
+    {
+        return false;
+    }
+    if let Some(has_data) = filters.has_download_data {
+        let skill_has_data = skill.download_count.is_some() || skill.install_count.is_some();
+        if skill_has_data != has_data {
+            return false;
+        }
+    }
+    if !filters.content_capabilities.is_empty() {
+        for capability in &filters.content_capabilities {
+            let matches = match capability.as_str() {
+                "scripts" => skill.has_scripts,
+                "references" => skill.has_references,
+                "assets" => skill.has_assets,
+                "skillMdOnly" => {
+                    skill.has_skill_md
+                        && !skill.has_scripts
+                        && !skill.has_references
+                        && !skill.has_assets
+                }
+                _ => true,
+            };
+            if !matches {
+                return false;
+            }
+        }
+    }
+    if let Some(days) = filters.time_window_days {
+        let Some(updated_at) = &skill.updated_at else {
+            return false;
+        };
+        let Ok(parsed) = DateTime::parse_from_rfc3339(updated_at) else {
+            return false;
+        };
+        let cutoff = Utc::now() - chrono::Duration::days(days);
+        if parsed.with_timezone(&Utc) < cutoff {
+            return false;
+        }
+    }
+    true
+}
+
+/// Sanitize a raw zip entry path for safe extraction.
+/// Returns None if the path is unsafe (absolute, contains traversal, or empty).
+fn sanitize_zip_path(raw: &str) -> Option<PathBuf> {
+    let path = Path::new(raw);
+    let mut safe = PathBuf::new();
+    let mut depth = 0i32;
+
+    for component in path.components() {
+        match component {
+            Component::Normal(name) => {
+                let s = name.to_string_lossy();
+                // Reject null bytes
+                if s.contains('\0') {
+                    return None;
+                }
+                safe.push(name);
+                depth += 1;
+            }
+            Component::ParentDir => {
+                // Allow ../ only if we have depth to spare
+                depth -= 1;
+                if depth < 0 {
+                    return None;
+                }
+                safe.pop();
+            }
+            Component::CurDir => {
+                // Skip ./ components
+            }
+            _ => {
+                // Reject absolute paths, drive letters, etc.
+                return None;
+            }
+        }
+    }
+
+    if safe.as_os_str().is_empty() {
+        return None;
+    }
+    Some(safe)
 }
 
 fn scan_agent_skill_copies(agent: &AgentProfile) -> AppResult<Vec<AgentSkillCopy>> {
@@ -600,10 +1063,14 @@ fn group_agent_skills(agents: &[AgentProfile], copies: Vec<AgentSkillCopy>) -> V
 
 /// Check if a description contains meaningful text (not just symbols/punctuation).
 fn is_valid_description(desc: &str) -> bool {
-    desc.chars().any(|c| c.is_alphanumeric() || c.is_ascii_alphabetic() || ('\u{4e00}'..='\u{9fff}').contains(&c))
+    desc.chars().any(|c| {
+        c.is_alphanumeric() || c.is_ascii_alphabetic() || ('\u{4e00}'..='\u{9fff}').contains(&c)
+    })
 }
 
-fn read_agent_skill_info(skill_path: &Path) -> (String, Option<String>, Option<String>, Option<String>) {
+fn read_agent_skill_info(
+    skill_path: &Path,
+) -> (String, Option<String>, Option<String>, Option<String>) {
     for name in ["skill.json", "skill.yaml", "skill.yml"] {
         let manifest_path = skill_path.join(name);
         if !manifest_path.exists() {
@@ -723,7 +1190,13 @@ fn read_markdown_frontmatter(text: &str) -> Option<(String, Option<String>, Opti
         let key = key.trim();
         let value = value.trim();
         // Detect YAML block scalar indicators (| or >)
-        if value == "|" || value == ">" || value == "|-" || value == ">-" || value == "|+" || value == ">+" {
+        if value == "|"
+            || value == ">"
+            || value == "|-"
+            || value == ">-"
+            || value == "|+"
+            || value == ">+"
+        {
             collecting_block = Some(key.to_string());
             block_lines.clear();
             continue;
@@ -867,7 +1340,11 @@ mod tests {
             if path.is_dir() {
                 collect_files_recursive(base, &path, out);
             } else {
-                let relative = path.strip_prefix(base).unwrap().to_string_lossy().to_string();
+                let relative = path
+                    .strip_prefix(base)
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
                 out.push(ImportSkillFile {
                     relative_path: relative,
                     bytes: fs::read(&path).unwrap(),
@@ -941,8 +1418,12 @@ mod tests {
         let agent_dir = tempfile::tempdir().unwrap();
         let service = test_service_with_agent(agent_dir.path());
 
-        let result = service
-            .import_uploaded_files("empty", &[], &["test-agent".into()], ConflictPolicy::Skip);
+        let result = service.import_uploaded_files(
+            "empty",
+            &[],
+            &["test-agent".into()],
+            ConflictPolicy::Skip,
+        );
         assert!(result.is_err());
     }
 
@@ -972,7 +1453,12 @@ mod tests {
             bytes: zip_bytes,
         }];
         let result = service
-            .import_uploaded_files("demo.zip", &files, &["test-agent".into()], ConflictPolicy::Skip)
+            .import_uploaded_files(
+                "demo.zip",
+                &files,
+                &["test-agent".into()],
+                ConflictPolicy::Skip,
+            )
             .unwrap();
         assert_eq!(result.imported, 1);
         assert!(agent_dir.path().join("demo").join("skill.json").exists());
@@ -1004,15 +1490,30 @@ mod tests {
 
         assert_eq!(
             read_agent_skill_info(&root.path().join("manifest")),
-            ("Manifest Title".to_string(), Some("2.0.0".to_string()), None, Some("# Ignored".to_string()))
+            (
+                "Manifest Title".to_string(),
+                Some("2.0.0".to_string()),
+                None,
+                Some("# Ignored".to_string())
+            )
         );
         assert_eq!(
             read_agent_skill_info(&root.path().join("frontmatter")),
-            ("Frontmatter Title".to_string(), Some("1.2.3".to_string()), None, Some("# Ignored".to_string()))
+            (
+                "Frontmatter Title".to_string(),
+                Some("1.2.3".to_string()),
+                None,
+                Some("# Ignored".to_string())
+            )
         );
         assert_eq!(
             read_agent_skill_info(&root.path().join("heading")),
-            ("Heading Title".to_string(), None, None, Some("# Heading Title".to_string()))
+            (
+                "Heading Title".to_string(),
+                None,
+                None,
+                Some("# Heading Title".to_string())
+            )
         );
         assert_eq!(
             read_agent_skill_info(&root.path().join("directory")),
@@ -1050,8 +1551,7 @@ mod tests {
         )
         .unwrap();
 
-        let (title, version, description, _) =
-            read_agent_skill_info(&root.path().join("block-gt"));
+        let (title, version, description, _) = read_agent_skill_info(&root.path().join("block-gt"));
         assert_eq!(title, "test-skill");
         assert_eq!(version, Some("1.0.0".to_string()));
         assert_eq!(
@@ -1067,13 +1567,9 @@ mod tests {
         )
         .unwrap();
 
-        let (title, _, description, _) =
-            read_agent_skill_info(&root.path().join("block-eof"));
+        let (title, _, description, _) = read_agent_skill_info(&root.path().join("block-eof"));
         assert_eq!(title, "end-skill");
-        assert_eq!(
-            description,
-            Some("Line one.\nLine two.".to_string())
-        );
+        assert_eq!(description, Some("Line one.\nLine two.".to_string()));
     }
 
     #[test]
@@ -1190,7 +1686,13 @@ mod tests {
     #[test]
     fn skips_hidden_directories_when_scanning_agent_skills() {
         let root = tempfile::tempdir().unwrap();
-        write_agent_skill(root.path(), "real-skill", Some("Real Skill"), Some("1.0.0"), "# Real");
+        write_agent_skill(
+            root.path(),
+            "real-skill",
+            Some("Real Skill"),
+            Some("1.0.0"),
+            "# Real",
+        );
         fs::create_dir_all(root.path().join(".system")).unwrap();
         fs::write(root.path().join(".system").join("config.json"), "{}").unwrap();
         fs::create_dir_all(root.path().join(".hidden")).unwrap();

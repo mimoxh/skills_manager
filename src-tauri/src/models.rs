@@ -163,6 +163,113 @@ pub struct InitialData {
     pub no_full_coverage_mcp_titles: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CatalogSourceKind {
+    #[serde(rename = "builtIn")]
+    BuiltIn,
+    #[serde(rename = "custom")]
+    Custom,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogSource {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+    pub kind: CatalogSourceKind,
+    pub icon: String,
+    pub enabled: bool,
+    #[serde(default)]
+    pub last_refreshed_at: Option<String>,
+    #[serde(default)]
+    pub cache_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CatalogSort {
+    #[serde(rename = "downloads")]
+    Downloads,
+    #[serde(rename = "publishedDesc")]
+    PublishedDesc,
+    #[serde(rename = "updatedDesc")]
+    UpdatedDesc,
+    #[serde(rename = "source")]
+    Source,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CatalogInstallStatus {
+    #[serde(rename = "notInstalled")]
+    NotInstalled,
+    #[serde(rename = "installed")]
+    Installed,
+    #[serde(rename = "updateAvailable")]
+    UpdateAvailable,
+    #[serde(rename = "conflict")]
+    Conflict,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogSkill {
+    pub id: String,
+    pub name: String,
+    pub source_id: String,
+    pub source_name: String,
+    pub source_icon: String,
+    pub source_path: String,
+    pub relative_path: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub supported_agents: Vec<String>,
+    #[serde(default)]
+    pub published_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    #[serde(default)]
+    pub download_count: Option<u64>,
+    #[serde(default)]
+    pub install_count: Option<u64>,
+    pub has_skill_md: bool,
+    pub has_scripts: bool,
+    pub has_references: bool,
+    pub has_assets: bool,
+    pub install_status: CatalogInstallStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogFilters {
+    #[serde(default)]
+    pub source_ids: Vec<String>,
+    #[serde(default)]
+    pub agent_types: Vec<String>,
+    #[serde(default)]
+    pub install_statuses: Vec<CatalogInstallStatus>,
+    #[serde(default)]
+    pub has_download_data: Option<bool>,
+    #[serde(default)]
+    pub time_window_days: Option<i64>,
+    #[serde(default)]
+    pub content_capabilities: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogRefreshResult {
+    pub source_id: String,
+    pub refreshed: bool,
+    pub skill_count: usize,
+    pub message: String,
+}
+
 // ── MCP 数据模型 ──────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

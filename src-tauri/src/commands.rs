@@ -1,7 +1,8 @@
 use crate::{
     error::AppResult,
     models::{
-        AgentProfile, ConflictPolicy, GroupedMcpServer, GroupedSkill, ImportSkillFile,
+        AgentProfile, CatalogFilters, CatalogRefreshResult, CatalogSkill, CatalogSort,
+        CatalogSource, ConflictPolicy, GroupedMcpServer, GroupedSkill, ImportSkillFile,
         ImportSkillResult, InitialData, InstallResult, McpOperationResult, McpServerConfig,
     },
     service::AppService,
@@ -93,19 +94,54 @@ pub fn rollback_last(
 }
 
 #[tauri::command]
-pub fn toggle_no_full_coverage(
-    title: String,
-    service: State<AppService>,
-) -> AppResult<bool> {
+pub fn toggle_no_full_coverage(title: String, service: State<AppService>) -> AppResult<bool> {
     service.toggle_no_full_coverage(&title)
 }
 
 #[tauri::command]
-pub fn toggle_no_full_coverage_mcp(
-    title: String,
-    service: State<AppService>,
-) -> AppResult<bool> {
+pub fn toggle_no_full_coverage_mcp(title: String, service: State<AppService>) -> AppResult<bool> {
     service.toggle_no_full_coverage_mcp(&title)
+}
+
+#[tauri::command]
+pub fn list_catalog_sources(service: State<AppService>) -> AppResult<Vec<CatalogSource>> {
+    service.list_catalog_sources()
+}
+
+#[tauri::command]
+pub fn save_catalog_source(
+    source: CatalogSource,
+    service: State<AppService>,
+) -> AppResult<CatalogSource> {
+    service.save_catalog_source(source)
+}
+
+#[tauri::command]
+pub fn refresh_catalog_source(
+    source_id: String,
+    service: State<AppService>,
+) -> AppResult<CatalogRefreshResult> {
+    service.refresh_catalog_source(&source_id)
+}
+
+#[tauri::command]
+pub fn search_catalog_skills(
+    query: Option<String>,
+    sort: CatalogSort,
+    filters: CatalogFilters,
+    service: State<AppService>,
+) -> AppResult<Vec<CatalogSkill>> {
+    service.search_catalog_skills(query.as_deref(), sort, filters)
+}
+
+#[tauri::command]
+pub fn install_catalog_skill(
+    catalog_skill_id: String,
+    target_agent_ids: Vec<String>,
+    conflict_policy: ConflictPolicy,
+    service: State<AppService>,
+) -> AppResult<Vec<InstallResult>> {
+    service.install_catalog_skill(&catalog_skill_id, target_agent_ids, conflict_policy)
 }
 
 // ── MCP Commands ──────────────────────────────────────────────────────
@@ -124,7 +160,9 @@ pub fn add_mcp_server(
     service: State<AppService>,
 ) -> AppResult<Vec<McpOperationResult>> {
     let agents = service.list_agents()?;
-    service.mcp().add_mcp_server(&agents, &agent_ids, &config, conflict_policy)
+    service
+        .mcp()
+        .add_mcp_server(&agents, &agent_ids, &config, conflict_policy)
 }
 
 #[tauri::command]
@@ -135,7 +173,9 @@ pub fn update_mcp_server(
     service: State<AppService>,
 ) -> AppResult<McpOperationResult> {
     let agents = service.list_agents()?;
-    service.mcp().update_mcp_server(&agents, &agent_id, &original_name, &config)
+    service
+        .mcp()
+        .update_mcp_server(&agents, &agent_id, &original_name, &config)
 }
 
 #[tauri::command]
@@ -156,7 +196,9 @@ pub fn toggle_mcp_server(
     service: State<AppService>,
 ) -> AppResult<McpOperationResult> {
     let agents = service.list_agents()?;
-    service.mcp().toggle_mcp_server(&agents, &agent_id, &name, disabled)
+    service
+        .mcp()
+        .toggle_mcp_server(&agents, &agent_id, &name, disabled)
 }
 
 #[tauri::command]
@@ -168,7 +210,13 @@ pub fn sync_mcp_server(
     service: State<AppService>,
 ) -> AppResult<Vec<McpOperationResult>> {
     let agents = service.list_agents()?;
-    service.mcp().sync_mcp_server(&agents, &server_name, &source_agent_id, &target_agent_ids, conflict_policy)
+    service.mcp().sync_mcp_server(
+        &agents,
+        &server_name,
+        &source_agent_id,
+        &target_agent_ids,
+        conflict_policy,
+    )
 }
 
 #[tauri::command]
@@ -178,5 +226,7 @@ pub fn remove_mcp_server_from_agents(
     service: State<AppService>,
 ) -> AppResult<Vec<McpOperationResult>> {
     let agents = service.list_agents()?;
-    service.mcp().remove_mcp_server_from_agents(&agents, &server_name, &agent_ids)
+    service
+        .mcp()
+        .remove_mcp_server_from_agents(&agents, &server_name, &agent_ids)
 }

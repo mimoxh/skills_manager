@@ -3,6 +3,7 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import { Titlebar } from "./components/layout/Titlebar";
 import { Sidebar } from "./components/layout/Sidebar";
 import { SkillsView, ImportAgentDialog } from "./components/views/SkillsView";
+import { CatalogView } from "./components/views/CatalogView";
 import { McpView } from "./components/views/McpView";
 import { useAppState } from "./hooks/useAppState";
 import type { ImportSkillFile } from "./types";
@@ -10,7 +11,7 @@ import type { ImportSkillFile } from "./types";
 const OverviewView = lazy(() => import("./components/views/OverviewView").then((m) => ({ default: m.OverviewView })));
 const AgentsView = lazy(() => import("./components/views/AgentsView").then((m) => ({ default: m.AgentsView })));
 
-export type View = "overview" | "skills" | "agents" | "mcp";
+export type View = "overview" | "skills" | "catalog" | "agents" | "mcp";
 export type SkillsFilter = "all" | "covered" | "partial" | "needed";
 
 function ViewLoading() {
@@ -46,9 +47,14 @@ export default function App() {
 
   async function handleUploadChange(event: ChangeEvent<HTMLInputElement>) {
     const files = [...(event.target.files ?? [])];
-    await state.importFiles(files[0]?.name ?? "upload", await Promise.all(files.map((f) => fileToUpload(f))));
-    if (folderInputRef.current) folderInputRef.current.value = "";
-    if (archiveInputRef.current) archiveInputRef.current.value = "";
+    try {
+      await state.importFiles(files[0]?.name ?? "upload", await Promise.all(files.map((f) => fileToUpload(f))));
+    } catch (error) {
+      state.setMessage(String(error));
+    } finally {
+      if (folderInputRef.current) folderInputRef.current.value = "";
+      if (archiveInputRef.current) archiveInputRef.current.value = "";
+    }
   }
 
   function navigateTo(view: View, filter?: SkillsFilter) {
@@ -93,6 +99,25 @@ export default function App() {
               onRefresh={state.refreshAll}
             />
           </Suspense>
+        );
+      case "catalog":
+        return (
+          <CatalogView
+            agents={state.agents}
+            busy={state.busy}
+            sources={state.catalogSources}
+            skills={state.catalogSkills}
+            query={state.catalogQuery}
+            sort={state.catalogSort}
+            filters={state.catalogFilters}
+            onQuery={state.setCatalogQuery}
+            onSort={state.setCatalogSort}
+            onFilters={state.setCatalogFilters}
+            onSearch={state.searchCatalog}
+            onRefreshSource={state.refreshCatalogSource}
+            onSaveSource={state.saveCatalogSource}
+            onInstall={state.installCatalogSkill}
+          />
         );
       case "mcp":
         return (

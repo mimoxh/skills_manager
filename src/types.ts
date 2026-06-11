@@ -76,6 +76,59 @@ export interface InitialData {
   noFullCoverageMcpTitles: string[];
 }
 
+export type CatalogSourceKind = "builtIn" | "custom";
+export type CatalogSort = "downloads" | "publishedDesc" | "updatedDesc" | "source";
+export type CatalogInstallStatus = "notInstalled" | "installed" | "updateAvailable" | "conflict";
+
+export interface CatalogSource {
+  id: string;
+  name: string;
+  url: string;
+  kind: CatalogSourceKind;
+  icon: string;
+  enabled: boolean;
+  lastRefreshedAt?: string | null;
+  cachePath?: string | null;
+}
+
+export interface CatalogSkill {
+  id: string;
+  name: string;
+  sourceId: string;
+  sourceName: string;
+  sourceIcon: string;
+  sourcePath: string;
+  relativePath: string;
+  description?: string | null;
+  tags: string[];
+  supportedAgents: string[];
+  publishedAt?: string | null;
+  updatedAt?: string | null;
+  downloadCount?: number | null;
+  installCount?: number | null;
+  hasSkillMd: boolean;
+  hasScripts: boolean;
+  hasReferences: boolean;
+  hasAssets: boolean;
+  installStatus: CatalogInstallStatus;
+}
+
+export interface CatalogFilters {
+  sourceIds: string[];
+  agentTypes: string[];
+  installStatuses: CatalogInstallStatus[];
+  hasDownloadData?: boolean | null;
+  timeWindowDays?: number | null;
+  contentCapabilities: string[];
+}
+
+export interface CatalogRefreshResult {
+  sourceId: string;
+  refreshed: boolean;
+  skillCount: number;
+  message: string;
+}
+
 // ── MCP 类型 ──────────────────────────────────────────────────────────
 
 export type McpTransport = "stdio" | "http" | "sse";

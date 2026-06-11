@@ -1,6 +1,6 @@
 use crate::{
     error::{AppError, AppResult},
-    models::{AgentProfile, DiscoveryPathEntry},
+    models::{AgentProfile, CatalogSource, DiscoveryPathEntry},
 };
 
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,8 @@ struct AppState {
     no_full_coverage_titles: HashSet<String>,
     #[serde(default)]
     no_full_coverage_mcp_titles: HashSet<String>,
+    #[serde(default)]
+    catalog_sources: Vec<CatalogSource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -255,9 +257,7 @@ impl AppStore {
             .iter()
             .rev()
             .find(|op| {
-                op.agent_id == agent_id
-                    && op.skill_id == skill_id
-                    && op.backup_path.is_some()
+                op.agent_id == agent_id && op.skill_id == skill_id && op.backup_path.is_some()
             })
             .map(|op| (op.target_path.clone(), op.backup_path.clone().unwrap())))
     }
@@ -312,12 +312,39 @@ impl AppStore {
         Ok(state.no_full_coverage_mcp_titles.iter().cloned().collect())
     }
 
+    pub fn save_catalog_source(&self, source: &CatalogSource) -> AppResult<()> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        if let Some(existing) = state
+            .catalog_sources
+            .iter_mut()
+            .find(|item| item.id == source.id)
+        {
+            *existing = source.clone();
+        } else {
+            state.catalog_sources.push(source.clone());
+        }
+        drop(state);
+        self.save()
+    }
+
+    pub fn list_catalog_sources(&self) -> AppResult<Vec<CatalogSource>> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let mut sources = state.catalog_sources.clone();
+        sources.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(sources)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::AgentType;
+    use crate::models::{AgentType, CatalogSource, CatalogSourceKind};
 
     #[test]
     fn saves_and_lists_agents() {
@@ -369,4 +396,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn saves_and_lists_catalog_sources() {
+        let store = AppStore::in_memory().unwrap();
+        let source = CatalogSource {
+            id: "custom-demo".into(),
+            name: "Custom Demo".into(),
+            url: "https://example.com/demo.git".into(),
+            kind: CatalogSourceKind::Custom,
+            icon: "custom".into(),
+            enabled: true,
+            last_refreshed_at: None,
+            cache_path: None,
+        };
+
+        store.save_catalog_source(&source).unwrap();
+
+        let sources = store.list_catalog_sources().unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].id, "custom-demo");
+    }
 }

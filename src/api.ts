@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AgentProfile,
+  CatalogFilters,
+  CatalogRefreshResult,
+  CatalogSkill,
+  CatalogSort,
+  CatalogSource,
   ConflictPolicy,
   GroupedMcpServer,
   ImportSkillFile,
@@ -71,6 +76,30 @@ export const api = {
   },
   toggleMcpNoFullCoverage(title: string) {
     return command<boolean>("toggle_no_full_coverage_mcp", { title }, () => false);
+  },
+  listCatalogSources() {
+    return command<CatalogSource[]>("list_catalog_sources", {}, () => []);
+  },
+  saveCatalogSource(source: CatalogSource) {
+    return command<CatalogSource>("save_catalog_source", { source }, () => source);
+  },
+  refreshCatalogSource(sourceId: string) {
+    return command<CatalogRefreshResult>("refresh_catalog_source", { sourceId }, () => ({
+      sourceId,
+      refreshed: false,
+      skillCount: 0,
+      message: "Catalog refresh is available in the desktop app",
+    }));
+  },
+  searchCatalogSkills(query: string, sort: CatalogSort, filters: CatalogFilters) {
+    return command<CatalogSkill[]>("search_catalog_skills", { query, sort, filters }, () => []);
+  },
+  installCatalogSkill(catalogSkillId: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) {
+    return command<InstallResult[]>(
+      "install_catalog_skill",
+      { catalogSkillId, targetAgentIds, conflictPolicy },
+      () => [],
+    );
   },
   // ── MCP API ──
   scanMcpServers() {
