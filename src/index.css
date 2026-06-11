@@ -419,14 +419,14 @@ input { cursor: text; outline: none; }
   gap: 14px;
 }
 .catalog-card {
-  min-height: 206px;
+  min-height: 214px;
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface);
   text-align: left;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto auto minmax(54px, 1fr) minmax(24px, auto) 24px;
   gap: 7px;
   transition: all 0.15s ease;
 }
@@ -453,7 +453,6 @@ input { cursor: text; outline: none; }
   text-overflow: ellipsis;
   white-space: normal;
   overflow-wrap: anywhere;
-  min-height: calc(14px * 1.35 * 2);
 }
 .catalog-card-desc {
   color: var(--text-secondary);
@@ -463,13 +462,14 @@ input { cursor: text; outline: none; }
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  min-height: calc(12.5px * 1.45 * 3);
 }
 .catalog-card-tags {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
+  align-content: start;
   min-height: 24px;
+  overflow: hidden;
 }
 .catalog-card-tags span {
   padding: 3px 7px;
@@ -480,11 +480,11 @@ input { cursor: text; outline: none; }
   font-size: 11px;
 }
 .catalog-card-meta {
-  margin-top: auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  min-height: 24px;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 500;
