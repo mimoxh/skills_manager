@@ -1,5 +1,5 @@
 use crate::{
-    error::AppResult,
+    error::{AppError, AppResult},
     models::{
         AgentProfile, CatalogFilters, CatalogRefreshResult, CatalogSkill, CatalogSort,
         CatalogSource, ConflictPolicy, GroupedMcpServer, GroupedSkill, ImportSkillFile,
@@ -8,6 +8,16 @@ use crate::{
     service::AppService,
 };
 use tauri::State;
+
+async fn run_blocking<T, F>(task: F) -> AppResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> AppResult<T> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(task)
+        .await
+        .map_err(|error| AppError::Message(format!("后台任务失败: {}", error)))?
+}
 
 #[tauri::command]
 pub fn get_initial_data(service: State<AppService>) -> AppResult<InitialData> {
@@ -48,6 +58,14 @@ pub fn remove_agent(agent_id: String, service: State<AppService>) -> AppResult<(
 #[tauri::command]
 pub fn scan_agent_skills(service: State<AppService>) -> AppResult<Vec<GroupedSkill>> {
     service.scan_agent_skills()
+}
+
+#[tauri::command]
+pub fn read_agent_skill_readme(
+    skill_path: String,
+    service: State<AppService>,
+) -> AppResult<Option<String>> {
+    service.read_agent_skill_readme(&skill_path)
 }
 
 #[tauri::command]
@@ -117,21 +135,23 @@ pub fn save_catalog_source(
 }
 
 #[tauri::command]
-pub fn refresh_catalog_source(
+pub async fn refresh_catalog_source(
     source_id: String,
-    service: State<AppService>,
+    service: State<'_, AppService>,
 ) -> AppResult<CatalogRefreshResult> {
-    service.refresh_catalog_source(&source_id)
+    let service = service.inner().clone();
+    run_blocking(move || service.refresh_catalog_source(&source_id)).await
 }
 
 #[tauri::command]
-pub fn search_catalog_skills(
+pub async fn search_catalog_skills(
     query: Option<String>,
     sort: CatalogSort,
     filters: CatalogFilters,
-    service: State<AppService>,
+    service: State<'_, AppService>,
 ) -> AppResult<Vec<CatalogSkill>> {
-    service.search_catalog_skills(query.as_deref(), sort, filters)
+    let service = service.inner().clone();
+    run_blocking(move || service.search_catalog_skills(query.as_deref(), sort, filters)).await
 }
 
 #[tauri::command]

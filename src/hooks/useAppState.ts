@@ -38,6 +38,8 @@ export function useAppState() {
   const [customAgent, setCustomAgent] = useState<AgentProfile>(emptyCustom);
   const [message, setMessage] = useState("正在加载...");
   const [busy, setBusy] = useState(false);
+  const [catalogBusy, setCatalogBusy] = useState(false);
+  const [catalogStartupRefreshing, setCatalogStartupRefreshing] = useState(false);
   const [query, setQuery] = useState("");
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [pendingImport, setPendingImport] = useState<{ fileName: string; files: ImportSkillFile[] } | null>(null);
@@ -101,12 +103,21 @@ export function useAppState() {
     }
   }
 
+  async function loadSkillReadme(skillPath: string): Promise<string | null> {
+    try {
+      return await api.readAgentSkillReadme(skillPath);
+    } catch (error) {
+      setMessage(String(error));
+      return null;
+    }
+  }
+
   async function searchCatalog(
     nextQuery = catalogQuery,
     nextSort = catalogSort,
     nextFilters = catalogFilters,
   ) {
-    setBusy(true);
+    setCatalogBusy(true);
     try {
       const [sources, skills] = await Promise.all([
         api.listCatalogSources(),
@@ -118,12 +129,12 @@ export function useAppState() {
     } catch (error) {
       setMessage(String(error));
     } finally {
-      setBusy(false);
+      setCatalogBusy(false);
     }
   }
 
   async function refreshCatalogSource(sourceId: string) {
-    setBusy(true);
+    setCatalogBusy(true);
     try {
       const result = await api.refreshCatalogSource(sourceId);
       setMessage(result.message);
@@ -131,13 +142,14 @@ export function useAppState() {
     } catch (error) {
       setMessage(String(error));
     } finally {
-      setBusy(false);
+      setCatalogBusy(false);
     }
   }
 
   async function refreshCatalogOnStartup() {
+    setCatalogStartupRefreshing(true);
     try {
-      setMessage("正在后台更新 skills 仓库目录...");
+      await searchCatalog();
       const sources = await api.listCatalogSources();
       let refreshed = 0;
       for (const source of sources.filter((source) => source.enabled)) {
@@ -154,14 +166,18 @@ export function useAppState() {
       ]);
       setCatalogSources(nextSources);
       setCatalogSkills(nextSkills);
-      setMessage(`已后台更新 ${refreshed} 个仓库源，仓库目录显示 ${nextSkills.length} 个 skills。`);
+      if (refreshed > 0) {
+        setMessage(`已后台更新 ${refreshed} 个仓库源，仓库目录显示 ${nextSkills.length} 个 skills。`);
+      }
     } catch (error) {
       setMessage(`仓库目录后台更新失败: ${String(error)}`);
+    } finally {
+      setCatalogStartupRefreshing(false);
     }
   }
 
   async function saveCatalogSource(source: CatalogSource) {
-    setBusy(true);
+    setCatalogBusy(true);
     try {
       await api.saveCatalogSource(source);
       await searchCatalog();
@@ -169,7 +185,7 @@ export function useAppState() {
     } catch (error) {
       setMessage(String(error));
     } finally {
-      setBusy(false);
+      setCatalogBusy(false);
     }
   }
 
@@ -182,7 +198,7 @@ export function useAppState() {
       setMessage("请至少选择一个目标 Agent。");
       return [];
     }
-    setBusy(true);
+    setCatalogBusy(true);
     try {
       const results = await api.installCatalogSkill(catalogSkillId, targetAgentIds, conflictPolicy);
       await refreshAll();
@@ -193,7 +209,7 @@ export function useAppState() {
       setMessage(String(error));
       throw error;
     } finally {
-      setBusy(false);
+      setCatalogBusy(false);
     }
   }
 
@@ -322,7 +338,7 @@ export function useAppState() {
   useEffect(() => {
     void (async () => {
       await refreshAll();
-      await refreshCatalogOnStartup();
+      void refreshCatalogOnStartup();
     })();
   }, []);
 
@@ -509,10 +525,10 @@ export function useAppState() {
     agents, filteredAgents,
     customAgent, setCustomAgent, saveCustomAgent, saveAgent: saveCustomAgent,
     message, setMessage,
-    busy, query, setQuery, setCatalogQuery, setCatalogSort, setCatalogFilters,
+    busy, catalogBusy, catalogStartupRefreshing, query, setQuery, setCatalogQuery, setCatalogSort, setCatalogFilters,
     isInitialLoading,
     pendingImport, executeImport, cancelImport,
-    refreshAll, syncSkillToAgents, deleteAgent, uninstallSkill, uninstallSkillFromAgents,
+    refreshAll, loadSkillReadme, syncSkillToAgents, deleteAgent, uninstallSkill, uninstallSkillFromAgents,
     searchCatalog, refreshCatalogSource, saveCatalogSource, installCatalogSkill,
     handleSkillDrop, importFiles, fileToUpload,
     noFullCoverageTitles, toggleNoFullCoverage,

@@ -105,6 +105,9 @@ export const api = {
   scanMcpServers() {
     return command<GroupedMcpServer[]>("scan_mcp_servers", {}, () => []);
   },
+  readAgentSkillReadme(skillPath: string) {
+    return command<string | null>("read_agent_skill_readme", { skillPath }, () => null);
+  },
   addMcpServer(agentIds: string[], config: McpServerConfig, conflictPolicy: ConflictPolicy) {
     return command<McpOperationResult[]>("add_mcp_server", { agentIds, config, conflictPolicy }, () => []);
   },

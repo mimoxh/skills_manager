@@ -31,6 +31,7 @@ pub fn run() {
             add_agent,
             remove_agent,
             scan_agent_skills,
+            read_agent_skill_readme,
             sync_grouped_skill,
             uninstall_skill,
             uninstall_skill_from_agents,

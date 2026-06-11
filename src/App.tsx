@@ -2,12 +2,13 @@ import { ChangeEvent, Suspense, lazy, useEffect, useRef, useState } from "react"
 import { TooltipProvider } from "./components/ui/tooltip";
 import { Titlebar } from "./components/layout/Titlebar";
 import { Sidebar } from "./components/layout/Sidebar";
-import { SkillsView, ImportAgentDialog } from "./components/views/SkillsView";
+import { ImportAgentDialog } from "./components/views/ImportAgentDialog";
 import { CatalogView } from "./components/views/CatalogView";
 import { McpView } from "./components/views/McpView";
 import { useAppState } from "./hooks/useAppState";
 import type { ImportSkillFile } from "./types";
 
+const SkillsView = lazy(() => import("./components/views/SkillsView").then((m) => ({ default: m.SkillsView })));
 const OverviewView = lazy(() => import("./components/views/OverviewView").then((m) => ({ default: m.OverviewView })));
 const AgentsView = lazy(() => import("./components/views/AgentsView").then((m) => ({ default: m.AgentsView })));
 
@@ -68,20 +69,23 @@ export default function App() {
     switch (view) {
       case "skills":
         return (
-          <SkillsView
-            skills={state.filteredSkills}
-            agents={state.agents}
-            busy={state.busy}
-            noFullCoverageTitles={state.noFullCoverageTitles}
-            initialFilter={skillsFilter}
-            onDrop={state.handleSkillDrop}
-            onFolder={() => folderInputRef.current?.click()}
-            onArchive={() => archiveInputRef.current?.click()}
-            onSync={state.syncSkillToAgents}
-            onUninstall={state.uninstallSkillFromAgents}
-            onRefresh={state.refreshAll}
-            onToggleNoFullCoverage={state.toggleNoFullCoverage}
-          />
+          <Suspense fallback={<ViewLoading />}>
+            <SkillsView
+              skills={state.filteredSkills}
+              agents={state.agents}
+              busy={state.busy}
+              noFullCoverageTitles={state.noFullCoverageTitles}
+              initialFilter={skillsFilter}
+              onDrop={state.handleSkillDrop}
+              onFolder={() => folderInputRef.current?.click()}
+              onArchive={() => archiveInputRef.current?.click()}
+              onSync={state.syncSkillToAgents}
+              onUninstall={state.uninstallSkillFromAgents}
+              onLoadReadme={state.loadSkillReadme}
+              onRefresh={state.refreshAll}
+              onToggleNoFullCoverage={state.toggleNoFullCoverage}
+            />
+          </Suspense>
         );
       case "agents":
         return (
@@ -104,9 +108,10 @@ export default function App() {
         return (
           <CatalogView
             agents={state.agents}
-            busy={state.busy}
+            busy={state.catalogBusy || state.catalogStartupRefreshing}
             sources={state.catalogSources}
             skills={state.catalogSkills}
+            startupRefreshing={state.catalogStartupRefreshing}
             query={state.catalogQuery}
             sort={state.catalogSort}
             filters={state.catalogFilters}

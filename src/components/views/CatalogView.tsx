@@ -32,6 +32,7 @@ const policyOptions: Array<{ value: ConflictPolicy; label: string }> = [
 interface CatalogViewProps {
   agents: AgentProfile[];
   busy: boolean;
+  startupRefreshing: boolean;
   sources: CatalogSource[];
   skills: CatalogSkill[];
   query: string;
@@ -49,6 +50,7 @@ interface CatalogViewProps {
 export function CatalogView({
   agents,
   busy,
+  startupRefreshing,
   sources,
   skills,
   query,
@@ -68,9 +70,12 @@ export function CatalogView({
   const [customUrl, setCustomUrl] = useState("");
 
   useEffect(() => {
+    if (startupRefreshing || sources.length || skills.length) {
+      return;
+    }
     onSearch(query, sort, filters);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [startupRefreshing]);
 
   function updateFilters(next: CatalogFilters) {
     onFilters(next);
@@ -257,15 +262,18 @@ export function CatalogView({
                   {skill.hasScripts && <span>scripts</span>}
                   {skill.hasReferences && <span>references</span>}
                   {skill.hasAssets && <span>assets</span>}
-                  {!skill.downloadCount && !skill.installCount && <span>无下载数据</span>}
                 </div>
-                <div className="catalog-card-source">
-                  <span>{skill.sourceName}</span>
-                  <SourceIcon icon={skill.sourceIcon} small />
+                <div className="catalog-card-meta">
+                  <span>{formatCatalogUsage(skill)}</span>
+                  <span className="catalog-card-source">
+                    <span>{skill.sourceName}</span>
+                    <SourceIcon icon={skill.sourceIcon} small />
+                  </span>
                 </div>
               </button>
             ))}
-            {!skills.length && (
+            {!skills.length && startupRefreshing && <div className="catalog-empty" aria-hidden="true" />}
+            {!skills.length && !startupRefreshing && (
               <div className="catalog-empty">
                 <p>没有找到 catalog skills</p>
                 <span>先刷新内置源或添加自定义仓库后再搜索</span>
@@ -326,6 +334,23 @@ function FilterSection({ title, children }: { title: string; children: React.Rea
 function SourceIcon({ icon, small = false }: { icon: string; small?: boolean }) {
   const label = icon === "clawhub" ? "C" : icon === "claude" ? "A" : icon === "codex" ? "O" : "G";
   return <span className={`catalog-source-icon ${small ? "small" : ""} ${icon}`}>{label}</span>;
+}
+
+function formatCatalogUsage(skill: CatalogSkill) {
+  if (skill.downloadCount !== null && skill.downloadCount !== undefined) {
+    return `下载 ${formatCompactNumber(skill.downloadCount)}`;
+  }
+  if (skill.installCount !== null && skill.installCount !== undefined) {
+    return `安装 ${formatCompactNumber(skill.installCount)}`;
+  }
+  return "无下载数据";
+}
+
+function formatCompactNumber(value: number) {
+  if (value >= 10000) {
+    return `${(value / 10000).toFixed(value >= 100000 ? 0 : 1)}万`;
+  }
+  return value.toLocaleString("zh-CN");
 }
 
 function InstallCatalogDialog({

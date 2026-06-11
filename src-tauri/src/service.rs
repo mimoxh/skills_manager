@@ -1,4 +1,4 @@
-use crate::{
+﻿use crate::{
     adapter::{adapter_for, built_in_adapters, AgentAdapter},
     catalog::{
         scan_catalog_repository, scan_clawhub_api_cache, sort_catalog_skills,
@@ -28,39 +28,40 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime},
 };
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use zip::ZipArchive;
 
+#[derive(Clone)]
 pub struct AppService {
-    store: AppStore,
-    mcp_service: McpService,
+    store: Arc<AppStore>,
+    mcp_service: Arc<McpService>,
 }
 
 impl AppService {
     pub fn new() -> AppResult<Self> {
-        let store = AppStore::new()?;
-        let store_ref = Arc::new(AppStore::new()?);
+        let store = Arc::new(AppStore::new()?);
         Ok(Self {
-            store,
-            mcp_service: McpService::new(store_ref),
+            store: Arc::clone(&store),
+            mcp_service: Arc::new(McpService::new(store)),
         })
     }
 
     #[cfg(test)]
     pub fn in_memory() -> AppResult<Self> {
-        let store = AppStore::in_memory()?;
-        let store_ref = Arc::new(AppStore::in_memory()?);
+        let store = Arc::new(AppStore::in_memory()?);
         Ok(Self {
-            store,
-            mcp_service: McpService::new(store_ref),
+            store: Arc::clone(&store),
+            mcp_service: Arc::new(McpService::new(store)),
         })
     }
 
     pub fn store(&self) -> &AppStore {
-        &self.store
+        self.store.as_ref()
     }
 
     pub fn mcp(&self) -> &McpService {
-        &self.mcp_service
+        self.mcp_service.as_ref()
     }
 
     pub fn data_dir(&self) -> PathBuf {
@@ -196,7 +197,7 @@ impl AppService {
         let skill_count = if source.id == "clawhub" {
             self.refresh_clawhub_api_cache(&cache_path)?
         } else if cache_path.join(".git").is_dir() {
-            let output = Command::new("git")
+            let output = command_no_window("git")
                 .arg("-C")
                 .arg(&cache_path)
                 .arg("pull")
@@ -210,7 +211,7 @@ impl AppService {
             }
             scan_catalog_repository(&cache_path, &source)?.len()
         } else {
-            let output = Command::new("git")
+            let output = command_no_window("git")
                 .arg("clone")
                 .arg("--depth")
                 .arg("1")
@@ -395,6 +396,10 @@ impl AppService {
             copies.extend(scan_agent_skill_copies(agent)?);
         }
         Ok(group_agent_skills(&agents, copies))
+    }
+
+    pub fn read_agent_skill_readme(&self, skill_path: &str) -> AppResult<Option<String>> {
+        Ok(read_agent_skill_readme(Path::new(skill_path)))
     }
 
     pub fn sync_grouped_skill(
@@ -1124,7 +1129,7 @@ fn scan_agent_skill_copies(agent: &AgentProfile) -> AppResult<Vec<AgentSkillCopy
             continue;
         }
         let metadata = fs::metadata(&path).ok();
-        let (title, version, description, readme) = read_agent_skill_info(&path);
+        let (title, version, description, readme) = read_agent_skill_info(&path, false);
         copies.push(AgentSkillCopy {
             agent_id: agent.id.clone(),
             agent_name: agent.name.clone(),
@@ -1196,6 +1201,7 @@ fn is_valid_description(desc: &str) -> bool {
 
 fn read_agent_skill_info(
     skill_path: &Path,
+    include_readme: bool,
 ) -> (String, Option<String>, Option<String>, Option<String>) {
     for name in ["skill.json", "skill.yaml", "skill.yml"] {
         let manifest_path = skill_path.join(name);
@@ -1226,9 +1232,7 @@ fn read_agent_skill_info(
                     .filter(|value| !value.is_empty() && is_valid_description(value))
                     .map(ToString::to_string);
                 if let Some(title) = title {
-                    let readme = fs::read_to_string(skill_path.join("SKILL.md"))
-                        .ok()
-                        .and_then(|text| extract_markdown_body(&text));
+                    let readme = include_readme.then(|| read_agent_skill_readme(skill_path)).flatten();
                     return (title.to_string(), version, description, readme);
                 }
             }
@@ -1237,7 +1241,7 @@ fn read_agent_skill_info(
 
     let skill_md = skill_path.join("SKILL.md");
     if let Ok(text) = fs::read_to_string(&skill_md) {
-        let readme = extract_markdown_body(&text);
+        let readme = include_readme.then(|| extract_markdown_body(&text)).flatten();
         if let Some((title, version, description)) = read_markdown_frontmatter(&text) {
             return (title, version, description, readme);
         }
@@ -1256,6 +1260,12 @@ fn read_agent_skill_info(
         None,
         None,
     )
+}
+
+fn read_agent_skill_readme(skill_path: &Path) -> Option<String> {
+    fs::read_to_string(skill_path.join("SKILL.md"))
+        .ok()
+        .and_then(|text| extract_markdown_body(&text))
 }
 
 fn extract_markdown_body(text: &str) -> Option<String> {
@@ -1409,6 +1419,16 @@ fn normalize_title(title: &str) -> String {
     title.trim().to_lowercase()
 }
 
+fn command_no_window(program: &str) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
+
 fn system_time_to_rfc3339(time: SystemTime) -> String {
     DateTime::<Utc>::from(time).to_rfc3339()
 }
@@ -1540,6 +1560,26 @@ mod tests {
     }
 
     #[test]
+    fn cloned_service_shares_store_state() {
+        let service = AppService::in_memory().unwrap();
+        let clone = service.clone();
+        let agent_dir = tempfile::tempdir().unwrap();
+        let profile = AgentProfile {
+            id: "shared-agent".into(),
+            name: "Shared Agent".into(),
+            agent_type: crate::models::AgentType::Custom,
+            skills_path: agent_dir.path().to_string_lossy().to_string(),
+            adapter_config: None,
+        };
+
+        service.add_agent(profile).unwrap();
+
+        let agents = clone.list_saved_agents().unwrap();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].id, "shared-agent");
+    }
+
+    #[test]
     fn reports_empty_upload() {
         let agent_dir = tempfile::tempdir().unwrap();
         let service = test_service_with_agent(agent_dir.path());
@@ -1615,7 +1655,7 @@ mod tests {
         fs::create_dir_all(root.path().join("directory")).unwrap();
 
         assert_eq!(
-            read_agent_skill_info(&root.path().join("manifest")),
+            read_agent_skill_info(&root.path().join("manifest"), true),
             (
                 "Manifest Title".to_string(),
                 Some("2.0.0".to_string()),
@@ -1624,7 +1664,7 @@ mod tests {
             )
         );
         assert_eq!(
-            read_agent_skill_info(&root.path().join("frontmatter")),
+            read_agent_skill_info(&root.path().join("frontmatter"), true),
             (
                 "Frontmatter Title".to_string(),
                 Some("1.2.3".to_string()),
@@ -1633,7 +1673,7 @@ mod tests {
             )
         );
         assert_eq!(
-            read_agent_skill_info(&root.path().join("heading")),
+            read_agent_skill_info(&root.path().join("heading"), true),
             (
                 "Heading Title".to_string(),
                 None,
@@ -1642,7 +1682,7 @@ mod tests {
             )
         );
         assert_eq!(
-            read_agent_skill_info(&root.path().join("directory")),
+            read_agent_skill_info(&root.path().join("directory"), true),
             ("directory".to_string(), None, None, None)
         );
     }
@@ -1660,7 +1700,7 @@ mod tests {
         .unwrap();
 
         let (title, version, description, readme) =
-            read_agent_skill_info(&root.path().join("block-pipe"));
+            read_agent_skill_info(&root.path().join("block-pipe"), true);
         assert_eq!(title, "humanizer");
         assert_eq!(version, Some("2.1.1".to_string()));
         assert_eq!(
@@ -1677,7 +1717,7 @@ mod tests {
         )
         .unwrap();
 
-        let (title, version, description, _) = read_agent_skill_info(&root.path().join("block-gt"));
+        let (title, version, description, _) = read_agent_skill_info(&root.path().join("block-gt"), true);
         assert_eq!(title, "test-skill");
         assert_eq!(version, Some("1.0.0".to_string()));
         assert_eq!(
@@ -1693,7 +1733,7 @@ mod tests {
         )
         .unwrap();
 
-        let (title, _, description, _) = read_agent_skill_info(&root.path().join("block-eof"));
+        let (title, _, description, _) = read_agent_skill_info(&root.path().join("block-eof"), true);
         assert_eq!(title, "end-skill");
         assert_eq!(description, Some("Line one.\nLine two.".to_string()));
     }
