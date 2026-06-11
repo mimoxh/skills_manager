@@ -107,7 +107,6 @@ export default function App() {
       case "catalog":
         return (
           <CatalogView
-            agents={state.agents}
             busy={state.catalogBusy}
             sources={state.catalogSources}
             skills={state.catalogSkills}
@@ -126,7 +125,6 @@ export default function App() {
             onPage={state.changeCatalogPage}
             onRefreshSource={state.refreshCatalogSource}
             onSaveSource={state.saveCatalogSource}
-            onInstall={state.installCatalogSkill}
           />
         );
       case "mcp":

@@ -1,12 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import type {
-  AgentProfile,
   CatalogFilters,
   CatalogSkill,
   CatalogSort,
   CatalogSource,
-  ConflictPolicy,
-  InstallResult,
 } from "../../types";
 
 const sortOptions: Array<{ value: CatalogSort; label: string }> = [
@@ -23,14 +20,7 @@ const contentOptions = [
   { value: "assets", label: "有 assets" },
   { value: "skillMdOnly", label: "仅 SKILL.md" },
 ];
-const policyOptions: Array<{ value: ConflictPolicy; label: string }> = [
-  { value: "backupOverwrite", label: "备份覆盖" },
-  { value: "skip", label: "跳过冲突" },
-  { value: "rename", label: "另存副本" },
-];
-
 interface CatalogViewProps {
-  agents: AgentProfile[];
   busy: boolean;
   startupRefreshing: boolean;
   sources: CatalogSource[];
@@ -49,11 +39,9 @@ interface CatalogViewProps {
   onPage: (page: number) => Promise<void>;
   onRefreshSource: (sourceId: string) => Promise<void>;
   onSaveSource: (source: CatalogSource) => Promise<void>;
-  onInstall: (catalogSkillId: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) => Promise<InstallResult[]>;
 }
 
 export function CatalogView({
-  agents,
   busy,
   startupRefreshing,
   sources,
@@ -72,9 +60,7 @@ export function CatalogView({
   onPage,
   onRefreshSource,
   onSaveSource,
-  onInstall,
 }: CatalogViewProps) {
-  const [selectedSkill, setSelectedSkill] = useState<CatalogSkill | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
   const [customName, setCustomName] = useState("");
   const [customUrl, setCustomUrl] = useState("");
@@ -262,7 +248,7 @@ export function CatalogView({
 
           <main className="catalog-main">
             {skills.map((skill) => (
-              <button className="catalog-card" key={skill.id} onClick={() => setSelectedSkill(skill)} type="button">
+              <article className="catalog-card" key={skill.id}>
                 <div className="catalog-card-top">
                   <SourceIcon icon={skill.sourceIcon} />
                   <span className={`badge ${skill.installStatus === "installed" ? "badge-success" : "badge-muted"}`}>
@@ -283,7 +269,7 @@ export function CatalogView({
                     <SourceIcon icon={skill.sourceIcon} small />
                   </span>
                 </div>
-              </button>
+              </article>
             ))}
             {!skills.length && startupRefreshing && <div className="catalog-empty" aria-hidden="true" />}
             {!skills.length && !startupRefreshing && (
@@ -306,16 +292,6 @@ export function CatalogView({
           </main>
         </div>
       </div>
-
-      {selectedSkill && (
-        <InstallCatalogDialog
-          agents={agents}
-          busy={busy}
-          skill={selectedSkill}
-          onClose={() => setSelectedSkill(null)}
-          onInstall={onInstall}
-        />
-      )}
 
       {customOpen && (
         <div className="dialog-backdrop" onClick={() => setCustomOpen(false)}>
@@ -375,70 +351,4 @@ function formatCompactNumber(value: number) {
     return `${(value / 10000).toFixed(value >= 100000 ? 0 : 1)}万`;
   }
   return value.toLocaleString("zh-CN");
-}
-
-function InstallCatalogDialog({
-  agents,
-  busy,
-  skill,
-  onClose,
-  onInstall,
-}: {
-  agents: AgentProfile[];
-  busy: boolean;
-  skill: CatalogSkill;
-  onClose: () => void;
-  onInstall: (catalogSkillId: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) => Promise<InstallResult[]>;
-}) {
-  const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
-  const [policy, setPolicy] = useState<ConflictPolicy>("backupOverwrite");
-
-  async function install() {
-    await onInstall(skill.id, selectedAgents, policy);
-    onClose();
-  }
-
-  return (
-    <div className="dialog-backdrop" onClick={onClose}>
-      <div className="dialog catalog-dialog" onClick={(event) => event.stopPropagation()}>
-        <div className="dialog-header">
-          <div>
-            <div className="dialog-title">{skill.name}</div>
-            <div className="dialog-subtitle">{skill.sourceName} · {skill.relativePath}</div>
-          </div>
-          <button className="btn-icon" onClick={onClose} type="button">×</button>
-        </div>
-        <div className="catalog-security-note">
-          第三方 skill 默认未审核。安装前请检查 SKILL.md、scripts 和依赖。
-        </div>
-        <div className="catalog-agent-list">
-          {agents.map((agent) => (
-            <label className="agent-item" key={agent.id}>
-              <input
-                type="checkbox"
-                checked={selectedAgents.includes(agent.id)}
-                onChange={() => setSelectedAgents((prev) => prev.includes(agent.id) ? prev.filter((id) => id !== agent.id) : [...prev, agent.id])}
-              />
-              <div className="agent-info">
-                <div className="agent-name">{agent.name}</div>
-                <div className="agent-path">{agent.skillsPath}</div>
-              </div>
-            </label>
-          ))}
-        </div>
-        <div className="input-group">
-          <label className="input-label">冲突策略</label>
-          <select className="input" value={policy} onChange={(event) => setPolicy(event.target.value as ConflictPolicy)}>
-            {policyOptions.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-        </div>
-        <div className="dialog-actions">
-          <button className="btn btn-ghost" onClick={onClose} type="button">取消</button>
-          <button className="btn btn-primary" onClick={install} disabled={busy || !selectedAgents.length} type="button">安装</button>
-        </div>
-      </div>
-    </div>
-  );
 }
