@@ -1,9 +1,10 @@
 use crate::{
     adapter::{adapter_for, built_in_adapters, AgentAdapter},
     catalog::{
-        scan_catalog_repository, scan_clawhub_api_cache, sort_catalog_skills,
-        CLAWHUB_API_CACHE_FILE,
+        parse_clawhub_api_catalog, scan_catalog_repository, scan_clawhub_api_cache,
+        sort_catalog_skills, CLAWHUB_API_CACHE_FILE,
     },
+    catalog_index::{CatalogIndex, RefreshStatePatch},
     cherry_studio::CherryStudioAdapter,
     error::{AppError, AppResult},
     hash::{copy_dir_all, hash_dir},
@@ -11,9 +12,9 @@ use crate::{
     mcp_service::McpService,
     models::{
         AgentProfile, AgentSkillCopy, AgentType, CatalogFilters, CatalogInstallStatus,
-        CatalogRefreshResult, CatalogSearchResult, CatalogSkill, CatalogSort, CatalogSource,
-        CatalogSourceKind, ConflictPolicy, GroupedSkill, ImportSkillFile, ImportSkillResult,
-        InitialData, InstallResult,
+        CatalogRefreshResult, CatalogRefreshStatus, CatalogSafetyMode, CatalogSearchResult,
+        CatalogSkill, CatalogSort, CatalogSource, CatalogSourceKind, ConflictPolicy, GroupedSkill,
+        ImportSkillFile, ImportSkillResult, InitialData, InstallResult,
     },
     store::AppStore,
 };
@@ -27,7 +28,7 @@ use std::{
     io::{Cursor, Read},
     path::{Component, Path, PathBuf},
     process::Command,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, SystemTime},
 };
 use zip::ZipArchive;
@@ -36,14 +37,19 @@ use zip::ZipArchive;
 pub struct AppService {
     store: Arc<AppStore>,
     mcp_service: Arc<McpService>,
+    catalog_index: Arc<CatalogIndex>,
+    catalog_refresh_cancel: Arc<Mutex<HashSet<String>>>,
 }
 
 impl AppService {
     pub fn new() -> AppResult<Self> {
         let store = Arc::new(AppStore::new()?);
+        let catalog_index = Arc::new(CatalogIndex::new(&store.data_dir())?);
         Ok(Self {
             store: Arc::clone(&store),
             mcp_service: Arc::new(McpService::new(store)),
+            catalog_index,
+            catalog_refresh_cancel: Arc::new(Mutex::new(HashSet::new())),
         })
     }
 
@@ -53,6 +59,11 @@ impl AppService {
         Ok(Self {
             store: Arc::clone(&store),
             mcp_service: Arc::new(McpService::new(store)),
+            catalog_index: Arc::new(CatalogIndex::new(&std::env::temp_dir().join(format!(
+                "skill-sync-manager-test-index-{}",
+                chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            )))?),
+            catalog_refresh_cancel: Arc::new(Mutex::new(HashSet::new())),
         })
     }
 
@@ -195,7 +206,7 @@ impl AppService {
         fs::create_dir_all(self.catalog_cache_root())?;
 
         let skill_count = if source.id == "clawhub" {
-            self.refresh_clawhub_api_cache(&cache_path)?
+            self.refresh_clawhub_index(CatalogSafetyMode::All)?
         } else if cache_path.join(".git").is_dir() {
             let output = command_no_window("git")
                 .arg("-C")
@@ -240,6 +251,62 @@ impl AppService {
         })
     }
 
+    pub fn start_catalog_refresh(
+        &self,
+        source_id: &str,
+        _mode: Option<String>,
+        safety_mode: CatalogSafetyMode,
+    ) -> AppResult<CatalogRefreshStatus> {
+        if source_id != "clawhub" {
+            let _ = self.refresh_catalog_source(source_id)?;
+            return self.get_catalog_refresh_status(source_id, safety_mode);
+        }
+        let key = refresh_key(source_id, safety_mode);
+        {
+            let mut cancel = self
+                .catalog_refresh_cancel
+                .lock()
+                .map_err(|_| AppError::Message("Refresh cancel lock poisoned".to_string()))?;
+            cancel.remove(&key);
+        }
+        let _ = self.catalog_index.begin_refresh("clawhub", safety_mode)?;
+        let service = self.clone();
+        let source_id = source_id.to_string();
+        std::thread::spawn(move || {
+            let _ = service.refresh_clawhub_index(safety_mode).map_err(|error| {
+                let _ = service.mark_clawhub_refresh_error(
+                    &source_id,
+                    safety_mode,
+                    error.to_string().as_str(),
+                );
+            });
+        });
+        self.get_catalog_refresh_status("clawhub", safety_mode)
+    }
+
+    pub fn get_catalog_refresh_status(
+        &self,
+        source_id: &str,
+        safety_mode: CatalogSafetyMode,
+    ) -> AppResult<CatalogRefreshStatus> {
+        self.catalog_index.refresh_status(source_id, safety_mode)
+    }
+
+    pub fn cancel_catalog_refresh(
+        &self,
+        source_id: &str,
+        safety_mode: CatalogSafetyMode,
+    ) -> AppResult<CatalogRefreshStatus> {
+        let key = refresh_key(source_id, safety_mode);
+        let mut cancel = self
+            .catalog_refresh_cancel
+            .lock()
+            .map_err(|_| AppError::Message("Refresh cancel lock poisoned".to_string()))?;
+        cancel.insert(key);
+        drop(cancel);
+        self.get_catalog_refresh_status(source_id, safety_mode)
+    }
+
     pub fn search_catalog_skills(
         &self,
         query: Option<&str>,
@@ -260,14 +327,37 @@ impl AppService {
         for source in sources.into_iter().filter(|source| source.enabled) {
             let cache_path = self.catalog_cache_path(&source);
             if !cache_path.exists() {
-                continue;
+                if source.id != "clawhub" {
+                    continue;
+                }
             }
-            let mut source_skills =
-                if source.id == "clawhub" && cache_path.join(CLAWHUB_API_CACHE_FILE).exists() {
+            let mut source_skills = if source.id == "clawhub" {
+                if self
+                    .catalog_index
+                    .count("clawhub", filters.safety_mode)
+                    .unwrap_or_default()
+                    > 0
+                {
+                    let result = self.catalog_index.query(
+                        &source,
+                        &q,
+                        sort,
+                        &filters,
+                        &installed_titles,
+                        page.unwrap_or(1),
+                        page_size.unwrap_or(100),
+                    )?;
+                    return Ok(result);
+                } else if cache_path.join(CLAWHUB_API_CACHE_FILE).exists()
+                    && filters.safety_mode == CatalogSafetyMode::All
+                {
                     scan_clawhub_api_cache(&cache_path, &source)?
                 } else {
-                    scan_catalog_repository(&cache_path, &source)?
-                };
+                    Vec::new()
+                }
+            } else {
+                scan_catalog_repository(&cache_path, &source)?
+            };
             for skill in &mut source_skills {
                 if installed_titles.contains(&normalize_title(&skill.name)) {
                     skill.install_status = CatalogInstallStatus::Installed;
@@ -762,36 +852,139 @@ impl AppService {
         Ok(workspace)
     }
 
-    fn refresh_clawhub_api_cache(&self, cache_path: &Path) -> AppResult<usize> {
-        fs::create_dir_all(cache_path)?;
+    fn refresh_clawhub_index(&self, safety_mode: CatalogSafetyMode) -> AppResult<usize> {
+        let generation = self.catalog_index.begin_refresh("clawhub", safety_mode)?;
+        let status = self.catalog_index.refresh_status("clawhub", safety_mode)?;
+        let mut cursor = status.next_cursor.clone();
+        let mut fetched_count = status.fetched_count;
+        let source = built_in_catalog_sources()
+            .into_iter()
+            .find(|source| source.id == "clawhub")
+            .ok_or_else(|| AppError::Message("找不到 ClawHub 内置源。".to_string()))?;
         let agent = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(45))
             .build();
-        let items = collect_clawhub_api_pages(|cursor| {
+
+        loop {
+            if self.is_catalog_refresh_cancelled("clawhub", safety_mode)? {
+                self.catalog_index.save_refresh_state(RefreshStatePatch {
+                    source_id: "clawhub",
+                    safety_mode,
+                    cursor: cursor.as_deref(),
+                    fetched_count,
+                    generation,
+                    is_running: false,
+                    is_complete: false,
+                    last_error: Some("用户已取消刷新"),
+                })?;
+                return Ok(fetched_count);
+            }
+
+            let value = self.fetch_clawhub_index_page(&agent, cursor.as_deref(), safety_mode)?;
+            let page_items = value
+                .get("items")
+                .and_then(|value| value.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let page_json = serde_json::json!({ "items": page_items });
+            let skills = parse_clawhub_api_catalog(&page_json.to_string(), &source)?;
+            self.catalog_index
+                .upsert_skills("clawhub", safety_mode, generation, &skills)?;
+            fetched_count += skills.len();
+
+            let next_cursor = value
+                .get("nextCursor")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string);
+            self.catalog_index.save_refresh_state(RefreshStatePatch {
+                source_id: "clawhub",
+                safety_mode,
+                cursor: next_cursor.as_deref(),
+                fetched_count,
+                generation,
+                is_running: true,
+                is_complete: false,
+                last_error: None,
+            })?;
+
+            let Some(next_cursor) = next_cursor else {
+                self.catalog_index.finish_refresh(
+                    "clawhub",
+                    safety_mode,
+                    generation,
+                    fetched_count,
+                )?;
+                return Ok(fetched_count);
+            };
+            cursor = Some(next_cursor);
+        }
+    }
+
+    fn fetch_clawhub_index_page(
+        &self,
+        agent: &ureq::Agent,
+        cursor: Option<&str>,
+        safety_mode: CatalogSafetyMode,
+    ) -> AppResult<serde_json::Value> {
+        loop {
             let mut request = agent
                 .get("https://clawhub.ai/api/v1/skills")
-                .query("limit", "100")
-                .query("sort", "downloads")
+                .query("limit", "200")
+                .query("sort", "createdAt")
                 .query("dir", "desc");
             if let Some(cursor_value) = cursor {
                 request = request.query("cursor", cursor_value);
             }
-            let response = request.call().map_err(clawhub_http_error)?;
-            let text = response.into_string().map_err(|error| {
-                AppError::Message(format!("读取 ClawHub API 响应失败: {}", error))
-            })?;
-            Ok(serde_json::from_str::<serde_json::Value>(&text)?)
-        })?;
+            if safety_mode == CatalogSafetyMode::NonSuspicious {
+                request = request.query("nonSuspiciousOnly", "true");
+            }
+            match request.call() {
+                Ok(response) => {
+                    let text = response.into_string().map_err(|error| {
+                        AppError::Message(format!("读取 ClawHub API 响应失败: {}", error))
+                    })?;
+                    return Ok(serde_json::from_str::<serde_json::Value>(&text)?);
+                }
+                Err(ureq::Error::Status(429, response)) => {
+                    let wait = retry_after_delay(&response).min(Duration::from_secs(60));
+                    std::thread::sleep(wait);
+                }
+                Err(error) => return Err(clawhub_http_error(error)),
+            }
+        }
+    }
 
-        let cache = serde_json::json!({
-            "items": items,
-            "fetchedAt": chrono::Utc::now().to_rfc3339(),
-        });
-        fs::write(
-            cache_path.join(CLAWHUB_API_CACHE_FILE),
-            serde_json::to_vec_pretty(&cache)?,
-        )?;
-        Ok(cache["items"].as_array().map_or(0, Vec::len))
+    fn mark_clawhub_refresh_error(
+        &self,
+        source_id: &str,
+        safety_mode: CatalogSafetyMode,
+        error: &str,
+    ) -> AppResult<()> {
+        let status = self.catalog_index.refresh_status(source_id, safety_mode)?;
+        self.catalog_index.save_refresh_state(RefreshStatePatch {
+            source_id,
+            safety_mode,
+            cursor: status.next_cursor.as_deref(),
+            fetched_count: status.fetched_count,
+            generation: status.generation,
+            is_running: false,
+            is_complete: false,
+            last_error: Some(error),
+        })
+    }
+
+    fn is_catalog_refresh_cancelled(
+        &self,
+        source_id: &str,
+        safety_mode: CatalogSafetyMode,
+    ) -> AppResult<bool> {
+        let cancel = self
+            .catalog_refresh_cancel
+            .lock()
+            .map_err(|_| AppError::Message("Refresh cancel lock poisoned".to_string()))?;
+        Ok(cancel.contains(&refresh_key(source_id, safety_mode)))
     }
 
     fn materialize_clawhub_skill(&self, skill: &CatalogSkill) -> AppResult<PathBuf> {
@@ -959,7 +1152,19 @@ fn clawhub_http_error(error: ureq::Error) -> AppError {
     }
 }
 
-fn built_in_catalog_sources() -> Vec<CatalogSource> {
+fn retry_after_delay(response: &ureq::Response) -> Duration {
+    response
+        .header("Retry-After")
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(5))
+}
+
+fn refresh_key(source_id: &str, safety_mode: CatalogSafetyMode) -> String {
+    format!("{}::{}", source_id, safety_mode.as_str())
+}
+
+pub(crate) fn built_in_catalog_sources() -> Vec<CatalogSource> {
     vec![
         CatalogSource {
             id: "clawhub".to_string(),
@@ -992,6 +1197,11 @@ fn built_in_catalog_sources() -> Vec<CatalogSource> {
             cache_path: None,
         },
     ]
+}
+
+#[cfg(test)]
+pub(crate) fn built_in_catalog_sources_for_test() -> Vec<CatalogSource> {
+    built_in_catalog_sources()
 }
 
 fn catalog_matches_query(skill: &CatalogSkill, query: &str) -> bool {
@@ -1101,6 +1311,7 @@ fn catalog_matches_filters(skill: &CatalogSkill, filters: &CatalogFilters) -> bo
     true
 }
 
+#[cfg(test)]
 fn collect_clawhub_api_pages<F>(mut fetch_page: F) -> AppResult<Vec<serde_json::Value>>
 where
     F: FnMut(Option<&str>) -> AppResult<serde_json::Value>,

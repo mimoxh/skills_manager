@@ -107,7 +107,9 @@ export default function App() {
       case "catalog":
         return (
           <CatalogView
-            busy={state.catalogBusy}
+            busy={state.catalogBusy || state.busy}
+            agents={state.agents}
+            localSkills={state.skills}
             sources={state.catalogSources}
             skills={state.catalogSkills}
             total={state.catalogTotal}
@@ -115,6 +117,7 @@ export default function App() {
             pageSize={state.catalogPageSize}
             hasMore={state.catalogHasMore}
             startupRefreshing={state.catalogStartupRefreshing}
+            refreshStatuses={state.catalogRefreshStatuses}
             query={state.catalogQuery}
             sort={state.catalogSort}
             filters={state.catalogFilters}
@@ -124,7 +127,12 @@ export default function App() {
             onSearch={state.searchCatalog}
             onPage={state.changeCatalogPage}
             onRefreshSource={state.refreshCatalogSource}
+            onRefreshStatus={state.refreshCatalogStatus}
+            onStartRefresh={state.startCatalogRefresh}
+            onCancelRefresh={state.cancelCatalogRefresh}
             onSaveSource={state.saveCatalogSource}
+            onInstallSkill={state.installCatalogSkill}
+            onUninstallSkill={state.uninstallSkillFromAgents}
           />
         );
       case "mcp":

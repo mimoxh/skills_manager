@@ -1,9 +1,10 @@
 use crate::{
     error::{AppError, AppResult},
     models::{
-        AgentProfile, CatalogFilters, CatalogRefreshResult, CatalogSearchResult, CatalogSort,
-        CatalogSource, ConflictPolicy, GroupedMcpServer, GroupedSkill, ImportSkillFile,
-        ImportSkillResult, InitialData, InstallResult, McpOperationResult, McpServerConfig,
+        AgentProfile, CatalogFilters, CatalogRefreshResult, CatalogRefreshStatus,
+        CatalogSafetyMode, CatalogSearchResult, CatalogSort, CatalogSource, ConflictPolicy,
+        GroupedMcpServer, GroupedSkill, ImportSkillFile, ImportSkillResult, InitialData,
+        InstallResult, McpOperationResult, McpServerConfig,
     },
     service::AppService,
 };
@@ -141,6 +142,34 @@ pub async fn refresh_catalog_source(
 ) -> AppResult<CatalogRefreshResult> {
     let service = service.inner().clone();
     run_blocking(move || service.refresh_catalog_source(&source_id)).await
+}
+
+#[tauri::command]
+pub fn start_catalog_refresh(
+    source_id: String,
+    mode: Option<String>,
+    safety_mode: CatalogSafetyMode,
+    service: State<AppService>,
+) -> AppResult<CatalogRefreshStatus> {
+    service.start_catalog_refresh(&source_id, mode, safety_mode)
+}
+
+#[tauri::command]
+pub fn get_catalog_refresh_status(
+    source_id: String,
+    safety_mode: CatalogSafetyMode,
+    service: State<AppService>,
+) -> AppResult<CatalogRefreshStatus> {
+    service.get_catalog_refresh_status(&source_id, safety_mode)
+}
+
+#[tauri::command]
+pub fn cancel_catalog_refresh(
+    source_id: String,
+    safety_mode: CatalogSafetyMode,
+    service: State<AppService>,
+) -> AppResult<CatalogRefreshStatus> {
+    service.cancel_catalog_refresh(&source_id, safety_mode)
 }
 
 #[tauri::command]

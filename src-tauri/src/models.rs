@@ -244,6 +244,25 @@ pub struct CatalogSkill {
     pub install_status: CatalogInstallStatus,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum CatalogSafetyMode {
+    #[default]
+    #[serde(rename = "all")]
+    All,
+    #[serde(rename = "nonSuspicious")]
+    NonSuspicious,
+}
+
+impl CatalogSafetyMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CatalogSafetyMode::All => "all",
+            CatalogSafetyMode::NonSuspicious => "nonSuspicious",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogSearchResult {
@@ -269,6 +288,8 @@ pub struct CatalogFilters {
     pub time_window_days: Option<i64>,
     #[serde(default)]
     pub content_capabilities: Vec<String>,
+    #[serde(default)]
+    pub safety_mode: CatalogSafetyMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -278,6 +299,20 @@ pub struct CatalogRefreshResult {
     pub refreshed: bool,
     pub skill_count: usize,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogRefreshStatus {
+    pub source_id: String,
+    pub safety_mode: CatalogSafetyMode,
+    pub is_running: bool,
+    pub is_complete: bool,
+    pub fetched_count: usize,
+    pub next_cursor: Option<String>,
+    pub generation: i64,
+    pub last_error: Option<String>,
+    pub updated_at: Option<String>,
 }
 
 // ── MCP 数据模型 ──────────────────────────────────────────────────────

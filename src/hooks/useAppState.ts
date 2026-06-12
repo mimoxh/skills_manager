@@ -3,6 +3,8 @@ import { api } from "../api";
 import type {
   AgentProfile,
   CatalogFilters,
+  CatalogRefreshStatus,
+  CatalogSafetyMode,
   CatalogSkill,
   CatalogSort,
   CatalogSource,
@@ -30,6 +32,7 @@ const emptyCatalogFilters: CatalogFilters = {
   hasDownloadData: null,
   timeWindowDays: null,
   contentCapabilities: [],
+  safetyMode: "all",
 };
 
 export function useAppState() {
@@ -52,6 +55,10 @@ export function useAppState() {
   const [catalogPage, setCatalogPage] = useState(1);
   const [catalogPageSize] = useState(100);
   const [catalogHasMore, setCatalogHasMore] = useState(false);
+  const [catalogRefreshStatuses, setCatalogRefreshStatuses] = useState<Record<CatalogSafetyMode, CatalogRefreshStatus | null>>({
+    all: null,
+    nonSuspicious: null,
+  });
   const [catalogQuery, setCatalogQuery] = useState("");
   const [catalogSort, setCatalogSort] = useState<CatalogSort>("updatedDesc");
   const [catalogFilters, setCatalogFilters] = useState<CatalogFilters>(emptyCatalogFilters);
@@ -154,6 +161,44 @@ export function useAppState() {
     }
   }
 
+  async function refreshCatalogStatus(safetyMode: CatalogSafetyMode = catalogFilters.safetyMode) {
+    try {
+      const status = await api.getCatalogRefreshStatus("clawhub", safetyMode);
+      setCatalogRefreshStatuses((previous) => ({ ...previous, [safetyMode]: status }));
+      return status;
+    } catch (error) {
+      setMessage(String(error));
+      return null;
+    }
+  }
+
+  async function startCatalogRefresh(safetyMode: CatalogSafetyMode = catalogFilters.safetyMode) {
+    setCatalogBusy(true);
+    try {
+      const status = await api.startCatalogRefresh("clawhub", safetyMode);
+      setCatalogRefreshStatuses((previous) => ({ ...previous, [safetyMode]: status }));
+      setMessage(`ClawHub 后台刷新已启动，当前已索引 ${status.fetchedCount} 个 skills。`);
+      return status;
+    } catch (error) {
+      setMessage(String(error));
+      throw error;
+    } finally {
+      setCatalogBusy(false);
+    }
+  }
+
+  async function cancelCatalogRefresh(safetyMode: CatalogSafetyMode = catalogFilters.safetyMode) {
+    try {
+      const status = await api.cancelCatalogRefresh("clawhub", safetyMode);
+      setCatalogRefreshStatuses((previous) => ({ ...previous, [safetyMode]: status }));
+      setMessage("已请求取消 ClawHub 后台刷新。");
+      return status;
+    } catch (error) {
+      setMessage(String(error));
+      throw error;
+    }
+  }
+
   async function changeCatalogPage(nextPage: number) {
     const safePage = Math.max(1, nextPage);
     await searchCatalog(catalogQuery, catalogSort, catalogFilters, safePage);
@@ -165,7 +210,7 @@ export function useAppState() {
       await searchCatalog();
       const sources = await api.listCatalogSources();
       let refreshed = 0;
-      for (const source of sources.filter((source) => source.enabled)) {
+      for (const source of sources.filter((source) => source.enabled && source.id !== "clawhub")) {
         try {
           await api.refreshCatalogSource(source.id);
           refreshed += 1;
@@ -354,6 +399,7 @@ export function useAppState() {
   useEffect(() => {
     void (async () => {
       await refreshAll();
+      await Promise.all([refreshCatalogStatus("all"), refreshCatalogStatus("nonSuspicious")]);
       void refreshCatalogOnStartup();
     })();
   }, []);
@@ -538,6 +584,7 @@ export function useAppState() {
   return {
     skills, filteredSkills,
     catalogSources, catalogSkills, catalogTotal, catalogPage, catalogPageSize, catalogHasMore, catalogQuery, catalogSort, catalogFilters,
+    catalogRefreshStatuses, refreshCatalogStatus, startCatalogRefresh, cancelCatalogRefresh,
     agents, filteredAgents,
     customAgent, setCustomAgent, saveCustomAgent, saveAgent: saveCustomAgent,
     message, setMessage,

@@ -79,6 +79,7 @@ export interface InitialData {
 export type CatalogSourceKind = "builtIn" | "custom";
 export type CatalogSort = "downloads" | "publishedDesc" | "updatedDesc" | "source";
 export type CatalogInstallStatus = "notInstalled" | "installed" | "updateAvailable" | "conflict";
+export type CatalogSafetyMode = "all" | "nonSuspicious";
 
 export interface CatalogSource {
   id: string;
@@ -128,6 +129,7 @@ export interface CatalogFilters {
   hasDownloadData?: boolean | null;
   timeWindowDays?: number | null;
   contentCapabilities: string[];
+  safetyMode: CatalogSafetyMode;
 }
 
 export interface CatalogRefreshResult {
@@ -135,6 +137,18 @@ export interface CatalogRefreshResult {
   refreshed: boolean;
   skillCount: number;
   message: string;
+}
+
+export interface CatalogRefreshStatus {
+  sourceId: string;
+  safetyMode: CatalogSafetyMode;
+  isRunning: boolean;
+  isComplete: boolean;
+  fetchedCount: number;
+  nextCursor?: string | null;
+  generation: number;
+  lastError?: string | null;
+  updatedAt?: string | null;
 }
 
 // ── MCP 类型 ──────────────────────────────────────────────────────────

@@ -1,12 +1,6 @@
 import { useMemo, useState } from "react";
-import ReactMarkdown from "react-markdown";
 import type { AgentProfile, ConflictPolicy, GroupedSkill, InstallResult } from "../../types";
-
-const policyOptions: Array<{ value: ConflictPolicy; label: string; helper: string }> = [
-  { value: "backupOverwrite", label: "备份覆盖", helper: "保留备份后更新目标目录" },
-  { value: "skip", label: "跳过冲突", helper: "目标已存在时不做修改" },
-  { value: "rename", label: "另存副本", helper: "生成带时间戳的新副本" },
-];
+import { SkillInstallDialog } from "./SkillInstallDialog";
 
 interface SkillsViewProps {
   skills: GroupedSkill[];
@@ -258,17 +252,29 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
 
       {/* Sync Dialog */}
       {selectedSkill && (
-        <SyncSkillDialog
+        <SkillInstallDialog
+          allowNoTargets
           agents={agents}
           busy={busy}
           conflictPolicy={conflictPolicy}
-          selectedAgents={selectedAgents}
-          skill={selectedSkill}
+          description={selectedSkill.description}
+          installedAgentIds={selectedSkill.installedAgentIds}
+          selectedAgentIds={selectedAgents}
+          sourceLabel={`来源 ${selectedSkill.bestCopy.agentName} · ${selectedSkill.copies.length} 个副本`}
+          metadata={[
+            { label: "来源路径", value: selectedSkill.bestCopy.skillPath },
+            { label: "来源 Agent", value: selectedSkill.bestCopy.agentName },
+            { label: "副本数量", value: selectedSkill.copies.length },
+          ]}
+          primaryLabel={selectedAgents.length === 0 ? "全部删除" : selectedAgents.length < selectedSkill.installedAgentIds.length ? "同步并清理" : "同步"}
+          readme={selectedSkill.readme || selectedSkill.bestCopy.readme}
+          title={selectedSkill.title}
+          version={selectedSkill.bestCopy.version}
           isNoFullCoverage={noFullCoverageTitles.has(selectedSkill.title)}
           onClose={requestClose}
           onPolicy={setConflictPolicy}
-          onSync={executeSync}
           onToggleAgent={toggleAgent}
+          onConfirm={executeSync}
           onToggleNoFullCoverage={async () => { await onToggleNoFullCoverage(selectedSkill.title); setSelectedSkill(null); }}
         />
       )}
@@ -296,145 +302,6 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
         />
       )}
     </>
-  );
-}
-
-function SyncSkillDialog({
-  agents, busy, conflictPolicy, selectedAgents, skill, isNoFullCoverage,
-  onClose, onPolicy, onSync, onToggleAgent, onToggleNoFullCoverage,
-}: {
-  agents: AgentProfile[];
-  busy: boolean;
-  conflictPolicy: ConflictPolicy;
-  selectedAgents: string[];
-  skill: GroupedSkill;
-  isNoFullCoverage: boolean;
-  onClose: () => void;
-  onPolicy: (policy: ConflictPolicy) => void;
-  onSync: () => void;
-  onToggleAgent: (agentId: string) => void;
-  onToggleNoFullCoverage: () => void;
-}) {
-  const readmeContent = skill.readme || skill.description;
-
-  return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(47, 48, 44, 0.28)", padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ maxHeight: "88vh", width: "100%", maxWidth: 960, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(80,60,30,0.14), 0 2px 8px rgba(80,60,30,0.06)" }}>
-        {/* Header */}
-        <div style={{ display: "flex", alignItems: "flex-start", gap: 12, borderBottom: "1px solid var(--border)", padding: "20px 24px" }}>
-          <div style={{ width: 40, height: 40, background: "var(--accent-light)", borderRadius: "var(--radius-sm)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)", flexShrink: 0 }}>
-            <svg className="icon" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text)" }}>{skill.title}</h2>
-            <p style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>来源 {skill.bestCopy.agentName} · {skill.copies.length} 个副本</p>
-          </div>
-          <button className="btn-icon" onClick={onClose} type="button" title="关闭" style={{ width: 36, height: 36 }}>
-            <svg className="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
-          </button>
-        </div>
-
-        {/* Body - Two Column Layout */}
-        <div style={{ flex: 1, overflow: "hidden", display: "grid", gridTemplateColumns: "1.2fr 1fr" }}>
-          {/* Left Column - Markdown Reader */}
-          <div style={{ overflow: "auto", padding: "20px 24px", borderRight: "1px solid var(--border)" }}>
-            <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 12 }}>Skill 说明</p>
-            {readmeContent ? (
-              <div className="markdown-body">
-                <ReactMarkdown>{readmeContent}</ReactMarkdown>
-              </div>
-            ) : (
-              <p style={{ fontSize: 13, color: "var(--text-tertiary)", fontStyle: "italic" }}>暂无说明</p>
-            )}
-          </div>
-
-          {/* Right Column - Agent Sync */}
-          <div style={{ overflow: "auto", padding: "20px 24px", display: "flex", flexDirection: "column", gap: 20 }}>
-            {/* Agents */}
-            <div>
-              <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>目标 Agent</p>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {agents.map((agent) => {
-                  const checked = selectedAgents.includes(agent.id);
-                  const installed = skill.installedAgentIds.includes(agent.id);
-                  return (
-                    <button
-                      key={agent.id}
-                      className={`agent-item${checked ? " selected" : ""}`}
-                      onClick={() => onToggleAgent(agent.id)}
-                      type="button"
-                      style={checked ? { borderColor: "var(--accent)", background: "var(--accent-soft)" } : undefined}
-                    >
-                      <span style={{
-                        width: 20, height: 20, flexShrink: 0, borderRadius: 4, border: `1px solid ${checked ? "var(--accent)" : "var(--border)"}`,
-                        background: checked ? "var(--accent)" : "transparent", display: "flex", alignItems: "center", justifyContent: "center",
-                      }}>
-                        {checked && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><polyline points="20 6 9 17 4 12" /></svg>}
-                      </span>
-                      <span style={{ flex: 1, minWidth: 0 }}>
-                        <span style={{ display: "block", fontSize: 14, fontWeight: 500 }}>{agent.name}</span>
-                        <span style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{agent.skillsPath}</span>
-                      </span>
-                      <span className={`badge ${installed ? "badge-success" : "badge-warning"}`}>{installed ? "已安装" : "未安装"}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Conflict Policy */}
-            <div>
-              <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>冲突策略</p>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {policyOptions.map((option) => (
-                  <button
-                    key={option.value}
-                    className={`card${conflictPolicy === option.value ? " selected" : ""}`}
-                    onClick={() => onPolicy(option.value)}
-                    type="button"
-                    style={{
-                      padding: 12, textAlign: "left", cursor: "pointer",
-                      ...(conflictPolicy === option.value ? { borderColor: "var(--accent)", background: "var(--accent-soft)" } : {}),
-                    }}
-                  >
-                    <span style={{ display: "block", fontSize: 14, fontWeight: 500 }}>{option.label}</span>
-                    <span style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>{option.helper}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, borderTop: "1px solid var(--border)", background: "var(--surface-raised)", padding: "16px 24px" }}>
-          <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>已选择 {selectedAgents.length} 个 Agent</p>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              className="btn btn-secondary"
-              onClick={onToggleNoFullCoverage}
-              disabled={busy}
-              type="button"
-              style={isNoFullCoverage ? { borderColor: "var(--accent)", color: "var(--accent)" } : {}}
-            >
-              <svg className="icon icon-sm" viewBox="0 0 24 24"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" /></svg>
-              {isNoFullCoverage ? "取消无需全覆盖" : "无需全覆盖"}
-            </button>
-            {selectedAgents.length === 0 ? (
-              <button className="btn btn-danger" onClick={onSync} disabled={busy} type="button">
-                <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
-                全部删除
-              </button>
-            ) : (
-              <button className="btn btn-primary" onClick={onSync} disabled={busy} type="button">
-                <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>
-                {selectedAgents.length < skill.installedAgentIds.length ? "同步并清理" : "同步"}
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
   );
 }
 

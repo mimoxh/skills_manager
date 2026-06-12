@@ -1,10 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import type {
+  AgentProfile,
   CatalogFilters,
+  CatalogRefreshStatus,
+  CatalogSafetyMode,
   CatalogSkill,
   CatalogSort,
   CatalogSource,
+  ConflictPolicy,
+  GroupedSkill,
+  InstallResult,
 } from "../../types";
+import { SkillInstallDialog } from "./SkillInstallDialog";
 
 const sortOptions: Array<{ value: CatalogSort; label: string }> = [
   { value: "updatedDesc", label: "最近更新" },
@@ -22,7 +29,10 @@ const contentOptions = [
 ];
 interface CatalogViewProps {
   busy: boolean;
+  agents: AgentProfile[];
+  localSkills: GroupedSkill[];
   startupRefreshing: boolean;
+  refreshStatuses: Record<CatalogSafetyMode, CatalogRefreshStatus | null>;
   sources: CatalogSource[];
   skills: CatalogSkill[];
   total: number;
@@ -38,12 +48,20 @@ interface CatalogViewProps {
   onSearch: (query?: string, sort?: CatalogSort, filters?: CatalogFilters, page?: number) => Promise<void>;
   onPage: (page: number) => Promise<void>;
   onRefreshSource: (sourceId: string) => Promise<void>;
+  onRefreshStatus: (safetyMode?: CatalogSafetyMode) => Promise<CatalogRefreshStatus | null>;
+  onStartRefresh: (safetyMode?: CatalogSafetyMode) => Promise<CatalogRefreshStatus>;
+  onCancelRefresh: (safetyMode?: CatalogSafetyMode) => Promise<CatalogRefreshStatus>;
   onSaveSource: (source: CatalogSource) => Promise<void>;
+  onInstallSkill: (catalogSkillId: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) => Promise<InstallResult[]>;
+  onUninstallSkill: (skillId: string, agentIds: string[]) => Promise<void>;
 }
 
 export function CatalogView({
   busy,
+  agents,
+  localSkills,
   startupRefreshing,
+  refreshStatuses,
   sources,
   skills,
   total,
@@ -59,11 +77,41 @@ export function CatalogView({
   onSearch,
   onPage,
   onRefreshSource,
+  onRefreshStatus,
+  onStartRefresh,
+  onCancelRefresh,
   onSaveSource,
+  onInstallSkill,
+  onUninstallSkill,
 }: CatalogViewProps) {
   const [customOpen, setCustomOpen] = useState(false);
   const [customName, setCustomName] = useState("");
   const [customUrl, setCustomUrl] = useState("");
+  const [selectedSkill, setSelectedSkill] = useState<CatalogSkill | null>(null);
+  const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
+  const [conflictPolicy, setConflictPolicy] = useState<ConflictPolicy>("backupOverwrite");
+  const activeRefreshStatus = refreshStatuses[filters.safetyMode];
+  const localSkillLookup = useMemo(() => {
+    const exact = new Map<string, GroupedSkill>();
+    const loose = new Map<string, GroupedSkill>();
+
+    for (const skill of localSkills) {
+      const titleKey = normalizeSkillKey(skill.title);
+      const looseTitleKey = normalizeLooseSkillKey(skill.title);
+      if (titleKey && !exact.has(titleKey)) {
+        exact.set(titleKey, skill);
+      }
+      if (looseTitleKey && !loose.has(looseTitleKey)) {
+        loose.set(looseTitleKey, skill);
+      }
+    }
+
+    return { exact, loose };
+  }, [localSkills]);
+
+  const selectedLocalSkill = useMemo(() => {
+    return selectedSkill ? findLocalSkill(selectedSkill, localSkillLookup) : null;
+  }, [selectedSkill, localSkillLookup]);
 
   useEffect(() => {
     if (startupRefreshing || sources.length || skills.length) {
@@ -72,6 +120,24 @@ export function CatalogView({
     onSearch(query, sort, filters);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startupRefreshing]);
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      onSearch(query, sort, filters, 1);
+    }, 300);
+    return () => window.clearTimeout(handle);
+  }, [query, sort, filters]);
+
+  useEffect(() => {
+    if (!activeRefreshStatus?.isRunning) return;
+    const handle = window.setInterval(async () => {
+      const status = await onRefreshStatus(filters.safetyMode);
+      if (status && !status.isRunning) {
+        await onSearch(query, sort, filters, page);
+      }
+    }, 1500);
+    return () => window.clearInterval(handle);
+  }, [activeRefreshStatus?.isRunning, filters.safetyMode, query, sort, page]);
 
   function updateFilters(next: CatalogFilters) {
     onFilters(next);
@@ -86,7 +152,6 @@ export function CatalogView({
 
   async function applySearch(nextQuery: string) {
     onQuery(nextQuery);
-    await onSearch(nextQuery, sort, filters, 1);
   }
 
   async function applySort(nextSort: CatalogSort) {
@@ -111,6 +176,34 @@ export function CatalogView({
     setCustomName("");
     setCustomUrl("");
     setCustomOpen(false);
+  }
+
+  function openSkill(skill: CatalogSkill) {
+    const localSkill = findLocalSkill(skill, localSkillLookup);
+    setSelectedSkill(skill);
+    setSelectedAgents(localSkill?.installedAgentIds ?? []);
+    setConflictPolicy("backupOverwrite");
+  }
+
+  function toggleAgent(agentId: string) {
+    setSelectedAgents((previous) =>
+      previous.includes(agentId) ? previous.filter((id) => id !== agentId) : [...previous, agentId],
+    );
+  }
+
+  async function installSelectedSkill() {
+    if (!selectedSkill) return;
+    const deselectedIds = selectedLocalSkill
+      ? selectedLocalSkill.installedAgentIds.filter((id) => !selectedAgents.includes(id))
+      : [];
+    if (deselectedIds.length > 0 && selectedLocalSkill) {
+      await onUninstallSkill(selectedLocalSkill.title, deselectedIds);
+    }
+    if (selectedAgents.length > 0) {
+      await onInstallSkill(selectedSkill.id, selectedAgents, conflictPolicy);
+    }
+    setSelectedSkill(null);
+    setSelectedAgents([]);
   }
 
   const sourceCounts = useMemo(() => {
@@ -171,11 +264,58 @@ export function CatalogView({
               </button>
             </FilterSection>
 
+            <FilterSection title="ClawHub 安全">
+              {[
+                ["all", "全部"],
+                ["nonSuspicious", "非 suspicious"],
+              ].map(([value, label]) => (
+                <label className="catalog-check" key={value}>
+                  <input
+                    type="radio"
+                    name="catalog-safety"
+                    checked={filters.safetyMode === value}
+                    onChange={() => updateFilters({ ...filters, safetyMode: value as CatalogSafetyMode })}
+                  />
+                  <span>{label}</span>
+                </label>
+              ))}
+            </FilterSection>
+
             <FilterSection title="仓库刷新">
+              <div style={{ display: "grid", gap: 8, marginBottom: 10 }}>
+                <div style={{ padding: "9px 10px", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", background: "var(--surface-raised)", fontSize: 12, color: "var(--text-secondary)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                    <span>ClawHub {filters.safetyMode === "nonSuspicious" ? "安全索引" : "全量索引"}</span>
+                    <strong style={{ color: "var(--text)" }}>{formatCompactNumber(activeRefreshStatus?.fetchedCount ?? 0)}</strong>
+                  </div>
+                  <div style={{ marginTop: 4, color: activeRefreshStatus?.lastError ? "var(--warning)" : "var(--text-tertiary)" }}>
+                    {activeRefreshStatus?.isRunning
+                      ? "后台刷新中"
+                      : activeRefreshStatus?.isComplete
+                        ? "刷新完成"
+                        : activeRefreshStatus?.lastError || "尚未完成全量刷新"}
+                  </div>
+                </div>
+                {activeRefreshStatus?.isRunning ? (
+                  <button className="btn btn-secondary btn-sm catalog-full-btn" onClick={() => onCancelRefresh(filters.safetyMode)} type="button">
+                    取消 ClawHub 刷新
+                  </button>
+                ) : (
+                  <button className="btn btn-primary btn-sm catalog-full-btn" onClick={() => onStartRefresh(filters.safetyMode)} disabled={busy} type="button">
+                    {activeRefreshStatus?.fetchedCount ? "继续 ClawHub 刷新" : "后台刷新 ClawHub"}
+                  </button>
+                )}
+              </div>
               {sources.map((source) => (
-                <button className="catalog-source-refresh" key={source.id} onClick={() => onRefreshSource(source.id)} disabled={busy} type="button">
+                <button
+                  className="catalog-source-refresh"
+                  key={source.id}
+                  onClick={() => source.id === "clawhub" ? onStartRefresh(filters.safetyMode) : onRefreshSource(source.id)}
+                  disabled={busy || (source.id === "clawhub" && activeRefreshStatus?.isRunning)}
+                  type="button"
+                >
                   <span>{source.name}</span>
-                  <small>{source.lastRefreshedAt ? "已刷新" : "未刷新"}</small>
+                  <small>{source.id === "clawhub" ? (activeRefreshStatus?.isComplete ? "已索引" : "可刷新") : source.lastRefreshedAt ? "已刷新" : "未刷新"}</small>
                 </button>
               ))}
             </FilterSection>
@@ -249,7 +389,7 @@ export function CatalogView({
           <main className="catalog-main">
             <div className="catalog-card-grid">
               {skills.map((skill) => (
-                <article className="catalog-card" key={skill.id}>
+                <article className="catalog-card" key={skill.id} onClick={() => openSkill(skill)} role="button" tabIndex={0}>
                   <div className="catalog-card-top">
                     <SourceIcon icon={skill.sourceIcon} />
                     <span className={`badge ${skill.installStatus === "installed" ? "badge-success" : "badge-muted"}`}>
@@ -330,6 +470,43 @@ export function CatalogView({
           </div>
         </div>
       )}
+
+      {selectedSkill && (
+        <SkillInstallDialog
+          allowNoTargets={Boolean(selectedLocalSkill)}
+          agents={agents}
+          busy={busy}
+          conflictPolicy={conflictPolicy}
+          description={selectedSkill.description}
+          installedAgentIds={selectedLocalSkill?.installedAgentIds ?? []}
+          metadata={[
+            { label: "来源", value: selectedSkill.sourceName },
+            { label: "仓库路径", value: selectedSkill.relativePath || selectedSkill.sourcePath },
+            { label: "兼容 Agent", value: selectedSkill.supportedAgents.length ? selectedSkill.supportedAgents.join(", ") : "未声明" },
+            { label: "已安装 Agent", value: selectedLocalSkill ? selectedLocalSkill.installedAgentIds.length : 0 },
+            { label: "本地匹配", value: selectedLocalSkill?.title },
+            { label: "发布时间", value: selectedSkill.publishedAt },
+            { label: "更新时间", value: selectedSkill.updatedAt },
+            { label: "下载", value: selectedSkill.downloadCount },
+            { label: "安装", value: selectedSkill.installCount },
+          ]}
+          primaryLabel={catalogPrimaryLabel(selectedAgents, selectedLocalSkill)}
+          selectedAgentIds={selectedAgents}
+          sourceLabel={selectedSkill.sourceName}
+          tags={[
+            ...selectedSkill.tags,
+            ...(selectedSkill.hasScripts ? ["scripts"] : []),
+            ...(selectedSkill.hasReferences ? ["references"] : []),
+            ...(selectedSkill.hasAssets ? ["assets"] : []),
+            ...(selectedSkill.hasSkillMd ? ["SKILL.md"] : []),
+          ]}
+          title={selectedSkill.name}
+          onClose={() => setSelectedSkill(null)}
+          onConfirm={installSelectedSkill}
+          onPolicy={setConflictPolicy}
+          onToggleAgent={toggleAgent}
+        />
+      )}
     </>
   );
 }
@@ -363,4 +540,51 @@ function formatCompactNumber(value: number) {
     return `${(value / 10000).toFixed(value >= 100000 ? 0 : 1)}万`;
   }
   return value.toLocaleString("zh-CN");
+}
+
+function normalizeSkillKey(value?: string | null) {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function normalizeLooseSkillKey(value?: string | null) {
+  return normalizeSkillKey(value).replace(/[\s_\-./\\:]+/g, "");
+}
+
+function lastPathSegment(value?: string | null) {
+  const clean = (value ?? "")
+    .trim()
+    .replace(/^clawhub:\/\//i, "")
+    .split(/[?#]/)[0];
+  return clean.split(/[\\/]/).filter(Boolean).pop() ?? "";
+}
+
+function catalogSkillCandidates(skill: CatalogSkill) {
+  return [
+    skill.name,
+    skill.relativePath,
+    skill.sourcePath,
+    lastPathSegment(skill.relativePath),
+    lastPathSegment(skill.sourcePath),
+  ];
+}
+
+function findLocalSkill(
+  skill: CatalogSkill,
+  lookup: { exact: Map<string, GroupedSkill>; loose: Map<string, GroupedSkill> },
+) {
+  const exact = lookup.exact.get(normalizeSkillKey(skill.name));
+  if (exact) return exact;
+
+  for (const candidate of catalogSkillCandidates(skill)) {
+    const loose = lookup.loose.get(normalizeLooseSkillKey(candidate));
+    if (loose) return loose;
+  }
+  return null;
+}
+
+function catalogPrimaryLabel(selectedAgentIds: string[], localSkill: GroupedSkill | null) {
+  if (!localSkill) return "安装到 Agents";
+  if (selectedAgentIds.length === 0) return "全部删除";
+  if (selectedAgentIds.length < localSkill.installedAgentIds.length) return "同步并清理";
+  return "安装/更新";
 }

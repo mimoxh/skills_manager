@@ -3,6 +3,8 @@ import type {
   AgentProfile,
   CatalogFilters,
   CatalogRefreshResult,
+  CatalogRefreshStatus,
+  CatalogSafetyMode,
   CatalogSearchResult,
   CatalogSort,
   CatalogSource,
@@ -96,6 +98,57 @@ export const api = {
       "search_catalog_skills",
       { query, sort, filters, page, pageSize },
       () => ({ items: [], total: 0, page, pageSize, hasMore: false }),
+    );
+  },
+  startCatalogRefresh(sourceId: string, safetyMode: CatalogSafetyMode, mode = "full") {
+    return command<CatalogRefreshStatus>(
+      "start_catalog_refresh",
+      { sourceId, mode, safetyMode },
+      () => ({
+        sourceId,
+        safetyMode,
+        isRunning: false,
+        isComplete: false,
+        fetchedCount: 0,
+        nextCursor: null,
+        generation: 0,
+        lastError: "Desktop only",
+        updatedAt: null,
+      }),
+    );
+  },
+  getCatalogRefreshStatus(sourceId: string, safetyMode: CatalogSafetyMode) {
+    return command<CatalogRefreshStatus>(
+      "get_catalog_refresh_status",
+      { sourceId, safetyMode },
+      () => ({
+        sourceId,
+        safetyMode,
+        isRunning: false,
+        isComplete: false,
+        fetchedCount: 0,
+        nextCursor: null,
+        generation: 0,
+        lastError: null,
+        updatedAt: null,
+      }),
+    );
+  },
+  cancelCatalogRefresh(sourceId: string, safetyMode: CatalogSafetyMode) {
+    return command<CatalogRefreshStatus>(
+      "cancel_catalog_refresh",
+      { sourceId, safetyMode },
+      () => ({
+        sourceId,
+        safetyMode,
+        isRunning: false,
+        isComplete: false,
+        fetchedCount: 0,
+        nextCursor: null,
+        generation: 0,
+        lastError: "Desktop only",
+        updatedAt: null,
+      }),
     );
   },
   installCatalogSkill(catalogSkillId: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) {

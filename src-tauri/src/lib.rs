@@ -1,5 +1,6 @@
 pub mod adapter;
 pub mod catalog;
+pub mod catalog_index;
 pub mod cherry_db;
 pub mod cherry_studio;
 mod commands;
@@ -41,6 +42,9 @@ pub fn run() {
             list_catalog_sources,
             save_catalog_source,
             refresh_catalog_source,
+            start_catalog_refresh,
+            get_catalog_refresh_status,
+            cancel_catalog_refresh,
             search_catalog_skills,
             install_catalog_skill,
             scan_mcp_servers,
