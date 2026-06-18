@@ -422,7 +422,7 @@ input { cursor: text; outline: none; }
   flex: 1;
   overflow: auto;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   align-content: start;
   gap: 14px;
   padding-right: 2px;
