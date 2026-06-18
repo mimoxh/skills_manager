@@ -37,6 +37,7 @@ pub fn run() {
             uninstall_skill,
             uninstall_skill_from_agents,
             rollback_last,
+            repair_claude_cowork_manifest,
             toggle_no_full_coverage,
             toggle_no_full_coverage_mcp,
             list_catalog_sources,

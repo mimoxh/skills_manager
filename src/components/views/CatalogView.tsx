@@ -20,7 +20,6 @@ const sortOptions: Array<{ value: CatalogSort; label: string }> = [
   { value: "source", label: "来源" },
 ];
 
-const agentOptions = ["codex", "claude", "claudeCode", "cursor", "opencode", "openclaw", "unknown"];
 const contentOptions = [
   { value: "scripts", label: "有 scripts" },
   { value: "references", label: "有 references" },
@@ -94,6 +93,7 @@ export function CatalogView({
   const localSkillLookup = useMemo(() => {
     const exact = new Map<string, GroupedSkill>();
     const loose = new Map<string, GroupedSkill>();
+    const slugs = new Map<string, GroupedSkill>();
 
     for (const skill of localSkills) {
       const titleKey = normalizeSkillKey(skill.title);
@@ -104,9 +104,19 @@ export function CatalogView({
       if (looseTitleKey && !loose.has(looseTitleKey)) {
         loose.set(looseTitleKey, skill);
       }
+      for (const copy of skill.copies) {
+        const slugKey = normalizeSkillKey(lastPathSegment(copy.skillPath));
+        const looseSlugKey = normalizeLooseSkillKey(slugKey);
+        if (slugKey && !slugs.has(slugKey)) {
+          slugs.set(slugKey, skill);
+        }
+        if (looseSlugKey && !slugs.has(looseSlugKey)) {
+          slugs.set(looseSlugKey, skill);
+        }
+      }
     }
 
-    return { exact, loose };
+    return { exact, loose, slugs };
   }, [localSkills]);
 
   const selectedLocalSkill = useMemo(() => {
@@ -144,7 +154,7 @@ export function CatalogView({
     onSearch(query, sort, next, 1);
   }
 
-  function toggleArray(key: keyof Pick<CatalogFilters, "sourceIds" | "agentTypes" | "installStatuses" | "contentCapabilities">, value: string) {
+  function toggleArray(key: keyof Pick<CatalogFilters, "sourceIds" | "installStatuses" | "contentCapabilities">, value: string) {
     const current = filters[key] as string[];
     const nextValues = current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
     updateFilters({ ...filters, [key]: nextValues });
@@ -317,15 +327,6 @@ export function CatalogView({
                   <span>{source.name}</span>
                   <small>{source.id === "clawhub" ? (activeRefreshStatus?.isComplete ? "已索引" : "可刷新") : source.lastRefreshedAt ? "已刷新" : "未刷新"}</small>
                 </button>
-              ))}
-            </FilterSection>
-
-            <FilterSection title="Agent 兼容">
-              {agentOptions.map((agent) => (
-                <label className="catalog-check" key={agent}>
-                  <input type="checkbox" checked={filters.agentTypes.includes(agent)} onChange={() => toggleArray("agentTypes", agent)} />
-                  <span>{agent}</span>
-                </label>
               ))}
             </FilterSection>
 
@@ -570,16 +571,31 @@ function catalogSkillCandidates(skill: CatalogSkill) {
 
 function findLocalSkill(
   skill: CatalogSkill,
-  lookup: { exact: Map<string, GroupedSkill>; loose: Map<string, GroupedSkill> },
+  lookup: { exact: Map<string, GroupedSkill>; loose: Map<string, GroupedSkill>; slugs: Map<string, GroupedSkill> },
 ) {
+  if (skill.sourceId === "clawhub") {
+    const slug = clawhubCatalogSlug(skill);
+    if (slug) {
+      return lookup.slugs.get(normalizeSkillKey(slug))
+        ?? lookup.slugs.get(normalizeLooseSkillKey(slug))
+        ?? null;
+    }
+  }
+
   const exact = lookup.exact.get(normalizeSkillKey(skill.name));
   if (exact) return exact;
-
   for (const candidate of catalogSkillCandidates(skill)) {
     const loose = lookup.loose.get(normalizeLooseSkillKey(candidate));
     if (loose) return loose;
   }
   return null;
+}
+
+function clawhubCatalogSlug(skill: CatalogSkill) {
+  if (skill.sourcePath.toLowerCase().startsWith("clawhub://")) {
+    return skill.sourcePath.slice("clawhub://".length).trim();
+  }
+  return skill.relativePath.trim() || lastPathSegment(skill.sourcePath);
 }
 
 function catalogPrimaryLabel(selectedAgentIds: string[], localSkill: GroupedSkill | null) {

@@ -6,6 +6,7 @@ const agentTypeOptions: Array<{ value: AgentType; label: string }> = [
   { value: "opencode", label: "OpenCode" },
   { value: "codex", label: "Codex" },
   { value: "claudeCode", label: "Claude Code" },
+  { value: "claudeCowork", label: "Claude Desktop Cowork" },
   { value: "cursor", label: "Cursor" },
   { value: "trae", label: "Trae" },
 ];
@@ -37,10 +38,11 @@ interface AgentsViewProps {
   onSaveAgent?: (agent: AgentProfile) => void;
   onDelete: (agentId: string) => void;
   onSync: (title: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) => Promise<InstallResult[]>;
+  onRepairCowork?: (agentId: string) => Promise<unknown>;
   onRefresh: () => void;
 }
 
-export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, onSaveCustom, onSaveAgent, onDelete, onSync, onRefresh }: AgentsViewProps) {
+export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, onSaveCustom, onSaveAgent, onDelete, onSync, onRepairCowork, onRefresh }: AgentsViewProps) {
   const [previewAgent, setPreviewAgent] = useState<AgentProfile | null>(null);
   const [editAgent, setEditAgent] = useState<AgentProfile | null>(null);
   const [deleteAgent, setDeleteAgent] = useState<AgentProfile | null>(null);
@@ -140,6 +142,7 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
           onDelete={() => { setDeleteAgent(previewAgent); setPreviewAgent(null); }}
           onToggleMissing={(t) => setSelectedMissing((p) => p.includes(t) ? p.filter((x) => x !== t) : [...p, t])}
           onAddMissing={handleAddMissing}
+          onRepairCowork={onRepairCowork}
         />
       )}
 
@@ -177,13 +180,21 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
 
 // ── 预览弹窗 ──────────────────────────────────────────────────────
 
-function AgentPreviewDialog({ agent, installedSkills, missingSkills, selectedMissing, busy, onClose, onEdit, onDelete, onToggleMissing, onAddMissing }: {
+function AgentPreviewDialog({ agent, installedSkills, missingSkills, selectedMissing, busy, onClose, onEdit, onDelete, onToggleMissing, onAddMissing, onRepairCowork }: {
   agent: AgentProfile; installedSkills: GroupedSkill[]; missingSkills: GroupedSkill[];
   selectedMissing: string[]; busy: boolean;
   onClose: () => void; onEdit: () => void; onDelete: () => void;
   onToggleMissing: (title: string) => void; onAddMissing: () => void;
+  onRepairCowork?: (agentId: string) => Promise<unknown>;
 }) {
-  const mcpPath = (agent.adapterConfig as Record<string, unknown>)?.mcpConfigPath as string | undefined;
+  const adapterConfig = (agent.adapterConfig as Record<string, unknown>) ?? {};
+  const mcpPath = adapterConfig.mcpConfigPath as string | undefined;
+  const coworkPluginRoot = adapterConfig.pluginRoot as string | undefined;
+  const coworkManifestPath = adapterConfig.manifestPath as string | undefined;
+  const unregisteredSkills = installedSkills.filter((skill) => {
+    const copy = skill.copies.find((item) => item.agentId === agent.id);
+    return copy && copy.isRegistered === false;
+  });
 
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(47, 48, 44, 0.28)", padding: 20 }}>
@@ -218,6 +229,18 @@ function AgentPreviewDialog({ agent, installedSkills, missingSkills, selectedMis
                 <code style={{ fontFamily: "var(--font-mono)", fontSize: 12, wordBreak: "break-all" }}>{mcpPath}</code>
               </div>
             )}
+            {coworkPluginRoot && (
+              <div className="detail-item">
+                <span style={{ fontSize: 12, color: "var(--text-secondary)", minWidth: 80 }}>插件包</span>
+                <code style={{ fontFamily: "var(--font-mono)", fontSize: 12, wordBreak: "break-all" }}>{coworkPluginRoot}</code>
+              </div>
+            )}
+            {coworkManifestPath && (
+              <div className="detail-item">
+                <span style={{ fontSize: 12, color: "var(--text-secondary)", minWidth: 80 }}>Cowork 清单</span>
+                <code style={{ fontFamily: "var(--font-mono)", fontSize: 12, wordBreak: "break-all" }}>{coworkManifestPath}</code>
+              </div>
+            )}
           </div>
 
           {/* 概览指标 */}
@@ -232,36 +255,35 @@ function AgentPreviewDialog({ agent, installedSkills, missingSkills, selectedMis
             </div>
           </div>
 
-          {/* 已安装 Skills */}
-          <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>已安装 Skills ({installedSkills.length})</p>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 160, overflowY: "auto", marginBottom: 16 }}>
-            {installedSkills.map((s) => (
-              <div key={s.title} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 10px", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", background: "var(--surface)" }}>
-                <span style={{ fontSize: 13, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.title}</span>
-                <span className="badge badge-version">{s.bestCopy.version ? `v${s.bestCopy.version}` : "-"}</span>
+          {/* Skills 对照 */}
+          <div className="agent-skill-columns">
+            <section className="agent-skill-column">
+              <div className="agent-skill-column-title">已安装 Skills ({installedSkills.length})</div>
+              <div className="agent-skill-list">
+                {installedSkills.map((skill) => (
+                  <AgentSkillCard key={skill.title} agentId={agent.id} skill={skill} kind="installed" />
+                ))}
+                {!installedSkills.length && <div className="agent-skill-empty">暂无已安装 skills</div>}
               </div>
-            ))}
-            {!installedSkills.length && <p style={{ fontSize: 12, color: "var(--text-tertiary)", textAlign: "center", padding: 8 }}>暂无已安装 skills</p>}
-          </div>
+            </section>
 
-          {/* 缺失 Skills */}
-          {missingSkills.length > 0 && (
-            <>
-              <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>缺失 Skills ({missingSkills.length})</p>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 160, overflowY: "auto" }}>
-                {missingSkills.map((s) => {
-                  const sel = selectedMissing.includes(s.title);
-                  return (
-                    <div key={s.title} onClick={() => onToggleMissing(s.title)} role="button" tabIndex={0}
-                      style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 10px", border: `1px dashed ${sel ? "var(--accent)" : "var(--border)"}`, borderRadius: "var(--radius-sm)", background: sel ? "var(--accent-soft)" : "var(--surface)", cursor: "pointer" }}>
-                      <span style={{ fontSize: 13, fontWeight: 500, color: sel ? "var(--accent)" : "var(--text-secondary)" }}>{s.title}</span>
-                      <span className={sel ? "badge badge-syncable" : "badge badge-warning"}>{sel ? "已选" : "缺失"}</span>
-                    </div>
-                  );
-                })}
+            <section className="agent-skill-column">
+              <div className="agent-skill-column-title">缺失 Skills ({missingSkills.length})</div>
+              <div className="agent-skill-list">
+                {missingSkills.map((skill) => (
+                  <AgentSkillCard
+                    key={skill.title}
+                    agentId={agent.id}
+                    skill={skill}
+                    kind="missing"
+                    selected={selectedMissing.includes(skill.title)}
+                    onToggle={() => onToggleMissing(skill.title)}
+                  />
+                ))}
+                {!missingSkills.length && <div className="agent-skill-empty">暂无缺失 skills</div>}
               </div>
-            </>
-          )}
+            </section>
+          </div>
         </div>
 
         {/* Footer */}
@@ -271,6 +293,12 @@ function AgentPreviewDialog({ agent, installedSkills, missingSkills, selectedMis
             删除
           </button>
           <div style={{ display: "flex", gap: 8 }}>
+            {agent.type === "claudeCowork" && unregisteredSkills.length > 0 && onRepairCowork && (
+              <button className="btn btn-secondary" onClick={() => onRepairCowork(agent.id)} disabled={busy} type="button">
+                <svg className="icon icon-sm" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-9 9" /><path d="M3 12a9 9 0 0 1 9-9" /><polyline points="16 16 12 12 8 16" /><line x1="12" y1="12" x2="12" y2="21" /></svg>
+                修复 Cowork 清单
+              </button>
+            )}
             {selectedMissing.length > 0 && (
               <button className="btn btn-primary" onClick={onAddMissing} disabled={busy} type="button">
                 <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12" /></svg>
@@ -286,6 +314,55 @@ function AgentPreviewDialog({ agent, installedSkills, missingSkills, selectedMis
       </div>
     </div>
   );
+}
+
+function AgentSkillCard({ agentId, skill, kind, selected = false, onToggle }: {
+  agentId: string;
+  skill: GroupedSkill;
+  kind: "installed" | "missing";
+  selected?: boolean;
+  onToggle?: () => void;
+}) {
+  const agentCopy = skill.copies.find((copy) => copy.agentId === agentId);
+  const description = skillDescription(skill, agentId);
+  const isMissing = kind === "missing";
+  const className = [
+    "agent-skill-card",
+    isMissing ? "missing" : "installed",
+    selected ? "selected" : "",
+  ].filter(Boolean).join(" ");
+
+  return (
+    <div
+      className={className}
+      onClick={onToggle}
+      role={isMissing ? "button" : undefined}
+      tabIndex={isMissing ? 0 : undefined}
+      title={description}
+    >
+      <div className="agent-skill-card-main">
+        <div className="agent-skill-card-name">{skill.title}</div>
+        <div className="agent-skill-card-desc">{description}</div>
+      </div>
+      <div className="agent-skill-card-badges">
+        {!isMissing && agentCopy?.isRegistered === false && <span className="badge badge-warning">未注册</span>}
+        {isMissing ? (
+          <span className={selected ? "badge badge-syncable" : "badge badge-warning"}>{selected ? "已选" : "缺失"}</span>
+        ) : (
+          <span className="badge badge-version">{skill.bestCopy.version ? `v${skill.bestCopy.version}` : "-"}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function skillDescription(skill: GroupedSkill, agentId: string): string {
+  const agentCopyDescription = skill.copies
+    .find((copy) => copy.agentId === agentId)
+    ?.description
+    ?.trim();
+  const description = agentCopyDescription || skill.description?.trim() || skill.bestCopy.description?.trim();
+  return description || "暂无描述";
 }
 
 // ── 编辑弹窗 ──────────────────────────────────────────────────────
@@ -410,17 +487,17 @@ function AddAgentPanel({ customAgent, busy, onCustomChange, onSaveCustom, pickFo
 // ── 辅助函数 ──────────────────────────────────────────────────────
 
 function agentTypeLabel(type: AgentType): string {
-  const map: Record<AgentType, string> = { codex: "Codex", claude: "Claude", claudeCode: "Claude Code", cursor: "Cursor", trae: "Trae", custom: "自定义", cherryStudio: "Cherry Studio", opencode: "OpenCode" };
+  const map: Record<AgentType, string> = { codex: "Codex", claude: "Claude", claudeCode: "Claude Code", claudeCowork: "Claude Desktop Cowork", cursor: "Cursor", trae: "Trae", custom: "自定义", cherryStudio: "Cherry Studio", opencode: "OpenCode" };
   return map[type] ?? type;
 }
 
 function agentPlaceholder(type: AgentType): string {
-  const map: Partial<Record<AgentType, string>> = { opencode: "OpenCode", codex: "Codex", claudeCode: "Claude Code", cursor: "Cursor", trae: "Trae" };
+  const map: Partial<Record<AgentType, string>> = { opencode: "OpenCode", codex: "Codex", claudeCode: "Claude Code", claudeCowork: "Claude Desktop Cowork", cursor: "Cursor", trae: "Trae" };
   return map[type] ?? "例如 My Agent";
 }
 
 function skillsPlaceholder(type: AgentType): string {
-  const map: Partial<Record<AgentType, string>> = { opencode: "~/.opencode/skills", codex: "~/.codex/skills", claudeCode: "~/.claude/skills", cursor: "~/.cursor/skills", trae: "~/.trae/skills" };
+  const map: Partial<Record<AgentType, string>> = { opencode: "~/.opencode/skills", codex: "~/.codex/skills", claudeCode: "~/.claude/skills", claudeCowork: "%LOCALAPPDATA%\\Claude-3p\\...\\skills", cursor: "~/.cursor/skills", trae: "~/.trae/skills" };
   return map[type] ?? "C:\\Users\\you\\.agent\\skills";
 }
 

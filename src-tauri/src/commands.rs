@@ -113,6 +113,14 @@ pub fn rollback_last(
 }
 
 #[tauri::command]
+pub fn repair_claude_cowork_manifest(
+    agent_id: String,
+    service: State<AppService>,
+) -> AppResult<ImportSkillResult> {
+    service.repair_claude_cowork_manifest(&agent_id)
+}
+
+#[tauri::command]
 pub fn toggle_no_full_coverage(title: String, service: State<AppService>) -> AppResult<bool> {
     service.toggle_no_full_coverage(&title)
 }

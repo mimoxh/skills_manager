@@ -73,6 +73,17 @@ export const api = {
   rollbackLast(agentId: string, skillId: string) {
     return command<void>("rollback_last", { agentId, skillId }, () => undefined);
   },
+  repairClaudeCoworkManifest(agentId: string) {
+    return command<ImportSkillResult>(
+      "repair_claude_cowork_manifest",
+      { agentId },
+      () => ({
+        imported: 0,
+        skipped: 0,
+        message: "Cowork manifest repair is available in the desktop app",
+      }),
+    );
+  },
   toggleNoFullCoverage(title: string) {
     return command<boolean>("toggle_no_full_coverage", { title }, () => false);
   },

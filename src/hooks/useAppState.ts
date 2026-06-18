@@ -469,10 +469,26 @@ export function useAppState() {
     }
   }
 
+  async function repairClaudeCoworkManifest(agentId: string) {
+    setBusy(true);
+    try {
+      const result = await api.repairClaudeCoworkManifest(agentId);
+      await refreshAll();
+      setMessage(result.message);
+      return result;
+    } catch (error) {
+      setMessage(String(error));
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function syncSkillToAgents(
     title: string,
     targetAgentIds: string[],
     conflictPolicy: ConflictPolicy,
+    sourceAgentId?: string | null,
   ): Promise<InstallResult[]> {
     if (!targetAgentIds.length) {
       setMessage("请至少选择一个目标 Agent。");
@@ -480,7 +496,7 @@ export function useAppState() {
     }
     setBusy(true);
     try {
-      const results = await api.syncGroupedSkill(title, null, targetAgentIds, conflictPolicy);
+      const results = await api.syncGroupedSkill(title, sourceAgentId, targetAgentIds, conflictPolicy);
       await refreshAll();
       setMessage(`已完成 ${results.length} 个同步任务。`);
       return results;
@@ -592,6 +608,7 @@ export function useAppState() {
     isInitialLoading,
     pendingImport, executeImport, cancelImport,
     refreshAll, loadSkillReadme, syncSkillToAgents, deleteAgent, uninstallSkill, uninstallSkillFromAgents,
+    repairClaudeCoworkManifest,
     searchCatalog, changeCatalogPage, refreshCatalogSource, saveCatalogSource, installCatalogSkill,
     handleSkillDrop, importFiles, fileToUpload,
     noFullCoverageTitles, toggleNoFullCoverage,

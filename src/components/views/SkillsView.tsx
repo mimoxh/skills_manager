@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { AgentProfile, ConflictPolicy, GroupedSkill, InstallResult } from "../../types";
+import type { AgentProfile, AgentSkillCopy, ConflictPolicy, GroupedSkill, InstallResult } from "../../types";
 import { SkillInstallDialog } from "./SkillInstallDialog";
 
 interface SkillsViewProps {
@@ -11,7 +11,7 @@ interface SkillsViewProps {
   onDrop: (event: React.DragEvent<HTMLElement>) => void;
   onFolder: () => void;
   onArchive: () => void;
-  onSync: (title: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) => Promise<InstallResult[]>;
+  onSync: (title: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy, sourceAgentId?: string | null) => Promise<InstallResult[]>;
   onUninstall: (skillId: string, agentIds: string[]) => Promise<void>;
   onLoadReadme: (skillPath: string) => Promise<string | null>;
   onRefresh: () => void;
@@ -21,6 +21,7 @@ interface SkillsViewProps {
 export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initialFilter = "all", onDrop, onFolder, onArchive, onSync, onUninstall, onLoadReadme, onRefresh, onToggleNoFullCoverage }: SkillsViewProps) {
   const [selectedSkill, setSelectedSkill] = useState<GroupedSkill | null>(null);
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
+  const [selectedSourceAgentId, setSelectedSourceAgentId] = useState<string | null>(null);
   const [conflictPolicy, setConflictPolicy] = useState<ConflictPolicy>("backupOverwrite");
   const [lastResults, setLastResults] = useState<InstallResult[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -48,19 +49,46 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
   }, [skills, noFullCoverageTitles]);
 
   async function openSync(skill: GroupedSkill) {
+    const sourceCopy = preferredSourceCopy(skill);
     setSelectedSkill(skill);
+    setSelectedSourceAgentId(sourceCopy.agentId);
     setSelectedAgents(skill.installedAgentIds);
     setConflictPolicy("backupOverwrite");
     setLastResults([]);
-    if (!skill.readme) {
-      const readme = await onLoadReadme(skill.bestCopy.skillPath);
+    if (!sourceCopy.readme) {
+      const readme = await onLoadReadme(sourceCopy.skillPath);
       if (readme) {
         setSelectedSkill((current) =>
           current?.title === skill.title
-            ? { ...current, readme, bestCopy: { ...current.bestCopy, readme } }
+            ? {
+                ...current,
+                readme,
+                bestCopy: current.bestCopy.agentId === sourceCopy.agentId ? { ...current.bestCopy, readme } : current.bestCopy,
+                copies: current.copies.map((copy) => copy.agentId === sourceCopy.agentId ? { ...copy, readme } : copy),
+              }
             : current,
         );
       }
+    }
+  }
+
+  async function selectSourceAgent(agentId: string) {
+    if (!selectedSkill) return;
+    setSelectedSourceAgentId(agentId);
+    const copy = selectedSkill.copies.find((candidate) => candidate.agentId === agentId);
+    if (!copy || copy.readme) return;
+    const readme = await onLoadReadme(copy.skillPath);
+    if (readme) {
+      setSelectedSkill((current) =>
+        current?.title === selectedSkill.title
+          ? {
+              ...current,
+              readme: current.bestCopy.agentId === agentId ? readme : current.readme,
+              bestCopy: current.bestCopy.agentId === agentId ? { ...current.bestCopy, readme } : current.bestCopy,
+              copies: current.copies.map((candidate) => candidate.agentId === agentId ? { ...candidate, readme } : candidate),
+            }
+          : current,
+      );
     }
   }
 
@@ -77,10 +105,11 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
       await onUninstall(selectedSkill.title, deselectedIds);
     }
     if (selectedAgents.length > 0) {
-      const results = await onSync(selectedSkill.title, selectedAgents, conflictPolicy);
+      const results = await onSync(selectedSkill.title, selectedAgents, conflictPolicy, selectedSourceAgentId);
       setLastResults(results);
     }
     setSelectedSkill(null);
+    setSelectedSourceAgentId(null);
   }
 
   async function confirmDelete() {
@@ -93,15 +122,17 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
     if (!selectedSkill) return false;
     const initial = selectedSkill.installedAgentIds;
     if (selectedAgents.length !== initial.length || selectedAgents.some((id) => !initial.includes(id))) return true;
+    if (selectedSourceAgentId && selectedSourceAgentId !== preferredSourceCopy(selectedSkill).agentId) return true;
     if (conflictPolicy !== "backupOverwrite") return true;
     return false;
-  }, [selectedSkill, selectedAgents, conflictPolicy]);
+  }, [selectedSkill, selectedAgents, selectedSourceAgentId, conflictPolicy]);
 
   function requestClose() {
     if (hasSyncChanges) {
       setDiscardConfirm(true);
     } else {
       setSelectedSkill(null);
+      setSelectedSourceAgentId(null);
     }
   }
 
@@ -257,22 +288,25 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
           agents={agents}
           busy={busy}
           conflictPolicy={conflictPolicy}
-          description={selectedSkill.description}
+          description={selectedSourceCopy(selectedSkill, selectedSourceAgentId).description || selectedSkill.description}
           installedAgentIds={selectedSkill.installedAgentIds}
           selectedAgentIds={selectedAgents}
-          sourceLabel={`来源 ${selectedSkill.bestCopy.agentName} · ${selectedSkill.copies.length} 个副本`}
+          selectedSourceAgentId={selectedSourceAgentId}
+          sourceCopies={selectedSkill.copies}
+          sourceLabel={`来源 ${selectedSourceCopy(selectedSkill, selectedSourceAgentId).agentName} · ${selectedSkill.copies.length} 个副本`}
           metadata={[
-            { label: "来源路径", value: selectedSkill.bestCopy.skillPath },
-            { label: "来源 Agent", value: selectedSkill.bestCopy.agentName },
+            { label: "来源路径", value: selectedSourceCopy(selectedSkill, selectedSourceAgentId).skillPath },
+            { label: "来源 Agent", value: selectedSourceCopy(selectedSkill, selectedSourceAgentId).agentName },
             { label: "副本数量", value: selectedSkill.copies.length },
           ]}
           primaryLabel={selectedAgents.length === 0 ? "全部删除" : selectedAgents.length < selectedSkill.installedAgentIds.length ? "同步并清理" : "同步"}
-          readme={selectedSkill.readme || selectedSkill.bestCopy.readme}
+          readme={selectedSourceCopy(selectedSkill, selectedSourceAgentId).readme || selectedSkill.readme || selectedSkill.bestCopy.readme}
           title={selectedSkill.title}
-          version={selectedSkill.bestCopy.version}
+          version={selectedSourceCopy(selectedSkill, selectedSourceAgentId).version}
           isNoFullCoverage={noFullCoverageTitles.has(selectedSkill.title)}
           onClose={requestClose}
           onPolicy={setConflictPolicy}
+          onSourceAgent={selectSourceAgent}
           onToggleAgent={toggleAgent}
           onConfirm={executeSync}
           onToggleNoFullCoverage={async () => { await onToggleNoFullCoverage(selectedSkill.title); setSelectedSkill(null); }}
@@ -298,11 +332,19 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
           confirmLabel="放弃"
           busy={busy}
           onClose={() => setDiscardConfirm(false)}
-          onConfirm={() => { setDiscardConfirm(false); setSelectedSkill(null); }}
+          onConfirm={() => { setDiscardConfirm(false); setSelectedSkill(null); setSelectedSourceAgentId(null); }}
         />
       )}
     </>
   );
+}
+
+function preferredSourceCopy(skill: GroupedSkill): AgentSkillCopy {
+  return skill.copies.find((copy) => copy.agentId.startsWith("codex:")) || skill.bestCopy;
+}
+
+function selectedSourceCopy(skill: GroupedSkill, agentId: string | null): AgentSkillCopy {
+  return skill.copies.find((copy) => copy.agentId === agentId) || preferredSourceCopy(skill);
 }
 
 function ConfirmDialog({
