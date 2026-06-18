@@ -7,11 +7,12 @@ Skills Manager is a local Windows desktop tool for managing Agent Skills and MCP
 ## Features
 
 - **Skills coverage:** scan local skill directories, group matching skills by title, compare installed and missing agents, choose a source copy, sync to selected agents, uninstall from selected agents, mark skills that do not need full coverage, and read `SKILL.md` or README content in the detail dialog.
-- **Agent management:** detect and manage Codex, Claude, Claude Code, Claude Desktop Cowork, Cursor, Trae, Cherry Studio, OpenCode, and custom skill directories.
+- **Agent management:** detect and manage Codex, Claude, Claude Code, Claude Desktop Cowork, Cursor, Trae, Cherry Studio, OpenCode, and custom skill directories. The agent preview shows installed and missing skills, can add selected missing skills, can delete selected installed skills from that agent, and can repair Claude Desktop Cowork manifests when needed.
 - **Skill import:** import a skill folder or `.zip` archive and choose target agents with conflict handling.
 - **Catalog:** browse built-in ClawHub, Claude, and Codex catalog sources; search, sort, filter, refresh cached sources, use safety-mode filtering, add custom Git catalog sources, and install catalog skills to selected agents.
 - **MCP management:** scan, add, update, enable or disable, sync, and remove MCP servers for Codex, Claude Code, OpenCode, and Trae. Supported transports are `stdio`, `http`, and `sse`.
 - **Cherry Studio integration:** register and clean up Cherry Studio skills through its local SQLite database when installing or uninstalling skills.
+- **Usability:** use wider responsive agent preview dialogs, more readable catalog cards, and higher-contrast text selection for copying README text, paths, and configuration snippets.
 
 ## Tech Stack
 
