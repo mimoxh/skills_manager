@@ -1,4 +1,4 @@
-export type AgentType = "codex" | "claude" | "claudeCode" | "cursor" | "trae" | "custom" | "cherryStudio" | "opencode";
+export type AgentType = "codex" | "claude" | "claudeCode" | "claudeCowork" | "cursor" | "trae" | "custom" | "cherryStudio" | "opencode";
 export type ConflictPolicy = "prompt" | "backupOverwrite" | "skip" | "rename";
 
 export interface SkillManifest {
@@ -29,6 +29,7 @@ export interface AgentSkillCopy {
   updatedAt?: string | null;
   description?: string;
   readme?: string;
+  isRegistered?: boolean;
 }
 
 export interface GroupedSkill {

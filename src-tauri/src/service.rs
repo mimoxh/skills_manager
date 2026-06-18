@@ -1,8 +1,8 @@
 use crate::{
-    adapter::{adapter_for, built_in_adapters, AgentAdapter},
+    adapter::{AgentAdapter, adapter_for, built_in_adapters},
     catalog::{
-        parse_clawhub_api_catalog, scan_catalog_repository, scan_clawhub_api_cache,
-        sort_catalog_skills, CLAWHUB_API_CACHE_FILE,
+        CLAWHUB_API_CACHE_FILE, parse_clawhub_api_catalog, scan_catalog_repository,
+        scan_clawhub_api_cache, sort_catalog_skills,
     },
     catalog_index::{CatalogIndex, RefreshStatePatch},
     cherry_studio::CherryStudioAdapter,
@@ -274,6 +274,9 @@ impl AppService {
         let source_id = source_id.to_string();
         std::thread::spawn(move || {
             let _ = service.refresh_clawhub_index(safety_mode).map_err(|error| {
+                if error.to_string() == "用户已取消刷新" {
+                    return;
+                }
                 let _ = service.mark_clawhub_refresh_error(
                     &source_id,
                     safety_mode,
@@ -304,7 +307,7 @@ impl AppService {
             .map_err(|_| AppError::Message("Refresh cancel lock poisoned".to_string()))?;
         cancel.insert(key);
         drop(cancel);
-        self.get_catalog_refresh_status(source_id, safety_mode)
+        self.mark_catalog_refresh_cancelled(source_id, safety_mode)
     }
 
     pub fn search_catalog_skills(
@@ -321,10 +324,23 @@ impl AppService {
             .iter()
             .map(|skill| normalize_title(&skill.title))
             .collect::<HashSet<_>>();
+        let installed_slugs = installed
+            .iter()
+            .flat_map(|skill| skill.copies.iter())
+            .filter_map(|copy| {
+                Path::new(&copy.skill_path)
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .map(normalize_title)
+            })
+            .collect::<HashSet<_>>();
         let q = query.unwrap_or("").trim().to_ascii_lowercase();
         let mut skills = Vec::new();
 
         for source in sources.into_iter().filter(|source| source.enabled) {
+            if !filters.source_ids.is_empty() && !filters.source_ids.contains(&source.id) {
+                continue;
+            }
             let cache_path = self.catalog_cache_path(&source);
             if !cache_path.exists() {
                 if source.id != "clawhub" {
@@ -344,6 +360,7 @@ impl AppService {
                         sort,
                         &filters,
                         &installed_titles,
+                        &installed_slugs,
                         page.unwrap_or(1),
                         page_size.unwrap_or(100),
                     )?;
@@ -359,7 +376,7 @@ impl AppService {
                 scan_catalog_repository(&cache_path, &source)?
             };
             for skill in &mut source_skills {
-                if installed_titles.contains(&normalize_title(&skill.name)) {
+                if catalog_skill_is_installed(skill, &installed_titles, &installed_slugs) {
                     skill.install_status = CatalogInstallStatus::Installed;
                 }
             }
@@ -472,6 +489,13 @@ impl AppService {
             }
 
             copy_dir_all(source_path, &target)?;
+            if agent.agent_type == AgentType::ClaudeCowork {
+                let target_dir_name = target
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or(source_dir_name);
+                register_claude_cowork_skill(agent, target_dir_name, &target)?;
+            }
             self.store.record_install(
                 &agent.id,
                 &skill.name,
@@ -597,7 +621,9 @@ impl AppService {
                             .join(safe_label(title))
                             .join(chrono::Utc::now().format("%Y%m%d%H%M%S").to_string());
                         copy_dir_all(&target, &backup)?;
-                        fs::remove_dir_all(&target)?;
+                        if agent.agent_type != AgentType::ClaudeCowork {
+                            fs::remove_dir_all(&target)?;
+                        }
                         backup_path = Some(backup.to_string_lossy().to_string());
                     }
                 }
@@ -607,6 +633,9 @@ impl AppService {
                 if let Some(cs) = CherryStudioAdapter::new() {
                     cs.install_skill(source_path, source_dir_name)?;
                 }
+            } else if agent.agent_type == AgentType::ClaudeCowork {
+                copy_dir_all(source_path, &target)?;
+                register_claude_cowork_skill(agent, source_dir_name, &target)?;
             } else {
                 copy_dir_all(source_path, &target)?;
             }
@@ -637,21 +666,29 @@ impl AppService {
             .find(|agent| agent.id == agent_id)
             .ok_or_else(|| AppError::Message(format!("找不到 Agent: {}", agent_id)))?;
 
+        let matched_path = scan_agent_skill_copies(&agent)?
+            .into_iter()
+            .find(|copy| normalize_title(&copy.title) == normalize_title(skill_id))
+            .map(|copy| PathBuf::from(copy.skill_path));
+        let target_path =
+            matched_path.unwrap_or_else(|| Path::new(&agent.skills_path).join(skill_id));
+        let target_name = target_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(skill_id);
+
         if agent.agent_type == AgentType::CherryStudio {
             if let Some(cs) = CherryStudioAdapter::new() {
-                cs.uninstall_skill(skill_id)?;
+                cs.uninstall_skill(target_name)?;
             }
         } else {
             let adapter = adapter_for(&agent);
-            adapter.uninstall(skill_id, &agent, &self.backup_root())?;
+            adapter.uninstall(target_name, &agent, &self.backup_root())?;
         }
 
-        let target_path = Path::new(&agent.skills_path)
-            .join(skill_id)
-            .to_string_lossy()
-            .to_string();
         self.store
-            .record_uninstall(agent_id, skill_id, &target_path, None)
+            .record_uninstall(agent_id, skill_id, &target_path.to_string_lossy(), None)
     }
 
     pub fn uninstall_skill_from_agents(
@@ -678,6 +715,42 @@ impl AppService {
         }
         copy_dir_all(Path::new(&backup), target_path)?;
         Ok(())
+    }
+
+    pub fn repair_claude_cowork_manifest(&self, agent_id: &str) -> AppResult<ImportSkillResult> {
+        let agent = self
+            .list_agents()?
+            .into_iter()
+            .find(|agent| agent.id == agent_id)
+            .ok_or_else(|| AppError::Message(format!("找不到 Agent: {}", agent_id)))?;
+        if agent.agent_type != AgentType::ClaudeCowork {
+            return Err(AppError::Message(
+                "只能修复 Claude Desktop Cowork 清单".to_string(),
+            ));
+        }
+
+        let mut repaired = 0usize;
+        for copy in scan_agent_skill_copies(&agent)? {
+            if copy.is_registered {
+                continue;
+            }
+            let skill_path = PathBuf::from(&copy.skill_path);
+            let Some(skill_id) = skill_path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .filter(|value| !value.trim().is_empty())
+            else {
+                continue;
+            };
+            register_claude_cowork_skill(&agent, skill_id, &skill_path)?;
+            repaired += 1;
+        }
+
+        Ok(ImportSkillResult {
+            imported: repaired,
+            skipped: 0,
+            message: format!("已修复 {} 个 Cowork manifest 条目。", repaired),
+        })
     }
 
     pub fn import_uploaded_files(
@@ -784,7 +857,9 @@ impl AppService {
                                 .join(safe_label(&skill.manifest.id))
                                 .join(chrono::Utc::now().format("%Y%m%d%H%M%S").to_string());
                             copy_dir_all(&target, &backup)?;
-                            fs::remove_dir_all(&target)?;
+                            if agent.agent_type != AgentType::ClaudeCowork {
+                                fs::remove_dir_all(&target)?;
+                            }
                         }
                     }
                 }
@@ -793,6 +868,13 @@ impl AppService {
                     if let Some(cs) = CherryStudioAdapter::new() {
                         cs.install_skill(source, skill_dir_name)?;
                     }
+                } else if agent.agent_type == AgentType::ClaudeCowork {
+                    copy_dir_all(source, &target)?;
+                    let target_dir_name = target
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or(skill_dir_name);
+                    register_claude_cowork_skill(agent, target_dir_name, &target)?;
                 } else {
                     copy_dir_all(source, &target)?;
                 }
@@ -867,20 +949,27 @@ impl AppService {
 
         loop {
             if self.is_catalog_refresh_cancelled("clawhub", safety_mode)? {
-                self.catalog_index.save_refresh_state(RefreshStatePatch {
-                    source_id: "clawhub",
+                self.save_catalog_refresh_cancelled(
+                    "clawhub",
                     safety_mode,
-                    cursor: cursor.as_deref(),
+                    cursor.as_deref(),
                     fetched_count,
                     generation,
-                    is_running: false,
-                    is_complete: false,
-                    last_error: Some("用户已取消刷新"),
-                })?;
+                )?;
                 return Ok(fetched_count);
             }
 
             let value = self.fetch_clawhub_index_page(&agent, cursor.as_deref(), safety_mode)?;
+            if self.is_catalog_refresh_cancelled("clawhub", safety_mode)? {
+                self.save_catalog_refresh_cancelled(
+                    "clawhub",
+                    safety_mode,
+                    cursor.as_deref(),
+                    fetched_count,
+                    generation,
+                )?;
+                return Ok(fetched_count);
+            }
             let page_items = value
                 .get("items")
                 .and_then(|value| value.as_array())
@@ -949,7 +1038,12 @@ impl AppService {
                 }
                 Err(ureq::Error::Status(429, response)) => {
                     let wait = retry_after_delay(&response).min(Duration::from_secs(60));
-                    std::thread::sleep(wait);
+                    if wait_for_retry_or_cancel(wait, Duration::from_millis(250), || {
+                        self.is_catalog_refresh_cancelled("clawhub", safety_mode)
+                    })? {
+                        self.mark_catalog_refresh_cancelled("clawhub", safety_mode)?;
+                        return Ok(serde_json::json!({ "items": [] }));
+                    }
                 }
                 Err(error) => return Err(clawhub_http_error(error)),
             }
@@ -972,6 +1066,42 @@ impl AppService {
             is_running: false,
             is_complete: false,
             last_error: Some(error),
+        })
+    }
+
+    fn mark_catalog_refresh_cancelled(
+        &self,
+        source_id: &str,
+        safety_mode: CatalogSafetyMode,
+    ) -> AppResult<CatalogRefreshStatus> {
+        let status = self.catalog_index.refresh_status(source_id, safety_mode)?;
+        self.save_catalog_refresh_cancelled(
+            source_id,
+            safety_mode,
+            status.next_cursor.as_deref(),
+            status.fetched_count,
+            status.generation,
+        )?;
+        self.catalog_index.refresh_status(source_id, safety_mode)
+    }
+
+    fn save_catalog_refresh_cancelled(
+        &self,
+        source_id: &str,
+        safety_mode: CatalogSafetyMode,
+        cursor: Option<&str>,
+        fetched_count: usize,
+        generation: i64,
+    ) -> AppResult<()> {
+        self.catalog_index.save_refresh_state(RefreshStatePatch {
+            source_id,
+            safety_mode,
+            cursor,
+            fetched_count,
+            generation,
+            is_running: false,
+            is_complete: false,
+            last_error: Some("用户已取消刷新"),
         })
     }
 
@@ -1160,6 +1290,28 @@ fn retry_after_delay(response: &ureq::Response) -> Duration {
         .unwrap_or_else(|| Duration::from_secs(5))
 }
 
+fn wait_for_retry_or_cancel<F>(
+    wait: Duration,
+    interval: Duration,
+    mut is_cancelled: F,
+) -> AppResult<bool>
+where
+    F: FnMut() -> AppResult<bool>,
+{
+    let interval = interval.max(Duration::from_millis(1));
+    let deadline = std::time::Instant::now() + wait;
+
+    while std::time::Instant::now() < deadline {
+        if is_cancelled()? {
+            return Ok(true);
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        std::thread::sleep(remaining.min(interval));
+    }
+
+    is_cancelled()
+}
+
 fn refresh_key(source_id: &str, safety_mode: CatalogSafetyMode) -> String {
     format!("{}::{}", source_id, safety_mode.as_str())
 }
@@ -1311,6 +1463,28 @@ fn catalog_matches_filters(skill: &CatalogSkill, filters: &CatalogFilters) -> bo
     true
 }
 
+fn catalog_skill_is_installed(
+    skill: &CatalogSkill,
+    installed_titles: &HashSet<String>,
+    installed_slugs: &HashSet<String>,
+) -> bool {
+    if skill.source_id == "clawhub" {
+        return clawhub_skill_slug(skill)
+            .map(|slug| installed_slugs.contains(&normalize_title(&slug)))
+            .unwrap_or_else(|| installed_titles.contains(&normalize_title(&skill.name)));
+    }
+    installed_titles.contains(&normalize_title(&skill.name))
+}
+
+fn clawhub_skill_slug(skill: &CatalogSkill) -> Option<String> {
+    skill
+        .source_path
+        .strip_prefix("clawhub://")
+        .filter(|value| !value.trim().is_empty())
+        .map(ToString::to_string)
+        .or_else(|| (!skill.relative_path.trim().is_empty()).then(|| skill.relative_path.clone()))
+}
+
 #[cfg(test)]
 fn collect_clawhub_api_pages<F>(mut fetch_page: F) -> AppResult<Vec<serde_json::Value>>
 where
@@ -1410,6 +1584,11 @@ fn scan_agent_skill_copies(agent: &AgentProfile) -> AppResult<Vec<AgentSkillCopy
     if !root.exists() {
         return Ok(Vec::new());
     }
+    let registered_skill_ids = if agent.agent_type == AgentType::ClaudeCowork {
+        Some(read_claude_cowork_registered_skill_ids(agent)?)
+    } else {
+        None
+    };
     let mut copies = Vec::new();
     for entry in fs::read_dir(root)? {
         let entry = entry?;
@@ -1421,6 +1600,11 @@ fn scan_agent_skill_copies(agent: &AgentProfile) -> AppResult<Vec<AgentSkillCopy
         if dir_name.to_string_lossy().starts_with('.') {
             continue;
         }
+        let dir_id = dir_name.to_string_lossy().to_string();
+        let is_registered = registered_skill_ids
+            .as_ref()
+            .map(|ids| ids.contains(&dir_id))
+            .unwrap_or(true);
         let metadata = fs::metadata(&path).ok();
         let (title, version, description, readme) = read_agent_skill_info(&path, false);
         copies.push(AgentSkillCopy {
@@ -1435,9 +1619,129 @@ fn scan_agent_skill_copies(agent: &AgentProfile) -> AppResult<Vec<AgentSkillCopy
                 .map(system_time_to_rfc3339),
             description,
             readme,
+            is_registered,
         });
     }
     Ok(copies)
+}
+
+fn claude_cowork_manifest_path(agent: &AgentProfile) -> AppResult<PathBuf> {
+    if agent.agent_type != AgentType::ClaudeCowork {
+        return Err(AppError::Message(
+            "Agent 不是 Claude Desktop Cowork".to_string(),
+        ));
+    }
+    if let Some(path) = agent
+        .adapter_config
+        .as_ref()
+        .and_then(|value| value.get("manifestPath"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(PathBuf::from(path));
+    }
+    Path::new(&agent.skills_path)
+        .parent()
+        .map(|parent| parent.join("manifest.json"))
+        .ok_or_else(|| AppError::Message("无法确定 Cowork manifest 路径".to_string()))
+}
+
+fn read_claude_cowork_manifest(agent: &AgentProfile) -> AppResult<serde_json::Value> {
+    let manifest_path = claude_cowork_manifest_path(agent)?;
+    if !manifest_path.exists() {
+        return Ok(serde_json::json!({ "skills": [] }));
+    }
+    let value = serde_json::from_str::<serde_json::Value>(&fs::read_to_string(manifest_path)?)?;
+    Ok(if value.is_object() {
+        value
+    } else {
+        serde_json::json!({ "skills": [] })
+    })
+}
+
+fn read_claude_cowork_registered_skill_ids(agent: &AgentProfile) -> AppResult<HashSet<String>> {
+    let manifest = read_claude_cowork_manifest(agent)?;
+    Ok(manifest
+        .get("skills")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|skill| skill.get("skillId").and_then(|value| value.as_str()))
+        .map(ToString::to_string)
+        .collect())
+}
+
+fn register_claude_cowork_skill(
+    agent: &AgentProfile,
+    skill_id: &str,
+    skill_path: &Path,
+) -> AppResult<()> {
+    let manifest_path = claude_cowork_manifest_path(agent)?;
+    let mut manifest = read_claude_cowork_manifest(agent)?;
+    if !manifest.is_object() {
+        manifest = serde_json::json!({});
+    }
+    let object = manifest
+        .as_object_mut()
+        .ok_or_else(|| AppError::Message("Cowork manifest 必须是 JSON object".to_string()))?;
+    object.insert(
+        "lastUpdated".to_string(),
+        serde_json::Value::Number(chrono::Utc::now().timestamp_millis().into()),
+    );
+
+    let (name, _version, description, _readme) = read_agent_skill_info(skill_path, false);
+    let skills_value = object
+        .entry("skills".to_string())
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    if !skills_value.is_array() {
+        *skills_value = serde_json::Value::Array(Vec::new());
+    }
+    let skills = skills_value
+        .as_array_mut()
+        .ok_or_else(|| AppError::Message("Cowork manifest skills 必须是数组".to_string()))?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let existing_index = skills.iter().position(|entry| {
+        entry
+            .get("skillId")
+            .and_then(|value| value.as_str())
+            .map(|value| value == skill_id)
+            .unwrap_or(false)
+    });
+    let entry_index = if let Some(index) = existing_index {
+        index
+    } else {
+        skills.push(serde_json::json!({}));
+        skills.len() - 1
+    };
+    let entry = &mut skills[entry_index];
+    let entry_object = entry
+        .as_object_mut()
+        .ok_or_else(|| AppError::Message("Cowork manifest skill 条目必须是 object".to_string()))?;
+    entry_object.insert(
+        "skillId".to_string(),
+        serde_json::Value::String(skill_id.to_string()),
+    );
+    entry_object.insert("name".to_string(), serde_json::Value::String(name));
+    if let Some(description) = description {
+        entry_object.insert(
+            "description".to_string(),
+            serde_json::Value::String(description),
+        );
+    }
+    entry_object.insert(
+        "creatorType".to_string(),
+        serde_json::Value::String("user".to_string()),
+    );
+    entry_object.insert("syncManaged".to_string(), serde_json::Value::Bool(false));
+    entry_object.insert("updatedAt".to_string(), serde_json::Value::String(now));
+    entry_object.insert("enabled".to_string(), serde_json::Value::Bool(true));
+
+    if let Some(parent) = manifest_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(manifest_path, serde_json::to_string_pretty(&manifest)?)?;
+    Ok(())
 }
 
 fn group_agent_skills(agents: &[AgentProfile], copies: Vec<AgentSkillCopy>) -> Vec<GroupedSkill> {
@@ -1528,6 +1832,12 @@ fn read_agent_skill_info(
                     let readme = include_readme
                         .then(|| read_agent_skill_readme(skill_path))
                         .flatten();
+                    let description = description.or_else(|| {
+                        fs::read_to_string(skill_path.join("SKILL.md"))
+                            .ok()
+                            .and_then(|text| read_markdown_frontmatter(&text))
+                            .and_then(|(_title, _version, description)| description)
+                    });
                     return (title.to_string(), version, description, readme);
                 }
             }
@@ -1800,6 +2110,59 @@ mod tests {
         }
     }
 
+    #[test]
+    fn cancel_catalog_refresh_immediately_marks_state_not_running() {
+        let service = AppService::in_memory().unwrap();
+        let generation = service
+            .catalog_index
+            .begin_refresh("clawhub", CatalogSafetyMode::All)
+            .unwrap();
+        service
+            .catalog_index
+            .save_refresh_state(RefreshStatePatch {
+                source_id: "clawhub",
+                safety_mode: CatalogSafetyMode::All,
+                cursor: Some("cursor-1"),
+                fetched_count: 200,
+                generation,
+                is_running: true,
+                is_complete: false,
+                last_error: None,
+            })
+            .unwrap();
+
+        let status = service
+            .cancel_catalog_refresh("clawhub", CatalogSafetyMode::All)
+            .unwrap();
+
+        assert!(!status.is_running);
+        assert!(!status.is_complete);
+        assert_eq!(status.next_cursor.as_deref(), Some("cursor-1"));
+        assert_eq!(status.fetched_count, 200);
+        assert_eq!(status.generation, generation);
+        assert_eq!(status.last_error.as_deref(), Some("用户已取消刷新"));
+
+        let persisted = service
+            .get_catalog_refresh_status("clawhub", CatalogSafetyMode::All)
+            .unwrap();
+        assert_eq!(persisted, status);
+    }
+
+    #[test]
+    fn retry_wait_stops_when_cancelled() {
+        let mut checks = 0usize;
+
+        let cancelled =
+            wait_for_retry_or_cancel(Duration::from_secs(60), Duration::from_millis(1), || {
+                checks += 1;
+                Ok(checks >= 2)
+            })
+            .unwrap();
+
+        assert!(cancelled);
+        assert_eq!(checks, 2);
+    }
+
     fn collect_files_recursive(base: &Path, dir: &Path, out: &mut Vec<ImportSkillFile>) {
         for entry in fs::read_dir(dir).unwrap() {
             let entry = entry.unwrap();
@@ -1844,6 +2207,44 @@ mod tests {
             .unwrap();
         }
         fs::write(skill_dir.join("SKILL.md"), markdown).unwrap();
+    }
+
+    fn create_cowork_agent(service: &AppService, root: &Path) -> AgentProfile {
+        let plugin_root = root.join("cowork-plugin");
+        fs::create_dir_all(plugin_root.join(".claude-plugin")).unwrap();
+        fs::create_dir_all(plugin_root.join("skills")).unwrap();
+        fs::write(plugin_root.join(".claude-plugin").join("plugin.json"), "{}").unwrap();
+        fs::write(
+            plugin_root.join("manifest.json"),
+            serde_json::json!({
+                "lastUpdated": 1781697450424u64,
+                "skills": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let profile = AgentProfile {
+            id: "cowork-agent".into(),
+            name: "Claude Desktop Cowork".into(),
+            agent_type: crate::models::AgentType::ClaudeCowork,
+            skills_path: plugin_root.join("skills").to_string_lossy().to_string(),
+            adapter_config: Some(serde_json::json!({
+                "pluginRoot": plugin_root.to_string_lossy(),
+                "manifestPath": plugin_root.join("manifest.json").to_string_lossy()
+            })),
+        };
+        service.add_agent(profile.clone()).unwrap();
+        profile
+    }
+
+    fn cowork_manifest(profile: &AgentProfile) -> serde_json::Value {
+        let manifest_path = profile
+            .adapter_config
+            .as_ref()
+            .and_then(|value| value.get("manifestPath"))
+            .and_then(|value| value.as_str())
+            .unwrap();
+        serde_json::from_str(&fs::read_to_string(manifest_path).unwrap()).unwrap()
     }
 
     #[test]
@@ -2128,6 +2529,7 @@ mod tests {
                 updated_at: Some("2026-05-01T00:00:00Z".into()),
                 description: None,
                 readme: None,
+                is_registered: true,
             },
             AgentSkillCopy {
                 agent_id: "b".into(),
@@ -2139,6 +2541,7 @@ mod tests {
                 updated_at: Some("2026-05-02T00:00:00Z".into()),
                 description: None,
                 readme: None,
+                is_registered: true,
             },
         ];
 
@@ -2210,6 +2613,165 @@ mod tests {
             fs::read_to_string(target_root.path().join("demo").join("SKILL.md")).unwrap(),
             "# Demo Skill\nnew"
         );
+    }
+
+    #[test]
+    fn syncs_skill_to_claude_cowork_and_registers_manifest() {
+        let service = AppService::in_memory().unwrap();
+        let source_root = tempfile::tempdir().unwrap();
+        write_agent_skill(
+            source_root.path(),
+            "academic-paper",
+            Some("academic-paper"),
+            Some("3.1.1"),
+            "---\nname: academic-paper\ndescription: 学术论文写作流水线。\n---\n# Academic Paper",
+        );
+        service
+            .add_agent(AgentProfile {
+                id: "source".into(),
+                name: "Source".into(),
+                agent_type: crate::models::AgentType::Custom,
+                skills_path: source_root.path().to_string_lossy().to_string(),
+                adapter_config: None,
+            })
+            .unwrap();
+        let cowork_root = tempfile::tempdir().unwrap();
+        let cowork = create_cowork_agent(&service, cowork_root.path());
+
+        let first = service
+            .sync_grouped_skill(
+                "academic-paper",
+                Some("source"),
+                vec![cowork.id.clone()],
+                ConflictPolicy::BackupOverwrite,
+            )
+            .unwrap();
+        let second = service
+            .sync_grouped_skill(
+                "academic-paper",
+                Some("source"),
+                vec![cowork.id.clone()],
+                ConflictPolicy::BackupOverwrite,
+            )
+            .unwrap();
+
+        assert_eq!(first[0].action, "installed");
+        assert_eq!(second[0].action, "updated");
+        assert!(
+            Path::new(&cowork.skills_path)
+                .join("academic-paper")
+                .join("SKILL.md")
+                .exists()
+        );
+        let manifest = cowork_manifest(&cowork);
+        let skills = manifest.get("skills").unwrap().as_array().unwrap();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(
+            skills[0].get("skillId").and_then(|value| value.as_str()),
+            Some("academic-paper")
+        );
+        assert_eq!(
+            skills[0].get("name").and_then(|value| value.as_str()),
+            Some("academic-paper")
+        );
+        assert_eq!(
+            skills[0]
+                .get("creatorType")
+                .and_then(|value| value.as_str()),
+            Some("user")
+        );
+        assert_eq!(
+            skills[0]
+                .get("syncManaged")
+                .and_then(|value| value.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            skills[0].get("enabled").and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert!(
+            skills[0]
+                .get("updatedAt")
+                .and_then(|value| value.as_str())
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn scans_claude_cowork_directory_entries_as_unregistered_when_manifest_missing() {
+        let service = AppService::in_memory().unwrap();
+        let cowork_root = tempfile::tempdir().unwrap();
+        let cowork = create_cowork_agent(&service, cowork_root.path());
+        write_agent_skill(
+            Path::new(&cowork.skills_path),
+            "loose-skill",
+            Some("Loose Skill"),
+            Some("1.0.0"),
+            "# Loose Skill",
+        );
+
+        let copy = scan_agent_skill_copies(&cowork)
+            .unwrap()
+            .into_iter()
+            .find(|copy| copy.title == "Loose Skill")
+            .unwrap();
+
+        assert!(!copy.is_registered);
+    }
+
+    #[test]
+    fn repairs_claude_cowork_manifest_for_existing_skill_directories() {
+        let service = AppService::in_memory().unwrap();
+        let cowork_root = tempfile::tempdir().unwrap();
+        let cowork = create_cowork_agent(&service, cowork_root.path());
+        write_agent_skill(
+            Path::new(&cowork.skills_path),
+            "loose-skill",
+            Some("Loose Skill"),
+            Some("1.0.0"),
+            "---\nname: Loose Skill\ndescription: repaired description\n---\n# Loose Skill",
+        );
+
+        let result = service.repair_claude_cowork_manifest(&cowork.id).unwrap();
+
+        assert_eq!(result.imported, 1);
+        let manifest = cowork_manifest(&cowork);
+        let skills = manifest.get("skills").unwrap().as_array().unwrap();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(
+            skills[0].get("skillId").and_then(|value| value.as_str()),
+            Some("loose-skill")
+        );
+        assert_eq!(
+            skills[0].get("name").and_then(|value| value.as_str()),
+            Some("Loose Skill")
+        );
+        assert_eq!(
+            skills[0]
+                .get("description")
+                .and_then(|value| value.as_str()),
+            Some("repaired description")
+        );
+    }
+
+    #[test]
+    fn uninstalls_grouped_skill_by_title_when_directory_name_differs() {
+        let agent_dir = tempfile::tempdir().unwrap();
+        let service = test_service_with_agent(agent_dir.path());
+        write_agent_skill(
+            agent_dir.path(),
+            "powerpoint-pptx",
+            Some("Powerpoint / PPTX"),
+            Some("1.0.1"),
+            "# Powerpoint / PPTX",
+        );
+
+        service
+            .uninstall_skill_from_agents("Powerpoint / PPTX", &["test-agent".into()])
+            .unwrap();
+
+        assert!(!agent_dir.path().join("powerpoint-pptx").exists());
     }
 
     #[test]

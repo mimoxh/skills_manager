@@ -1,5 +1,5 @@
 import ReactMarkdown from "react-markdown";
-import type { AgentProfile, ConflictPolicy } from "../../types";
+import type { AgentProfile, AgentSkillCopy, ConflictPolicy } from "../../types";
 
 const policyOptions: Array<{ value: ConflictPolicy; label: string; helper: string }> = [
   { value: "backupOverwrite", label: "备份覆盖", helper: "保留备份后更新目标目录" },
@@ -19,6 +19,8 @@ interface SkillInstallDialogProps {
   primaryLabel: string;
   readme?: string | null;
   selectedAgentIds: string[];
+  selectedSourceAgentId?: string | null;
+  sourceCopies?: AgentSkillCopy[];
   sourceLabel?: string | null;
   tags?: string[];
   title: string;
@@ -26,6 +28,7 @@ interface SkillInstallDialogProps {
   onClose: () => void;
   onConfirm: () => void;
   onPolicy: (policy: ConflictPolicy) => void;
+  onSourceAgent?: (agentId: string) => void;
   onToggleAgent: (agentId: string) => void;
   onToggleNoFullCoverage?: () => void;
 }
@@ -42,6 +45,8 @@ export function SkillInstallDialog({
   primaryLabel,
   readme,
   selectedAgentIds,
+  selectedSourceAgentId,
+  sourceCopies = [],
   sourceLabel,
   tags = [],
   title,
@@ -49,10 +54,13 @@ export function SkillInstallDialog({
   onClose,
   onConfirm,
   onPolicy,
+  onSourceAgent,
   onToggleAgent,
   onToggleNoFullCoverage,
 }: SkillInstallDialogProps) {
-  const readable = readme || description;
+  const trimmedDescription = description?.trim();
+  const trimmedReadme = readme?.trim();
+  const hasReadableContent = Boolean(trimmedDescription || trimmedReadme);
 
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(47, 48, 44, 0.28)", padding: 20 }}>
@@ -94,9 +102,18 @@ export function SkillInstallDialog({
             )}
 
             <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 12 }}>说明</p>
-            {readable ? (
-              <div className="markdown-body">
-                <ReactMarkdown>{readable}</ReactMarkdown>
+            {hasReadableContent ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                {trimmedDescription && (
+                  <p style={{ fontSize: 13, lineHeight: 1.7, color: "var(--text)", margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                    {trimmedDescription}
+                  </p>
+                )}
+                {trimmedReadme && (
+                  <div className="markdown-body">
+                    <ReactMarkdown>{trimmedReadme}</ReactMarkdown>
+                  </div>
+                )}
               </div>
             ) : (
               <p style={{ fontSize: 13, color: "var(--text-tertiary)", fontStyle: "italic" }}>暂无说明</p>
@@ -158,6 +175,38 @@ export function SkillInstallDialog({
                 ))}
               </div>
             </div>
+
+            {sourceCopies.length > 1 && onSourceAgent && (
+              <div>
+                <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>来源副本</p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {sourceCopies.map((copy) => {
+                    const checked = selectedSourceAgentId === copy.agentId;
+                    return (
+                      <button
+                        key={`${copy.agentId}:${copy.skillPath}`}
+                        className={`agent-item${checked ? " selected" : ""}`}
+                        onClick={() => onSourceAgent(copy.agentId)}
+                        type="button"
+                        style={checked ? { borderColor: "var(--accent)", background: "var(--accent-soft)" } : undefined}
+                      >
+                        <span style={{
+                          width: 20, height: 20, flexShrink: 0, borderRadius: 10, border: `1px solid ${checked ? "var(--accent)" : "var(--border)"}`,
+                          background: checked ? "var(--accent)" : "transparent", display: "flex", alignItems: "center", justifyContent: "center",
+                        }}>
+                          {checked && <svg width="10" height="10" viewBox="0 0 24 24" fill="white"><circle cx="12" cy="12" r="7" /></svg>}
+                        </span>
+                        <span style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
+                          <span style={{ display: "block", fontSize: 14, fontWeight: 500 }}>{copy.agentName}</span>
+                          <span style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{copy.skillPath}</span>
+                        </span>
+                        <span className="badge badge-version">{copy.version ? `v${copy.version}` : "无版本"}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 

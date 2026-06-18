@@ -5,7 +5,7 @@ use crate::{
         CatalogSearchResult, CatalogSkill, CatalogSort, CatalogSource,
     },
 };
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
@@ -299,6 +299,7 @@ impl CatalogIndex {
         sort: CatalogSort,
         filters: &CatalogFilters,
         installed_titles: &HashSet<String>,
+        installed_slugs: &HashSet<String>,
         page: usize,
         page_size: usize,
     ) -> AppResult<CatalogSearchResult> {
@@ -311,6 +312,9 @@ impl CatalogIndex {
             rusqlite::types::Value::Text(source.id.clone()),
             rusqlite::types::Value::Text(filters.safety_mode.as_str().to_string()),
         ];
+        if !filters.source_ids.is_empty() && !filters.source_ids.contains(&source.id) {
+            clauses.push("1 = 0".to_string());
+        }
         let q = query.trim().to_ascii_lowercase();
         if !q.is_empty() {
             clauses.push("(lower(name) LIKE ? OR lower(description) LIKE ? OR lower(relative_path) LIKE ? OR lower(tags_json) LIKE ?)".to_string());
@@ -339,36 +343,47 @@ impl CatalogIndex {
                 .install_statuses
                 .contains(&CatalogInstallStatus::NotInstalled);
 
+            let installed_values = if source.id == "clawhub" {
+                installed_slugs
+            } else {
+                installed_titles
+            };
+            let installed_column = if source.id == "clawhub" {
+                "lower(relative_path)"
+            } else {
+                "lower(name)"
+            };
+
             match (
                 wants_installed,
                 wants_not_installed,
-                installed_titles.is_empty(),
+                installed_values.is_empty(),
             ) {
                 (true, false, true) => clauses.push("1 = 0".to_string()),
                 (true, false, false) => {
                     clauses.push(format!(
-                        "lower(name) IN ({})",
-                        installed_titles
+                        "{installed_column} IN ({})",
+                        installed_values
                             .iter()
                             .map(|_| "?")
                             .collect::<Vec<_>>()
                             .join(", ")
                     ));
-                    for title in installed_titles {
-                        values.push(rusqlite::types::Value::Text(title.clone()));
+                    for value in installed_values {
+                        values.push(rusqlite::types::Value::Text(value.clone()));
                     }
                 }
                 (false, true, false) => {
                     clauses.push(format!(
-                        "lower(name) NOT IN ({})",
-                        installed_titles
+                        "{installed_column} NOT IN ({})",
+                        installed_values
                             .iter()
                             .map(|_| "?")
                             .collect::<Vec<_>>()
                             .join(", ")
                     ));
-                    for title in installed_titles {
-                        values.push(rusqlite::types::Value::Text(title.clone()));
+                    for value in installed_values {
+                        values.push(rusqlite::types::Value::Text(value.clone()));
                     }
                 }
                 (false, false, _) => clauses.push("1 = 0".to_string()),
@@ -426,7 +441,12 @@ impl CatalogIndex {
             let tags_json: String = row.get(8)?;
             let supported_agents_json: String = row.get(9)?;
             let name: String = row.get(1)?;
-            let install_status = if installed_titles.contains(&name.trim().to_lowercase()) {
+            let relative_path: String = row.get(6)?;
+            let install_status = if if source.id == "clawhub" {
+                installed_slugs.contains(&relative_path.trim().to_lowercase())
+            } else {
+                installed_titles.contains(&name.trim().to_lowercase())
+            } {
                 CatalogInstallStatus::Installed
             } else {
                 CatalogInstallStatus::NotInstalled
@@ -438,7 +458,7 @@ impl CatalogIndex {
                 source_name: row.get(3)?,
                 source_icon: row.get(4)?,
                 source_path: row.get(5)?,
-                relative_path: row.get(6)?,
+                relative_path,
                 description: row.get(7)?,
                 tags: serde_json::from_str(&tags_json).unwrap_or_default(),
                 supported_agents: serde_json::from_str(&supported_agents_json).unwrap_or_default(),
@@ -512,6 +532,13 @@ mod tests {
         }
     }
 
+    fn named_skill(slug: &str, name: &str, downloads: u64) -> CatalogSkill {
+        CatalogSkill {
+            name: name.to_string(),
+            ..skill(slug, downloads)
+        }
+    }
+
     #[test]
     fn indexes_and_pages_clawhub_skills_without_loading_everything() {
         let dir = tempfile::tempdir().unwrap();
@@ -536,6 +563,7 @@ mod tests {
                 "",
                 CatalogSort::Downloads,
                 &CatalogFilters::default(),
+                &HashSet::new(),
                 &HashSet::new(),
                 2,
                 100,
@@ -603,6 +631,7 @@ mod tests {
                 CatalogSort::Source,
                 &filters,
                 &HashSet::new(),
+                &HashSet::new(),
                 1,
                 100,
             )
@@ -615,6 +644,7 @@ mod tests {
                 CatalogSort::Source,
                 &filters,
                 &HashSet::new(),
+                &HashSet::new(),
                 1,
                 100,
             )
@@ -622,5 +652,60 @@ mod tests {
 
         assert_eq!(all.items[0].relative_path, "all");
         assert_eq!(safe.items[0].relative_path, "safe");
+    }
+
+    #[test]
+    fn installed_filter_matches_clawhub_slug_before_duplicate_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = CatalogIndex::new(dir.path()).unwrap();
+        index
+            .upsert_skills(
+                "clawhub",
+                CatalogSafetyMode::All,
+                1,
+                &[
+                    named_skill("pdf", "Pdf", 10),
+                    named_skill("invoice-fraud-detection-pdf", "Pdf", 9),
+                ],
+            )
+            .unwrap();
+
+        let mut filters = CatalogFilters::default();
+        filters.install_statuses = vec![crate::models::CatalogInstallStatus::Installed];
+        let installed = index
+            .query(
+                &clawhub_source(),
+                "",
+                CatalogSort::Source,
+                &filters,
+                &HashSet::from(["pdf".to_string()]),
+                &HashSet::from(["pdf".to_string()]),
+                1,
+                100,
+            )
+            .unwrap();
+
+        assert_eq!(installed.total, 1);
+        assert_eq!(installed.items[0].relative_path, "pdf");
+
+        filters.install_statuses = vec![crate::models::CatalogInstallStatus::NotInstalled];
+        let not_installed = index
+            .query(
+                &clawhub_source(),
+                "",
+                CatalogSort::Source,
+                &filters,
+                &HashSet::from(["pdf".to_string()]),
+                &HashSet::from(["pdf".to_string()]),
+                1,
+                100,
+            )
+            .unwrap();
+
+        assert_eq!(not_installed.total, 1);
+        assert_eq!(
+            not_installed.items[0].relative_path,
+            "invoice-fraud-detection-pdf"
+        );
     }
 }

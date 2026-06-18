@@ -41,6 +41,8 @@ pub struct AgentSkillCopy {
     pub description: Option<String>,
     #[serde(default)]
     pub readme: Option<String>,
+    #[serde(default = "default_true")]
+    pub is_registered: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -81,6 +83,8 @@ pub enum AgentType {
     Claude,
     #[serde(rename = "claudeCode")]
     ClaudeCode,
+    #[serde(rename = "claudeCowork")]
+    ClaudeCowork,
     #[serde(rename = "cursor")]
     Cursor,
     #[serde(rename = "trae")]
@@ -99,6 +103,7 @@ impl AgentType {
             AgentType::Codex => "codex",
             AgentType::Claude => "claude",
             AgentType::ClaudeCode => "claudeCode",
+            AgentType::ClaudeCowork => "claudeCowork",
             AgentType::Cursor => "cursor",
             AgentType::Trae => "trae",
             AgentType::Custom => "custom",
@@ -261,6 +266,10 @@ impl CatalogSafetyMode {
             CatalogSafetyMode::NonSuspicious => "nonSuspicious",
         }
     }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
