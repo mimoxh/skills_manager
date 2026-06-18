@@ -706,6 +706,20 @@ input { cursor: text; outline: none; }
   gap: 6px;
   padding-right: 2px;
 }
+.agent-skill-columns-fill {
+  flex: 1;
+  min-height: 0;
+}
+.agent-skill-columns-fill .agent-skill-column {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+.agent-skill-columns-fill .agent-skill-list {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
 .agent-skill-card {
   min-height: 62px;
   display: flex;

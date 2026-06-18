@@ -242,7 +242,7 @@ function AgentPreviewDialog({ agent, installedSkills, missingSkills, selectedMis
 
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(47, 48, 44, 0.28)", padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ maxHeight: "88vh", width: "100%", maxWidth: 720, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(80,60,30,0.14), 0 2px 8px rgba(80,60,30,0.06)" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ height: "88vh", maxHeight: "88vh", width: "100%", maxWidth: 980, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(80,60,30,0.14), 0 2px 8px rgba(80,60,30,0.06)" }}>
         {/* Header */}
         <div style={{ display: "flex", alignItems: "flex-start", gap: 12, borderBottom: "1px solid var(--border)", padding: "20px 24px" }}>
           <div style={{ width: 40, height: 40, background: "var(--accent-light)", borderRadius: "var(--radius-sm)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)", flexShrink: 0 }}>
@@ -260,9 +260,9 @@ function AgentPreviewDialog({ agent, installedSkills, missingSkills, selectedMis
         </div>
 
         {/* Body */}
-        <div style={{ flex: 1, overflow: "auto", padding: "20px 24px" }}>
+        <div style={{ flex: 1, minHeight: 0, overflow: "hidden", padding: "20px 24px", display: "flex", flexDirection: "column" }}>
           {/* 路径信息 */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20, flexShrink: 0 }}>
             <div className="detail-item">
               <span style={{ fontSize: 12, color: "var(--text-secondary)", minWidth: 80 }}>Skills 目录</span>
               <code style={{ fontFamily: "var(--font-mono)", fontSize: 12, wordBreak: "break-all" }}>{agent.skillsPath}</code>
@@ -288,7 +288,7 @@ function AgentPreviewDialog({ agent, installedSkills, missingSkills, selectedMis
           </div>
 
           {/* 概览指标 */}
-          <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 20, flexShrink: 0 }}>
             <div style={{ flex: 1, padding: "10px 12px", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", background: "var(--surface)", textAlign: "center" }}>
               <div style={{ fontSize: 18, fontWeight: 600, color: "var(--success)" }}>{installedSkills.length}</div>
               <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>已安装</div>
@@ -300,7 +300,7 @@ function AgentPreviewDialog({ agent, installedSkills, missingSkills, selectedMis
           </div>
 
           {/* Skills 对照 */}
-          <div className="agent-skill-columns">
+          <div className="agent-skill-columns agent-skill-columns-fill">
             <section className="agent-skill-column">
               <div className="agent-skill-column-title">已安装 Skills ({installedSkills.length})</div>
               <div className="agent-skill-list">
