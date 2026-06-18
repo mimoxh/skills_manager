@@ -100,6 +100,7 @@ export default function App() {
               onSaveAgent={state.saveAgent}
               onDelete={state.deleteAgent}
               onSync={state.syncSkillToAgents}
+              onUninstall={state.uninstallSkillFromAgents}
               onRepairCowork={state.repairClaudeCoworkManifest}
               onRefresh={state.refreshAll}
             />

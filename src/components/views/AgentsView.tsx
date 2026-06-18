@@ -38,22 +38,30 @@ interface AgentsViewProps {
   onSaveAgent?: (agent: AgentProfile) => void;
   onDelete: (agentId: string) => void;
   onSync: (title: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) => Promise<InstallResult[]>;
+  onUninstall: (skillId: string, agentIds: string[]) => Promise<void>;
   onRepairCowork?: (agentId: string) => Promise<unknown>;
   onRefresh: () => void;
 }
 
-export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, onSaveCustom, onSaveAgent, onDelete, onSync, onRepairCowork, onRefresh }: AgentsViewProps) {
+export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, onSaveCustom, onSaveAgent, onDelete, onSync, onUninstall, onRepairCowork, onRefresh }: AgentsViewProps) {
   const [previewAgent, setPreviewAgent] = useState<AgentProfile | null>(null);
   const [editAgent, setEditAgent] = useState<AgentProfile | null>(null);
   const [deleteAgent, setDeleteAgent] = useState<AgentProfile | null>(null);
   const [selectedMissing, setSelectedMissing] = useState<string[]>([]);
+  const [selectedInstalled, setSelectedInstalled] = useState<string[]>([]);
+  const [deleteSkillsConfirm, setDeleteSkillsConfirm] = useState(false);
 
   const previewInstalled = previewAgent ? skills.filter((s) => s.installedAgentIds.includes(previewAgent.id)) : [];
   const previewMissing = previewAgent ? skills.filter((s) => s.missingAgentIds.includes(previewAgent.id)) : [];
 
   function handleAgentClick(agentId: string) {
     const agent = agents.find((a) => a.id === agentId);
-    if (agent) { setPreviewAgent(agent); setSelectedMissing([]); }
+    if (agent) {
+      setPreviewAgent(agent);
+      setSelectedMissing([]);
+      setSelectedInstalled([]);
+      setDeleteSkillsConfirm(false);
+    }
   }
 
   function handleEditFromPreview() {
@@ -77,6 +85,20 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
     if (!previewAgent || !selectedMissing.length) return;
     for (const title of selectedMissing) { await onSync(title, [previewAgent.id], "prompt"); }
     setSelectedMissing([]);
+  }
+
+  async function handleDeleteInstalled() {
+    if (!previewAgent || !selectedInstalled.length) return;
+    for (const title of selectedInstalled) { await onUninstall(title, [previewAgent.id]); }
+    setSelectedInstalled([]);
+    setDeleteSkillsConfirm(false);
+  }
+
+  function closePreview() {
+    setPreviewAgent(null);
+    setSelectedMissing([]);
+    setSelectedInstalled([]);
+    setDeleteSkillsConfirm(false);
   }
 
   return (
@@ -136,12 +158,15 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
           installedSkills={previewInstalled}
           missingSkills={previewMissing}
           selectedMissing={selectedMissing}
+          selectedInstalled={selectedInstalled}
           busy={busy}
-          onClose={() => setPreviewAgent(null)}
+          onClose={closePreview}
           onEdit={handleEditFromPreview}
           onDelete={() => { setDeleteAgent(previewAgent); setPreviewAgent(null); }}
+          onToggleInstalled={(t) => setSelectedInstalled((p) => p.includes(t) ? p.filter((x) => x !== t) : [...p, t])}
           onToggleMissing={(t) => setSelectedMissing((p) => p.includes(t) ? p.filter((x) => x !== t) : [...p, t])}
           onAddMissing={handleAddMissing}
+          onRequestDeleteInstalled={() => setDeleteSkillsConfirm(true)}
           onRepairCowork={onRepairCowork}
         />
       )}
@@ -174,17 +199,36 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
           </div>
         </div>
       )}
+
+      {previewAgent && deleteSkillsConfirm && (
+        <div onClick={() => setDeleteSkillsConfirm(false)} style={{ position: "fixed", inset: 0, zIndex: 70, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(47, 48, 44, 0.36)", padding: 20 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 460, borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(80,60,30,0.14)" }}>
+            <div style={{ padding: "20px 24px" }}>
+              <h3 style={{ fontSize: 15, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>删除已安装 Skills</h3>
+              <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6 }}>
+                确定要从「{previewAgent.name}」删除已选的 {selectedInstalled.length} 个 Skills 吗？其他 Agent 中的同名 Skill 不会被删除。
+              </p>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "14px 24px", borderTop: "1px solid var(--border)" }}>
+              <button className="btn btn-secondary" onClick={() => setDeleteSkillsConfirm(false)} disabled={busy} type="button">取消</button>
+              <button className="btn btn-danger" onClick={handleDeleteInstalled} disabled={busy || selectedInstalled.length === 0} type="button">确认删除</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // ── 预览弹窗 ──────────────────────────────────────────────────────
 
-function AgentPreviewDialog({ agent, installedSkills, missingSkills, selectedMissing, busy, onClose, onEdit, onDelete, onToggleMissing, onAddMissing, onRepairCowork }: {
+function AgentPreviewDialog({ agent, installedSkills, missingSkills, selectedMissing, selectedInstalled, busy, onClose, onEdit, onDelete, onToggleInstalled, onToggleMissing, onAddMissing, onRequestDeleteInstalled, onRepairCowork }: {
   agent: AgentProfile; installedSkills: GroupedSkill[]; missingSkills: GroupedSkill[];
-  selectedMissing: string[]; busy: boolean;
+  selectedMissing: string[]; selectedInstalled: string[]; busy: boolean;
   onClose: () => void; onEdit: () => void; onDelete: () => void;
+  onToggleInstalled: (title: string) => void;
   onToggleMissing: (title: string) => void; onAddMissing: () => void;
+  onRequestDeleteInstalled: () => void;
   onRepairCowork?: (agentId: string) => Promise<unknown>;
 }) {
   const adapterConfig = (agent.adapterConfig as Record<string, unknown>) ?? {};
@@ -261,7 +305,14 @@ function AgentPreviewDialog({ agent, installedSkills, missingSkills, selectedMis
               <div className="agent-skill-column-title">已安装 Skills ({installedSkills.length})</div>
               <div className="agent-skill-list">
                 {installedSkills.map((skill) => (
-                  <AgentSkillCard key={skill.title} agentId={agent.id} skill={skill} kind="installed" />
+                  <AgentSkillCard
+                    key={skill.title}
+                    agentId={agent.id}
+                    skill={skill}
+                    kind="installed"
+                    selected={selectedInstalled.includes(skill.title)}
+                    onToggle={() => onToggleInstalled(skill.title)}
+                  />
                 ))}
                 {!installedSkills.length && <div className="agent-skill-empty">暂无已安装 skills</div>}
               </div>
@@ -305,6 +356,12 @@ function AgentPreviewDialog({ agent, installedSkills, missingSkills, selectedMis
                 添加 {selectedMissing.length} 个 Skills
               </button>
             )}
+            {selectedInstalled.length > 0 && (
+              <button className="btn btn-danger" onClick={onRequestDeleteInstalled} disabled={busy} type="button">
+                <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+                删除 {selectedInstalled.length} 个 Skills
+              </button>
+            )}
             <button className="btn btn-primary" onClick={onEdit} disabled={busy} type="button">
               <svg className="icon icon-sm" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
               编辑
@@ -336,8 +393,8 @@ function AgentSkillCard({ agentId, skill, kind, selected = false, onToggle }: {
     <div
       className={className}
       onClick={onToggle}
-      role={isMissing ? "button" : undefined}
-      tabIndex={isMissing ? 0 : undefined}
+      role={onToggle ? "button" : undefined}
+      tabIndex={onToggle ? 0 : undefined}
       title={description}
     >
       <div className="agent-skill-card-main">
@@ -348,6 +405,8 @@ function AgentSkillCard({ agentId, skill, kind, selected = false, onToggle }: {
         {!isMissing && agentCopy?.isRegistered === false && <span className="badge badge-warning">未注册</span>}
         {isMissing ? (
           <span className={selected ? "badge badge-syncable" : "badge badge-warning"}>{selected ? "已选" : "缺失"}</span>
+        ) : selected ? (
+          <span className="badge badge-warning">待删除</span>
         ) : (
           <span className="badge badge-version">{skill.bestCopy.version ? `v${skill.bestCopy.version}` : "-"}</span>
         )}

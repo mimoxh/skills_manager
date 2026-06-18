@@ -720,7 +720,14 @@ input { cursor: text; outline: none; }
   border-style: dashed;
   cursor: pointer;
 }
+.agent-skill-card.installed[role="button"] {
+  cursor: pointer;
+}
 .agent-skill-card.missing:hover {
+  border-color: var(--border-hover);
+  background: var(--surface-hover);
+}
+.agent-skill-card.installed[role="button"]:hover {
   border-color: var(--border-hover);
   background: var(--surface-hover);
 }
