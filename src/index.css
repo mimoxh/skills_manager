@@ -20,6 +20,8 @@
   --accent-hover: #b06e22;
   --accent-light: #faf0e0;
   --accent-soft: #fdf6eb;
+  --selection-bg: #8f4f13;
+  --selection-text: #fffaf2;
   --success: #6b8c42;
   --success-light: #f0f5e6;
   --warning: #c47d2e;
@@ -53,8 +55,8 @@ html, body, #root {
 body { min-width: 320px; }
 
 ::selection {
-  background: var(--accent-light);
-  color: var(--text);
+  background: var(--selection-bg);
+  color: var(--selection-text);
 }
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
