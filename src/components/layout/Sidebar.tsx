@@ -39,7 +39,7 @@ export function Sidebar({
           <div className="sidebar-logo-icon">S</div>
           <div>
             <div className="sidebar-logo-text">Skills Manager</div>
-            <div className="sidebar-logo-badge">v0.1.0</div>
+            <div className="sidebar-logo-badge">v{__APP_VERSION__}</div>
           </div>
         </div>
       </div>
