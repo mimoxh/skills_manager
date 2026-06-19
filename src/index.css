@@ -364,12 +364,53 @@ input { cursor: text; outline: none; }
 }
 .skills-header {
   padding: 18px 24px; border-bottom: 1px solid var(--border);
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+}
+.skills-header-actions {
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+  min-width: 0; flex: 1;
+}
+.skills-console-search {
+  width: min(360px, 100%);
+  height: 32px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-tertiary);
+  transition: all 0.15s ease;
+}
+.skills-console-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(196, 125, 46, 0.1);
+}
+.skills-console-search input {
+  min-width: 0;
+  flex: 1;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  font-size: 12.5px;
+}
+.skills-console-search input::placeholder { color: var(--text-tertiary); }
+.skills-console-search-clear {
+  width: 20px; height: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-full);
+  color: var(--text-tertiary);
+  font-size: 16px; line-height: 1;
+  flex-shrink: 0;
+}
+.skills-console-search-clear:hover {
+  background: var(--surface-hover);
+  color: var(--text);
 }
 .skills-header-badge {
   font-size: 12px; padding: 4px 10px;
   background: var(--surface-raised); border: 1px solid var(--border);
   border-radius: var(--radius-full); color: var(--text-secondary);
+  white-space: nowrap;
 }
 .skills-list { padding: 8px; }
 
@@ -683,6 +724,9 @@ input { cursor: text; outline: none; }
   .catalog-card-grid { grid-template-columns: 1fr; }
   .catalog-footer { align-items: stretch; flex-direction: column; }
   .catalog-pagination { justify-content: space-between; }
+  .skills-header { align-items: flex-start; flex-direction: column; }
+  .skills-header-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+  .skills-console-search { width: 100%; }
 }
 
 /* ===== Badge ===== */
