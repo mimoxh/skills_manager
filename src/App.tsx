@@ -6,6 +6,7 @@ import { ImportAgentDialog } from "./components/views/ImportAgentDialog";
 import { CatalogView } from "./components/views/CatalogView";
 import { McpView } from "./components/views/McpView";
 import { useAppState } from "./hooks/useAppState";
+import { useTheme } from "./hooks/useTheme";
 import type { ImportSkillFile } from "./types";
 
 const SkillsView = lazy(() => import("./components/views/SkillsView").then((m) => ({ default: m.SkillsView })));
@@ -30,6 +31,7 @@ export default function App() {
   const [skillsFilter, setSkillsFilter] = useState<SkillsFilter>("all");
 
   const state = useAppState();
+  const theme = useTheme();
 
   useEffect(() => {
     if ("__TAURI_INTERNALS__" in window) {
@@ -173,7 +175,15 @@ export default function App() {
   return (
     <TooltipProvider>
       <div className="app">
-        <Sidebar view={view} onNavigate={setView} skillCount={state.skills.length} agentCount={state.agents.length} />
+        <Sidebar
+          view={view}
+          onNavigate={setView}
+          skillCount={state.skills.length}
+          agentCount={state.agents.length}
+          themeMode={theme.themeMode}
+          resolvedTheme={theme.resolvedTheme}
+          onThemeChange={theme.setThemeMode}
+        />
         <div className="main">
           <Titlebar />
           <div className="content">

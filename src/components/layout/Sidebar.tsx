@@ -1,5 +1,7 @@
 import { useState } from "react";
 import type { View } from "../../App";
+import type { ResolvedTheme, ThemeMode } from "../../hooks/useTheme";
+import { ThemeSwitcher } from "./ThemeSwitcher";
 
 const navItems: Array<{ id: View; label: string; icon: string }> = [
   { id: "overview", label: "概览", icon: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z" },
@@ -14,9 +16,20 @@ interface SidebarProps {
   onNavigate: (view: View) => void;
   skillCount?: number;
   agentCount?: number;
+  themeMode: ThemeMode;
+  resolvedTheme: ResolvedTheme;
+  onThemeChange: (mode: ThemeMode) => void;
 }
 
-export function Sidebar({ view, onNavigate, skillCount = 0, agentCount = 0 }: SidebarProps) {
+export function Sidebar({
+  view,
+  onNavigate,
+  skillCount = 0,
+  agentCount = 0,
+  themeMode,
+  resolvedTheme,
+  onThemeChange,
+}: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
 
   return (
@@ -61,6 +74,12 @@ export function Sidebar({ view, onNavigate, skillCount = 0, agentCount = 0 }: Si
         ))}
       </nav>
       <div className="sidebar-footer">
+        <ThemeSwitcher
+          collapsed={collapsed}
+          mode={themeMode}
+          resolvedTheme={resolvedTheme}
+          onChange={onThemeChange}
+        />
         <div className="sidebar-stat">
           <span className="sidebar-stat-dot" />
           <span className="sidebar-footer-text">已识别 {skillCount} 个 skills，{agentCount} 个 agents</span>
