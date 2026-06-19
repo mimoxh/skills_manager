@@ -3,7 +3,7 @@
 [中文文档](README.md)
 
 <p align="center">
-  <img src="doc/preview-overview.png" alt="Skills Manager overview preview" width="900" />
+  <img src="assets/preview-overview.png" alt="Skills Manager overview preview" width="900" />
 </p>
 
 Skills Manager is a local Windows desktop tool for managing Agent Skills and MCP server configuration across multiple AI clients. It scans local agent directories, compares skill and MCP coverage, installs skills from local files or skills repositories, and helps sync configuration without manually copying folders or editing each config file one by one.
@@ -93,4 +93,4 @@ To create the versioned zip package for GitHub Releases:
 Compress-Archive -LiteralPath "dist-native\Skills Manager" -DestinationPath "SkillsManager-v0.2.1-windows-portable.zip" -Force
 ```
 
-The root-level `SkillsManager.exe` and `SkillsManager-v0.2.1-windows-portable.zip` are release artifacts. The zip package is in
+The root-level `SkillsManager.exe` and `SkillsManager-v0.2.1-windows-portable.zip` are release artifacts. The zip package is

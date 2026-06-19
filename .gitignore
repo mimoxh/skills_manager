@@ -18,6 +18,7 @@ src-tauri/gen/
 AGENT.md
 AGENTS.md
 CLAUDE.md
+RELEASE.md
 doc/
 .claude/
 .dev-logs/
