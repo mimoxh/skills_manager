@@ -12,6 +12,7 @@ Skills Manager is a local Windows desktop tool for managing Agent Skills and MCP
 - **Catalog:** browse built-in ClawHub, Claude, and Codex catalog sources; search, sort, filter, refresh cached sources, use safety-mode filtering, add custom Git catalog sources, and install catalog skills to selected agents.
 - **MCP management:** scan, add, update, enable or disable, sync, and remove MCP servers for Codex, Claude Code, OpenCode, and Trae. Supported transports are `stdio`, `http`, and `sse`.
 - **Cherry Studio integration:** register and clean up Cherry Studio skills through its local SQLite database when installing or uninstalling skills.
+- **Theme switching:** choose light mode, dark mode, or follow the system theme. The app remembers the local theme preference on each machine.
 - **Usability:** use wider responsive agent preview dialogs, more readable catalog cards, and higher-contrast text selection for copying README text, paths, and configuration snippets.
 
 ## Tech Stack
@@ -86,10 +87,10 @@ and writes a portable-package `README.txt` into the same directory.
 To create the versioned zip package for GitHub Releases:
 
 ```powershell
-Compress-Archive -LiteralPath "dist-native\Skills Manager" -DestinationPath "SkillsManager-v0.1.1-windows-portable.zip" -Force
+Compress-Archive -LiteralPath "dist-native\Skills Manager" -DestinationPath "SkillsManager-v0.2.1-windows-portable.zip" -Force
 ```
 
-The root-level `SkillsManager.exe` and `SkillsManager-v0.1.1-windows-portable.zip` are release artifacts. The zip package is intentionally ignored by Git and should be uploaded as a GitHub Release asset instead of committed to the repository.
+The root-level `SkillsManager.exe` and `SkillsManager-v0.2.1-windows-portable.zip` are release artifacts. The zip package is intentionally ignored by Git and should be uploaded as a GitHub Release asset instead of committed to the repository.
 
 ## Repository Notes
 

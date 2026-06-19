@@ -26,15 +26,20 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
   const [lastResults, setLastResults] = useState<InstallResult[]>([]);
   const [dragging, setDragging] = useState(false);
   const [filter, setFilter] = useState<"all" | "covered" | "partial" | "needed">(initialFilter);
+  const [searchQuery, setSearchQuery] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<GroupedSkill | null>(null);
   const [discardConfirm, setDiscardConfirm] = useState(false);
 
-  const displayedSkills = useMemo(() => {
+  const statusFilteredSkills = useMemo(() => {
     if (filter === "covered") return skills.filter((s) => s.missingAgentIds.length === 0);
     if (filter === "partial") return skills.filter((s) => s.missingAgentIds.length > 0 && noFullCoverageTitles.has(s.title));
     if (filter === "needed") return skills.filter((s) => s.missingAgentIds.length > 0 && !noFullCoverageTitles.has(s.title));
     return skills;
   }, [skills, filter, noFullCoverageTitles]);
+
+  const displayedSkills = useMemo(() => {
+    return statusFilteredSkills.filter((skill) => matchesSkillSearch(skill, searchQuery));
+  }, [statusFilteredSkills, searchQuery]);
 
   const coveredCount = useMemo(() => {
     return skills.filter((s) => s.missingAgentIds.length === 0).length;
@@ -206,8 +211,27 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
             <div className="card-title">Skills 控制台</div>
             <div className="card-desc">点击任意 skill 选择目标 Agent 同步</div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span className="skills-header-badge">{displayedSkills.length} 个可见项目</span>
+          <div className="skills-header-actions">
+            <div className="skills-console-search">
+              <svg className="icon icon-sm" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
+              <input
+                aria-label="搜索 Skills 控制台"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="搜索名称、描述、来源或路径"
+                type="text"
+              />
+              {searchQuery.trim() && (
+                <button
+                  className="skills-console-search-clear"
+                  onClick={() => setSearchQuery("")}
+                  title="清空搜索"
+                  type="button"
+                >
+                  ×
+                </button>
+              )}
+            </div>
             <button className="btn btn-secondary btn-sm" onClick={onRefresh} disabled={busy} type="button" title="刷新">
               <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>
             </button>
@@ -268,7 +292,9 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
           {!displayedSkills.length && (
             <div style={{ textAlign: "center", padding: "48px 0", color: "var(--text-secondary)" }}>
               <p style={{ fontSize: 14, fontWeight: 500 }}>没有找到 skills</p>
-              <p style={{ fontSize: 12, color: "var(--text-tertiary)", marginTop: 4 }}>设置主仓库或导入包含 manifest 的文件夹后会显示在这里</p>
+              <p style={{ fontSize: 12, color: "var(--text-tertiary)", marginTop: 4 }}>
+                {skills.length === 0 ? "设置主仓库或导入包含 manifest 的文件夹后会显示在这里" : "当前搜索或筛选条件下没有匹配项"}
+              </p>
             </div>
           )}
         </div>
@@ -345,6 +371,27 @@ function preferredSourceCopy(skill: GroupedSkill): AgentSkillCopy {
 
 function selectedSourceCopy(skill: GroupedSkill, agentId: string | null): AgentSkillCopy {
   return skill.copies.find((copy) => copy.agentId === agentId) || preferredSourceCopy(skill);
+}
+
+function matchesSkillSearch(skill: GroupedSkill, query: string): boolean {
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return true;
+
+  const searchableText = [
+    skill.title,
+    skill.description ?? "",
+    skill.bestCopy.version ?? "",
+    skill.bestCopy.agentName,
+    skill.bestCopy.skillPath,
+    ...skill.copies.flatMap((copy) => [
+      copy.agentName,
+      copy.version ?? "",
+      copy.skillPath,
+      copy.description ?? "",
+    ]),
+  ].join(" ").toLowerCase();
+
+  return terms.every((term) => searchableText.includes(term));
 }
 
 function ConfirmDialog({
