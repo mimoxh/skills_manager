@@ -2,11 +2,11 @@
 
 [中文文档](README.md)
 
+Skills Manager is a local Windows desktop tool for managing Agent Skills and MCP server configuration across multiple AI clients. It scans local agent directories, compares skill and MCP coverage, installs skills from local files or skills repositories, and helps sync configuration without manually copying folders or editing each config file one by one.
+
 <p align="center">
   <img src="assets/preview-overview.png" alt="Skills Manager overview preview" width="900" />
 </p>
-
-Skills Manager is a local Windows desktop tool for managing Agent Skills and MCP server configuration across multiple AI clients. It scans local agent directories, compares skill and MCP coverage, installs skills from local files or skills repositories, and helps sync configuration without manually copying folders or editing each config file one by one.
 
 ## Features
 
