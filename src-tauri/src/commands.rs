@@ -131,6 +131,15 @@ pub fn toggle_no_full_coverage_mcp(title: String, service: State<AppService>) ->
 }
 
 #[tauri::command]
+pub fn set_skill_tags(
+    title: String,
+    tags: Vec<String>,
+    service: State<AppService>,
+) -> AppResult<Vec<String>> {
+    service.set_skill_tags(&title, tags)
+}
+
+#[tauri::command]
 pub fn list_catalog_sources(service: State<AppService>) -> AppResult<Vec<CatalogSource>> {
     service.list_catalog_sources()
 }

@@ -4,7 +4,12 @@ use crate::{
 };
 
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, fs, path::PathBuf, sync::Mutex};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::PathBuf,
+    sync::Mutex,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -25,6 +30,8 @@ struct AppState {
     no_full_coverage_mcp_titles: HashSet<String>,
     #[serde(default)]
     catalog_sources: Vec<CatalogSource>,
+    #[serde(default)]
+    skill_tags: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -312,6 +319,38 @@ impl AppStore {
         Ok(state.no_full_coverage_mcp_titles.iter().cloned().collect())
     }
 
+    pub fn set_skill_tags(&self, title: &str, tags: Vec<String>) -> AppResult<Vec<String>> {
+        let key = normalize_skill_title(title);
+        if key.is_empty() {
+            return Err(AppError::Message("Skill 标题不能为空。".to_string()));
+        }
+        let tags = sanitize_skill_tags(tags)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        if tags.is_empty() {
+            state.skill_tags.remove(&key);
+        } else {
+            state.skill_tags.insert(key, tags.clone());
+        }
+        drop(state);
+        self.save()?;
+        Ok(tags)
+    }
+
+    pub fn list_skill_tags(&self, title: &str) -> AppResult<Vec<String>> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        Ok(state
+            .skill_tags
+            .get(&normalize_skill_title(title))
+            .cloned()
+            .unwrap_or_default())
+    }
+
     pub fn save_catalog_source(&self, source: &CatalogSource) -> AppResult<()> {
         let mut state = self
             .state
@@ -339,6 +378,32 @@ impl AppStore {
         sources.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(sources)
     }
+}
+
+fn normalize_skill_title(title: &str) -> String {
+    title.trim().to_lowercase()
+}
+
+fn sanitize_skill_tags(tags: Vec<String>) -> AppResult<Vec<String>> {
+    let mut seen = HashSet::new();
+    let mut cleaned = Vec::new();
+    for tag in tags {
+        let trimmed = tag.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.chars().count() > 32 {
+            return Err(AppError::Message(format!(
+                "标签不能超过 32 个字符: {}",
+                trimmed
+            )));
+        }
+        let normalized = trimmed.to_lowercase();
+        if seen.insert(normalized) {
+            cleaned.push(trimmed.to_string());
+        }
+    }
+    Ok(cleaned)
 }
 
 #[cfg(test)]
@@ -415,5 +480,25 @@ mod tests {
         let sources = store.list_catalog_sources().unwrap();
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].id, "custom-demo");
+    }
+
+    #[test]
+    fn saves_sanitized_skill_tags_by_normalized_title() {
+        let store = AppStore::in_memory().unwrap();
+
+        store
+            .set_skill_tags(
+                "  Demo Skill  ",
+                vec![
+                    " AI ".to_string(),
+                    "ai".to_string(),
+                    "".to_string(),
+                    "中文标签".to_string(),
+                ],
+            )
+            .unwrap();
+
+        let tags = store.list_skill_tags("demo skill").unwrap();
+        assert_eq!(tags, vec!["AI".to_string(), "中文标签".to_string()]);
     }
 }

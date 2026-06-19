@@ -585,6 +585,21 @@ export function useAppState() {
     }
   }
 
+  async function setSkillTags(title: string, tags: string[]): Promise<string[]> {
+    setBusy(true);
+    try {
+      const savedTags = await api.setSkillTags(title, tags);
+      await refreshAll();
+      setMessage("已更新标签。");
+      return savedTags;
+    } catch (error) {
+      setMessage(String(error));
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function toggleMcpNoFullCoverage(title: string) {
     setBusy(true);
     try {
@@ -612,6 +627,7 @@ export function useAppState() {
     searchCatalog, changeCatalogPage, refreshCatalogSource, saveCatalogSource, installCatalogSkill,
     handleSkillDrop, importFiles, fileToUpload,
     noFullCoverageTitles, toggleNoFullCoverage,
+    setSkillTags,
     mcpServers, refreshMcpServers, addMcpServer, updateMcpServer, removeMcpServer, toggleMcpServer,
     syncMcpServerToAgents, removeMcpServerFromAgents,
     noFullCoverageMcpTitles, toggleMcpNoFullCoverage,

@@ -54,6 +54,8 @@ pub struct GroupedSkill {
     pub installed_agent_ids: Vec<String>,
     pub missing_agent_ids: Vec<String>,
     #[serde(default)]
+    pub user_tags: Vec<String>,
+    #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
     pub readme: Option<String>,

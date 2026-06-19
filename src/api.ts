@@ -90,6 +90,9 @@ export const api = {
   toggleMcpNoFullCoverage(title: string) {
     return command<boolean>("toggle_no_full_coverage_mcp", { title }, () => false);
   },
+  setSkillTags(title: string, tags: string[]) {
+    return command<string[]>("set_skill_tags", { title, tags }, () => tags);
+  },
   listCatalogSources() {
     return command<CatalogSource[]>("list_catalog_sources", {}, () => []);
   },

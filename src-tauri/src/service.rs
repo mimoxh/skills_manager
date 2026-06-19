@@ -129,6 +129,10 @@ impl AppService {
         self.store.toggle_no_full_coverage_mcp(title)
     }
 
+    pub fn set_skill_tags(&self, title: &str, tags: Vec<String>) -> AppResult<Vec<String>> {
+        self.store.set_skill_tags(title, tags)
+    }
+
     pub fn list_saved_agents(&self) -> AppResult<Vec<AgentProfile>> {
         self.store.list_agents()
     }
@@ -522,7 +526,11 @@ impl AppService {
         for agent in &agents {
             copies.extend(scan_agent_skill_copies(agent)?);
         }
-        Ok(group_agent_skills(&agents, copies))
+        let mut groups = group_agent_skills(&agents, copies);
+        for group in &mut groups {
+            group.user_tags = self.store.list_skill_tags(&group.title)?;
+        }
+        Ok(groups)
     }
 
     pub fn read_agent_skill_readme(&self, skill_path: &str) -> AppResult<Option<String>> {
@@ -1778,6 +1786,7 @@ fn group_agent_skills(agents: &[AgentProfile], copies: Vec<AgentSkillCopy>) -> V
                 title: best_copy.title.clone(),
                 description: best_copy.description.clone(),
                 readme: best_copy.readme.clone(),
+                user_tags: Vec::new(),
                 best_copy,
                 copies,
                 installed_agent_ids,
@@ -2549,6 +2558,30 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].best_copy.agent_id, "b");
         assert!(groups[0].missing_agent_ids.is_empty());
+    }
+
+    #[test]
+    fn scan_agent_skills_includes_user_tags_from_store() {
+        let agent_dir = tempfile::tempdir().unwrap();
+        let service = test_service_with_agent(agent_dir.path());
+        write_agent_skill(
+            agent_dir.path(),
+            "demo-skill",
+            Some("Demo Skill"),
+            Some("1.0.0"),
+            "# Demo Skill",
+        );
+
+        service
+            .set_skill_tags(" demo skill ", vec!["AI".to_string(), "效率".to_string()])
+            .unwrap();
+
+        let skills = service.scan_agent_skills().unwrap();
+        let demo = skills
+            .into_iter()
+            .find(|skill| skill.title == "Demo Skill")
+            .unwrap();
+        assert_eq!(demo.user_tags, vec!["AI".to_string(), "效率".to_string()]);
     }
 
     #[test]

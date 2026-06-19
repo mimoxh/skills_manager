@@ -86,6 +86,7 @@ export default function App() {
               onLoadReadme={state.loadSkillReadme}
               onRefresh={state.refreshAll}
               onToggleNoFullCoverage={state.toggleNoFullCoverage}
+              onSetSkillTags={state.setSkillTags}
             />
           </Suspense>
         );

@@ -434,6 +434,80 @@ input { cursor: text; outline: none; }
 .skill-meta { font-size: 12px; color: var(--text-secondary); margin-top: 3px; }
 .skill-desc { font-size: 12px; color: var(--text-tertiary); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .skill-tags { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.skills-tag-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 0 18px 10px;
+  color: var(--text-secondary);
+}
+.skills-tag-filter-label {
+  font-size: 12px;
+  font-weight: 600;
+  margin-right: 2px;
+}
+.skill-tag-filter {
+  cursor: pointer;
+}
+.skill-tag-filter.selected {
+  background: var(--accent-light);
+  border-color: rgba(196, 125, 46, 0.28);
+  color: var(--accent);
+}
+.skills-tag-filter-clear {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+}
+.skills-tag-filter-clear:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.skill-tag-editor {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.skill-tag-remove {
+  cursor: pointer;
+}
+.skill-tag-remove span {
+  font-size: 13px;
+  line-height: 1;
+}
+.skill-tag-editor-empty {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-style: italic;
+}
+.skill-tag-editor-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.skill-tag-editor-input input {
+  min-width: 0;
+  flex: 1;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12.5px;
+  padding: 0 10px;
+}
+.skill-tag-editor-input input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(196, 125, 46, 0.1);
+}
+.skill-tag-editor-error {
+  margin-top: 8px;
+  color: var(--danger);
+  font-size: 12px;
+}
 
 /* ===== Catalog View ===== */
 .catalog-view {
@@ -741,6 +815,7 @@ input { cursor: text; outline: none; }
 .badge-syncable { background: var(--accent-light); border-color: rgba(196, 125, 46, 0.2); color: var(--accent); font-weight: 600; }
 .badge-synced { background: var(--surface-raised); border-color: var(--border); color: var(--text-tertiary); }
 .badge-muted { background: var(--surface-raised); border-color: var(--border); color: var(--text-tertiary); font-style: italic; }
+.badge-user-tag { background: var(--accent-soft); border-color: rgba(196, 125, 46, 0.18); color: var(--accent); }
 
 /* ===== Buttons ===== */
 .btn {

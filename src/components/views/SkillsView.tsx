@@ -16,9 +16,10 @@ interface SkillsViewProps {
   onLoadReadme: (skillPath: string) => Promise<string | null>;
   onRefresh: () => void;
   onToggleNoFullCoverage: (title: string) => Promise<void>;
+  onSetSkillTags: (title: string, tags: string[]) => Promise<string[]>;
 }
 
-export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initialFilter = "all", onDrop, onFolder, onArchive, onSync, onUninstall, onLoadReadme, onRefresh, onToggleNoFullCoverage }: SkillsViewProps) {
+export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initialFilter = "all", onDrop, onFolder, onArchive, onSync, onUninstall, onLoadReadme, onRefresh, onToggleNoFullCoverage, onSetSkillTags }: SkillsViewProps) {
   const [selectedSkill, setSelectedSkill] = useState<GroupedSkill | null>(null);
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [selectedSourceAgentId, setSelectedSourceAgentId] = useState<string | null>(null);
@@ -27,6 +28,7 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
   const [dragging, setDragging] = useState(false);
   const [filter, setFilter] = useState<"all" | "covered" | "partial" | "needed">(initialFilter);
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedTagFilters, setSelectedTagFilters] = useState<string[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<GroupedSkill | null>(null);
   const [discardConfirm, setDiscardConfirm] = useState(false);
 
@@ -38,8 +40,21 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
   }, [skills, filter, noFullCoverageTitles]);
 
   const displayedSkills = useMemo(() => {
-    return statusFilteredSkills.filter((skill) => matchesSkillSearch(skill, searchQuery));
-  }, [statusFilteredSkills, searchQuery]);
+    return statusFilteredSkills
+      .filter((skill) => matchesTagFilters(skill, selectedTagFilters))
+      .filter((skill) => matchesSkillSearch(skill, searchQuery));
+  }, [statusFilteredSkills, selectedTagFilters, searchQuery]);
+
+  const allUserTags = useMemo(() => {
+    const tags = new Map<string, string>();
+    for (const skill of skills) {
+      for (const tag of skill.userTags ?? []) {
+        const key = tag.toLowerCase();
+        if (!tags.has(key)) tags.set(key, tag);
+      }
+    }
+    return [...tags.values()].sort((a, b) => a.localeCompare(b));
+  }, [skills]);
 
   const coveredCount = useMemo(() => {
     return skills.filter((s) => s.missingAgentIds.length === 0).length;
@@ -121,6 +136,20 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
     if (!deleteTarget) return;
     await onUninstall(deleteTarget.title, deleteTarget.installedAgentIds);
     setDeleteTarget(null);
+  }
+
+  async function updateSelectedSkillTags(title: string, tags: string[]) {
+    const savedTags = await onSetSkillTags(title, tags);
+    setSelectedSkill((current) => current?.title === title ? { ...current, userTags: savedTags } : current);
+    return savedTags;
+  }
+
+  function toggleTagFilter(tag: string) {
+    setSelectedTagFilters((current) =>
+      current.some((value) => value.toLowerCase() === tag.toLowerCase())
+        ? current.filter((value) => value.toLowerCase() !== tag.toLowerCase())
+        : [...current, tag],
+    );
   }
 
   const hasSyncChanges = useMemo(() => {
@@ -218,7 +247,7 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
                 aria-label="搜索 Skills 控制台"
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="搜索名称、描述、来源或路径"
+                placeholder="搜索名称、描述、来源、路径或标签"
                 type="text"
               />
               {searchQuery.trim() && (
@@ -232,11 +261,35 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
                 </button>
               )}
             </div>
+            <span className="skills-header-badge">{displayedSkills.length} 个可见项目</span>
             <button className="btn btn-secondary btn-sm" onClick={onRefresh} disabled={busy} type="button" title="刷新">
               <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>
             </button>
           </div>
         </div>
+        {allUserTags.length > 0 && (
+          <div className="skills-tag-filter-row">
+            <span className="skills-tag-filter-label">标签</span>
+            {allUserTags.map((tag) => {
+              const selected = selectedTagFilters.some((value) => value.toLowerCase() === tag.toLowerCase());
+              return (
+                <button
+                  className={`badge badge-user-tag skill-tag-filter${selected ? " selected" : ""}`}
+                  key={tag}
+                  onClick={() => toggleTagFilter(tag)}
+                  type="button"
+                >
+                  {tag}
+                </button>
+              );
+            })}
+            {selectedTagFilters.length > 0 && (
+              <button className="skills-tag-filter-clear" onClick={() => setSelectedTagFilters([])} type="button">
+                清空标签筛选
+              </button>
+            )}
+          </div>
+        )}
         <div className="skills-list">
           {displayedSkills.map((skill) => (
             <div
@@ -255,6 +308,9 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
                 {skill.description && <div className="skill-desc">{skill.description}</div>}
                 <div className="skill-tags">
                   <span className="badge badge-version">{skill.bestCopy.version ? `v${skill.bestCopy.version}` : "未声明版本"}</span>
+                  {(skill.userTags ?? []).map((tag) => (
+                    <span className="badge badge-user-tag" key={tag}>{tag}</span>
+                  ))}
                   <span className="badge badge-success">{skill.installedAgentIds.length} 已有</span>
                   {skill.missingAgentIds.length > 0 && !noFullCoverageTitles.has(skill.title) && (
                     <span className="badge badge-warning">{skill.missingAgentIds.length} 缺失</span>
@@ -327,6 +383,7 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
           ]}
           primaryLabel={selectedAgents.length === 0 ? "全部删除" : selectedAgents.length < selectedSkill.installedAgentIds.length ? "同步并清理" : "同步"}
           readme={selectedSourceCopy(selectedSkill, selectedSourceAgentId).readme || selectedSkill.readme || selectedSkill.bestCopy.readme}
+          tags={selectedSkill.userTags ?? []}
           title={selectedSkill.title}
           version={selectedSourceCopy(selectedSkill, selectedSourceAgentId).version}
           isNoFullCoverage={noFullCoverageTitles.has(selectedSkill.title)}
@@ -336,6 +393,7 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
           onToggleAgent={toggleAgent}
           onConfirm={executeSync}
           onToggleNoFullCoverage={async () => { await onToggleNoFullCoverage(selectedSkill.title); setSelectedSkill(null); }}
+          onUserTagsChange={updateSelectedSkillTags}
         />
       )}
 
@@ -373,6 +431,12 @@ function selectedSourceCopy(skill: GroupedSkill, agentId: string | null): AgentS
   return skill.copies.find((copy) => copy.agentId === agentId) || preferredSourceCopy(skill);
 }
 
+function matchesTagFilters(skill: GroupedSkill, selectedTags: string[]): boolean {
+  if (!selectedTags.length) return true;
+  const tags = new Set((skill.userTags ?? []).map((tag) => tag.toLowerCase()));
+  return selectedTags.every((tag) => tags.has(tag.toLowerCase()));
+}
+
 function matchesSkillSearch(skill: GroupedSkill, query: string): boolean {
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return true;
@@ -383,6 +447,7 @@ function matchesSkillSearch(skill: GroupedSkill, query: string): boolean {
     skill.bestCopy.version ?? "",
     skill.bestCopy.agentName,
     skill.bestCopy.skillPath,
+    ...(skill.userTags ?? []),
     ...skill.copies.flatMap((copy) => [
       copy.agentName,
       copy.version ?? "",

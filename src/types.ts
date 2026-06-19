@@ -38,6 +38,7 @@ export interface GroupedSkill {
   copies: AgentSkillCopy[];
   installedAgentIds: string[];
   missingAgentIds: string[];
+  userTags: string[];
   description?: string;
   readme?: string;
 }

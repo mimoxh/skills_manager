@@ -40,6 +40,7 @@ pub fn run() {
             repair_claude_cowork_manifest,
             toggle_no_full_coverage,
             toggle_no_full_coverage_mcp,
+            set_skill_tags,
             list_catalog_sources,
             save_catalog_source,
             refresh_catalog_source,
