@@ -447,26 +447,26 @@ input { cursor: text; outline: none; }
   font-weight: 600;
   margin-right: 2px;
 }
-.skill-tag-filter {
+.badge.skill-tag-filter {
   background: var(--surface);
   border-color: var(--border);
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.15s ease;
 }
-.skill-tag-filter:hover {
+.badge.skill-tag-filter:hover {
   background: var(--surface-raised);
   border-color: var(--border-hover);
   color: var(--text);
 }
-.skill-tag-filter.selected {
+.badge.skill-tag-filter.selected {
   background: var(--accent);
   border-color: var(--accent);
   color: white;
   font-weight: 700;
   box-shadow: 0 2px 8px rgba(196, 125, 46, 0.22);
 }
-.skill-tag-filter.selected:hover {
+.badge.skill-tag-filter.selected:hover {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
   color: white;
