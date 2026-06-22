@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import type { AgentProfile, AgentSkillCopy, ConflictPolicy } from "../../types";
 
@@ -14,6 +14,7 @@ interface SkillInstallDialogProps {
   busy: boolean;
   conflictPolicy: ConflictPolicy;
   description?: string | null;
+  enableAgentTagFilter?: boolean;
   installedAgentIds?: string[];
   isNoFullCoverage?: boolean;
   metadata?: Array<{ label: string; value?: string | number | null }>;
@@ -41,6 +42,7 @@ export function SkillInstallDialog({
   busy,
   conflictPolicy,
   description,
+  enableAgentTagFilter = false,
   installedAgentIds = [],
   isNoFullCoverage = false,
   metadata = [],
@@ -66,6 +68,24 @@ export function SkillInstallDialog({
   const hasReadableContent = Boolean(trimmedDescription || trimmedReadme);
   const [tagInput, setTagInput] = useState("");
   const [tagError, setTagError] = useState<string | null>(null);
+  const [selectedAgentTagFilters, setSelectedAgentTagFilters] = useState<string[]>([]);
+
+  const agentTagOptions = useMemo(() => {
+    if (!enableAgentTagFilter) return [];
+    const tagMap = new Map<string, string>();
+    for (const agent of agents) {
+      for (const tag of agent.userTags ?? []) {
+        const key = tag.toLowerCase();
+        if (!tagMap.has(key)) tagMap.set(key, tag);
+      }
+    }
+    return [...tagMap.values()].sort((a, b) => a.localeCompare(b));
+  }, [agents, enableAgentTagFilter]);
+
+  const displayedAgents = useMemo(() => {
+    if (!enableAgentTagFilter || selectedAgentTagFilters.length === 0) return agents;
+    return agents.filter((agent) => matchesAgentTagFilters(agent, selectedAgentTagFilters));
+  }, [agents, enableAgentTagFilter, selectedAgentTagFilters]);
 
   async function saveTags(nextTags: string[]) {
     if (!onUserTagsChange) return;
@@ -95,6 +115,14 @@ export function SkillInstallDialog({
 
   async function removeTag(tag: string) {
     await saveTags(tags.filter((existing) => existing.toLowerCase() !== tag.toLowerCase()));
+  }
+
+  function toggleAgentTagFilter(tag: string) {
+    setSelectedAgentTagFilters((current) =>
+      current.some((value) => value.toLowerCase() === tag.toLowerCase())
+        ? current.filter((value) => value.toLowerCase() !== tag.toLowerCase())
+        : [...current, tag],
+    );
   }
 
   return (
@@ -206,8 +234,31 @@ export function SkillInstallDialog({
           <div style={{ overflow: "auto", padding: "20px 24px", display: "flex", flexDirection: "column", gap: 20 }}>
             <div>
               <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>目标 Agent</p>
+              {enableAgentTagFilter && agentTagOptions.length > 0 && (
+                <div className="skills-tag-filter-row" style={{ padding: "0 0 10px" }}>
+                  <span className="skills-tag-filter-label">标签</span>
+                  {agentTagOptions.map((tag) => {
+                    const selected = selectedAgentTagFilters.some((value) => value.toLowerCase() === tag.toLowerCase());
+                    return (
+                      <button
+                        className={`badge badge-user-tag skill-tag-filter${selected ? " selected" : ""}`}
+                        key={tag}
+                        onClick={() => toggleAgentTagFilter(tag)}
+                        type="button"
+                      >
+                        {tag}
+                      </button>
+                    );
+                  })}
+                  {selectedAgentTagFilters.length > 0 && (
+                    <button className="skills-tag-filter-clear" onClick={() => setSelectedAgentTagFilters([])} type="button">
+                      清空标签筛选
+                    </button>
+                  )}
+                </div>
+              )}
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {agents.map((agent) => {
+                {displayedAgents.map((agent) => {
                   const checked = selectedAgentIds.includes(agent.id);
                   const installed = installedAgentIds.includes(agent.id);
                   return (
@@ -227,6 +278,13 @@ export function SkillInstallDialog({
                       <span style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
                         <span style={{ display: "block", fontSize: 14, fontWeight: 500 }}>{agent.name}</span>
                         <span style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{agent.skillsPath}</span>
+                        {(agent.userTags ?? []).length > 0 && (
+                          <span className="agent-tags">
+                            {(agent.userTags ?? []).map((tag) => (
+                              <span className="badge badge-user-tag" key={tag}>{tag}</span>
+                            ))}
+                          </span>
+                        )}
                       </span>
                       {installed && <span className="badge badge-success">已安装</span>}
                     </button>
@@ -234,6 +292,9 @@ export function SkillInstallDialog({
                 })}
                 {!agents.length && (
                   <p style={{ fontSize: 12, color: "var(--text-tertiary)", padding: "12px 0" }}>暂无 Agent，请先添加 Agent。</p>
+                )}
+                {agents.length > 0 && !displayedAgents.length && (
+                  <p style={{ fontSize: 12, color: "var(--text-tertiary)", padding: "12px 0" }}>当前标签筛选条件下没有匹配的 Agent。</p>
                 )}
               </div>
             </div>
@@ -317,4 +378,10 @@ export function SkillInstallDialog({
       </div>
     </div>
   );
+}
+
+function matchesAgentTagFilters(agent: AgentProfile, selectedTags: string[]): boolean {
+  if (!selectedTags.length) return true;
+  const tags = new Set((agent.userTags ?? []).map((tag) => tag.toLowerCase()));
+  return selectedTags.every((tag) => tags.has(tag.toLowerCase()));
 }

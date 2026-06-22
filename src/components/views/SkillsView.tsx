@@ -371,6 +371,7 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
           busy={busy}
           conflictPolicy={conflictPolicy}
           description={selectedSourceCopy(selectedSkill, selectedSourceAgentId).description || selectedSkill.description}
+          enableAgentTagFilter
           installedAgentIds={selectedSkill.installedAgentIds}
           selectedAgentIds={selectedAgents}
           selectedSourceAgentId={selectedSourceAgentId}
