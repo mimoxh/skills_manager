@@ -519,6 +519,13 @@ input { cursor: text; outline: none; }
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(196, 125, 46, 0.1);
 }
+.skill-tag-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
 .skill-tag-editor-error {
   margin-top: 8px;
   color: var(--danger);

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { AgentProfile, AgentType, ConflictPolicy, GroupedSkill, InstallResult } from "../../types";
+import { UserTagEditor } from "./UserTagEditor";
 
 const agentTypeOptions: Array<{ value: AgentType; label: string }> = [
   { value: "custom", label: "自定义" },
@@ -229,6 +230,7 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
       {editAgent && (
         <AgentEditDialog
           agent={editAgent}
+          availableUserTags={allUserTags}
           busy={busy}
           onChange={setEditAgent}
           onClose={() => setEditAgent(null)}
@@ -505,39 +507,14 @@ function matchesAgentTagFilters(agent: AgentProfile, selectedTags: string[]): bo
 
 // ── 编辑弹窗 ──────────────────────────────────────────────────────
 
-function AgentEditDialog({ agent, busy, onChange, onClose, onSave, pickFolder, pickFile }: {
+function AgentEditDialog({ agent, availableUserTags, busy, onChange, onClose, onSave, pickFolder, pickFile }: {
   agent: AgentProfile; busy: boolean;
+  availableUserTags: string[];
   onChange: (agent: AgentProfile) => void; onClose: () => void; onSave: () => void;
   pickFolder: () => Promise<string | null>;
   pickFile: (filters?: Array<{ name: string; extensions: string[] }>) => Promise<string | null>;
 }) {
   const showMcpPath = isMcpAgent(agent.type);
-  const [tagInput, setTagInput] = useState("");
-  const [tagError, setTagError] = useState<string | null>(null);
-
-  function addTag() {
-    const tag = tagInput.trim();
-    if (!tag) return;
-    if (Array.from(tag).length > 32) {
-      setTagError("标签不能超过 32 个字符。");
-      return;
-    }
-    if ((agent.userTags ?? []).some((existing) => existing.toLowerCase() === tag.toLowerCase())) {
-      setTagInput("");
-      setTagError(null);
-      return;
-    }
-    setTagInput("");
-    setTagError(null);
-    onChange({ ...agent, userTags: [...(agent.userTags ?? []), tag] });
-  }
-
-  function removeTag(tag: string) {
-    onChange({
-      ...agent,
-      userTags: (agent.userTags ?? []).filter((existing) => existing.toLowerCase() !== tag.toLowerCase()),
-    });
-  }
 
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(47, 48, 44, 0.28)", padding: 20 }}>
@@ -585,48 +562,12 @@ function AgentEditDialog({ agent, busy, onChange, onClose, onSave, pickFolder, p
           )}
           <div className="input-group">
             <label className="input-label">自定义标签</label>
-            <div className="skill-tag-editor">
-              {(agent.userTags ?? []).length > 0 ? (
-                (agent.userTags ?? []).map((tag) => (
-                  <button
-                    className="badge badge-user-tag skill-tag-remove"
-                    disabled={busy}
-                    key={tag}
-                    onClick={() => removeTag(tag)}
-                    title={`删除标签 ${tag}`}
-                    type="button"
-                  >
-                    {tag}
-                    <span aria-hidden="true">×</span>
-                  </button>
-                ))
-              ) : (
-                <span className="skill-tag-editor-empty">暂无标签</span>
-              )}
-            </div>
-            <div className="skill-tag-editor-input">
-              <input
-                disabled={busy}
-                maxLength={64}
-                onChange={(event) => {
-                  setTagInput(event.target.value);
-                  if (tagError) setTagError(null);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    addTag();
-                  }
-                }}
-                placeholder="输入标签后按 Enter"
-                type="text"
-                value={tagInput}
-              />
-              <button className="btn btn-secondary btn-sm" disabled={busy || !tagInput.trim()} onClick={addTag} type="button">
-                添加
-              </button>
-            </div>
-            {tagError && <p className="skill-tag-editor-error">{tagError}</p>}
+            <UserTagEditor
+              availableTags={availableUserTags}
+              busy={busy}
+              onChange={(userTags) => onChange({ ...agent, userTags })}
+              tags={agent.userTags ?? []}
+            />
           </div>
         </div>
 

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import type { AgentProfile, AgentSkillCopy, ConflictPolicy } from "../../types";
+import { UserTagEditor } from "./UserTagEditor";
 
 const policyOptions: Array<{ value: ConflictPolicy; label: string; helper: string }> = [
   { value: "backupOverwrite", label: "备份覆盖", helper: "保留备份后更新目标目录" },
@@ -11,6 +12,7 @@ const policyOptions: Array<{ value: ConflictPolicy; label: string; helper: strin
 interface SkillInstallDialogProps {
   agents: AgentProfile[];
   allowNoTargets?: boolean;
+  availableUserTags?: string[];
   busy: boolean;
   conflictPolicy: ConflictPolicy;
   description?: string | null;
@@ -39,6 +41,7 @@ interface SkillInstallDialogProps {
 export function SkillInstallDialog({
   agents,
   allowNoTargets = false,
+  availableUserTags = [],
   busy,
   conflictPolicy,
   description,
@@ -66,8 +69,6 @@ export function SkillInstallDialog({
   const trimmedDescription = description?.trim();
   const trimmedReadme = readme?.trim();
   const hasReadableContent = Boolean(trimmedDescription || trimmedReadme);
-  const [tagInput, setTagInput] = useState("");
-  const [tagError, setTagError] = useState<string | null>(null);
   const [selectedAgentTagFilters, setSelectedAgentTagFilters] = useState<string[]>([]);
 
   const agentTagOptions = useMemo(() => {
@@ -89,32 +90,7 @@ export function SkillInstallDialog({
 
   async function saveTags(nextTags: string[]) {
     if (!onUserTagsChange) return;
-    setTagError(null);
-    try {
-      await onUserTagsChange(title, nextTags);
-    } catch (error) {
-      setTagError(String(error));
-    }
-  }
-
-  async function addTag() {
-    const tag = tagInput.trim();
-    if (!tag) return;
-    if (Array.from(tag).length > 32) {
-      setTagError("标签不能超过 32 个字符。");
-      return;
-    }
-    if (tags.some((existing) => existing.toLowerCase() === tag.toLowerCase())) {
-      setTagInput("");
-      setTagError(null);
-      return;
-    }
-    setTagInput("");
-    await saveTags([...tags, tag]);
-  }
-
-  async function removeTag(tag: string) {
-    await saveTags(tags.filter((existing) => existing.toLowerCase() !== tag.toLowerCase()));
+    await onUserTagsChange(title, nextTags);
   }
 
   function toggleAgentTagFilter(tag: string) {
@@ -153,48 +129,7 @@ export function SkillInstallDialog({
             {onUserTagsChange && (
               <div className="detail-section">
                 <p className="detail-section-title">自定义标签</p>
-                <div className="skill-tag-editor">
-                  {tags.length > 0 ? (
-                    tags.map((tag) => (
-                      <button
-                        className="badge badge-user-tag skill-tag-remove"
-                        disabled={busy}
-                        key={tag}
-                        onClick={() => removeTag(tag)}
-                        title={`删除标签 ${tag}`}
-                        type="button"
-                      >
-                        {tag}
-                        <span aria-hidden="true">×</span>
-                      </button>
-                    ))
-                  ) : (
-                    <span className="skill-tag-editor-empty">暂无标签</span>
-                  )}
-                </div>
-                <div className="skill-tag-editor-input">
-                  <input
-                    disabled={busy}
-                    maxLength={64}
-                    onChange={(event) => {
-                      setTagInput(event.target.value);
-                      if (tagError) setTagError(null);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        void addTag();
-                      }
-                    }}
-                    placeholder="输入标签后按 Enter"
-                    type="text"
-                    value={tagInput}
-                  />
-                  <button className="btn btn-secondary btn-sm" disabled={busy || !tagInput.trim()} onClick={() => void addTag()} type="button">
-                    添加
-                  </button>
-                </div>
-                {tagError && <p className="skill-tag-editor-error">{tagError}</p>}
+                <UserTagEditor availableTags={availableUserTags} busy={busy} onChange={saveTags} tags={tags} />
               </div>
             )}
 

@@ -368,6 +368,7 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
         <SkillInstallDialog
           allowNoTargets
           agents={agents}
+          availableUserTags={allUserTags}
           busy={busy}
           conflictPolicy={conflictPolicy}
           description={selectedSourceCopy(selectedSkill, selectedSourceAgentId).description || selectedSkill.description}
