@@ -23,6 +23,7 @@ const emptyCustom: AgentProfile = {
   type: "custom",
   skillsPath: "",
   adapterConfig: {},
+  userTags: [],
 };
 
 const emptyCatalogFilters: CatalogFilters = {
@@ -75,7 +76,7 @@ export function useAppState() {
   const filteredAgents = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return agents;
-    return agents.filter((a) => [a.name, a.id, a.type, a.skillsPath].some((v) => v.toLowerCase().includes(q)));
+    return agents.filter((a) => [a.name, a.id, a.type, a.skillsPath, ...(a.userTags ?? [])].some((v) => v.toLowerCase().includes(q)));
   }, [agents, query]);
 
   async function refreshAll() {
@@ -411,6 +412,7 @@ export function useAppState() {
       id: source.id || crypto.randomUUID(),
       name: source.name.trim(),
       skillsPath: source.skillsPath.trim(),
+      userTags: source.userTags ?? [],
     };
     if (!agent.name || !agent.skillsPath) {
       setMessage("自定义 Agent 需要填写名称和 Skills 安装目录。");
@@ -600,6 +602,21 @@ export function useAppState() {
     }
   }
 
+  async function setAgentTags(agentId: string, tags: string[]): Promise<string[]> {
+    setBusy(true);
+    try {
+      const savedTags = await api.setAgentTags(agentId, tags);
+      await refreshAll();
+      setMessage("已更新 Agent 标签。");
+      return savedTags;
+    } catch (error) {
+      setMessage(String(error));
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function toggleMcpNoFullCoverage(title: string) {
     setBusy(true);
     try {
@@ -627,7 +644,7 @@ export function useAppState() {
     searchCatalog, changeCatalogPage, refreshCatalogSource, saveCatalogSource, installCatalogSkill,
     handleSkillDrop, importFiles, fileToUpload,
     noFullCoverageTitles, toggleNoFullCoverage,
-    setSkillTags,
+    setSkillTags, setAgentTags,
     mcpServers, refreshMcpServers, addMcpServer, updateMcpServer, removeMcpServer, toggleMcpServer,
     syncMcpServerToAgents, removeMcpServerFromAgents,
     noFullCoverageMcpTitles, toggleMcpNoFullCoverage,

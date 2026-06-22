@@ -101,6 +101,7 @@ export default function App() {
               onCustomChange={state.setCustomAgent}
               onSaveCustom={state.saveCustomAgent}
               onSaveAgent={state.saveAgent}
+              onSetAgentTags={state.setAgentTags}
               onDelete={state.deleteAgent}
               onSync={state.syncSkillToAgents}
               onUninstall={state.uninstallSkillFromAgents}

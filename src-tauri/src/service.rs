@@ -133,6 +133,10 @@ impl AppService {
         self.store.set_skill_tags(title, tags)
     }
 
+    pub fn set_agent_tags(&self, agent_id: &str, tags: Vec<String>) -> AppResult<Vec<String>> {
+        self.store.set_agent_tags(agent_id, tags)
+    }
+
     pub fn list_saved_agents(&self) -> AppResult<Vec<AgentProfile>> {
         self.store.list_agents()
     }
@@ -146,6 +150,9 @@ impl AppService {
             agents.entry(agent.id.clone()).or_insert(agent);
         }
         let mut values = agents.into_values().collect::<Vec<_>>();
+        for agent in &mut values {
+            agent.user_tags = self.store.list_agent_tags(&agent.id)?;
+        }
         values.sort_by(|a, b| a.name.cmp(&b.name).then(a.skills_path.cmp(&b.skills_path)));
         Ok(values)
     }
@@ -2063,6 +2070,7 @@ mod tests {
             agent_type: crate::models::AgentType::Custom,
             skills_path: agent_dir.to_string_lossy().to_string(),
             adapter_config: None,
+            user_tags: Vec::new(),
         };
         service.add_agent(profile).unwrap();
         service
@@ -2241,6 +2249,7 @@ mod tests {
                 "pluginRoot": plugin_root.to_string_lossy(),
                 "manifestPath": plugin_root.join("manifest.json").to_string_lossy()
             })),
+            user_tags: Vec::new(),
         };
         service.add_agent(profile.clone()).unwrap();
         profile
@@ -2301,6 +2310,7 @@ mod tests {
             agent_type: crate::models::AgentType::Custom,
             skills_path: agent_dir.path().to_string_lossy().to_string(),
             adapter_config: None,
+            user_tags: Vec::new(),
         };
 
         service.add_agent(profile).unwrap();
@@ -2308,6 +2318,35 @@ mod tests {
         let agents = clone.list_saved_agents().unwrap();
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].id, "shared-agent");
+    }
+
+    #[test]
+    fn list_agents_includes_user_tags_from_store() {
+        let service = AppService::in_memory().unwrap();
+        let agent_dir = tempfile::tempdir().unwrap();
+        let profile = AgentProfile {
+            id: "tagged-agent".into(),
+            name: "Tagged Agent".into(),
+            agent_type: crate::models::AgentType::Custom,
+            skills_path: agent_dir.path().to_string_lossy().to_string(),
+            adapter_config: None,
+            user_tags: Vec::new(),
+        };
+
+        service.add_agent(profile).unwrap();
+        service
+            .set_agent_tags(
+                "tagged-agent",
+                vec!["生产力".to_string(), "AI".to_string()],
+            )
+            .unwrap();
+
+        let agents = service.list_agents().unwrap();
+        let tagged = agents
+            .into_iter()
+            .find(|agent| agent.id == "tagged-agent")
+            .unwrap();
+        assert_eq!(tagged.user_tags, vec!["生产力".to_string(), "AI".to_string()]);
     }
 
     #[test]
@@ -2519,6 +2558,7 @@ mod tests {
             agent_type: crate::models::AgentType::Custom,
             skills_path: "a".into(),
             adapter_config: None,
+            user_tags: Vec::new(),
         };
         let agent_b = AgentProfile {
             id: "b".into(),
@@ -2526,6 +2566,7 @@ mod tests {
             agent_type: crate::models::AgentType::Custom,
             skills_path: "b".into(),
             adapter_config: None,
+            user_tags: Vec::new(),
         };
         let copies = vec![
             AgentSkillCopy {
@@ -2611,6 +2652,7 @@ mod tests {
                 agent_type: crate::models::AgentType::Custom,
                 skills_path: agent_a_root.path().to_string_lossy().to_string(),
                 adapter_config: None,
+                user_tags: Vec::new(),
             },
             AgentProfile {
                 id: "agent-b".into(),
@@ -2618,6 +2660,7 @@ mod tests {
                 agent_type: crate::models::AgentType::Custom,
                 skills_path: agent_b_root.path().to_string_lossy().to_string(),
                 adapter_config: None,
+                user_tags: Vec::new(),
             },
             AgentProfile {
                 id: "target".into(),
@@ -2625,6 +2668,7 @@ mod tests {
                 agent_type: crate::models::AgentType::Custom,
                 skills_path: target_root.path().to_string_lossy().to_string(),
                 adapter_config: None,
+                user_tags: Vec::new(),
             },
         ];
         for agent in agents {
@@ -2666,6 +2710,7 @@ mod tests {
                 agent_type: crate::models::AgentType::Custom,
                 skills_path: source_root.path().to_string_lossy().to_string(),
                 adapter_config: None,
+                user_tags: Vec::new(),
             })
             .unwrap();
         let cowork_root = tempfile::tempdir().unwrap();
@@ -2827,6 +2872,7 @@ mod tests {
             agent_type: crate::models::AgentType::Custom,
             skills_path: root.path().to_string_lossy().to_string(),
             adapter_config: None,
+            user_tags: Vec::new(),
         };
         let copies = scan_agent_skill_copies(&agent).unwrap();
         assert_eq!(copies.len(), 1);

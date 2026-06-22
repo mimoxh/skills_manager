@@ -75,6 +75,7 @@ impl DirectoryAdapter {
                         "pluginRoot": plugin_root.to_string_lossy(),
                         "manifestPath": manifest_path.to_string_lossy()
                     })),
+                    user_tags: Vec::new(),
                 });
             }
         }
@@ -119,6 +120,7 @@ impl AgentAdapter for DirectoryAdapter {
                     agent_type: AgentType::OpenCode,
                     skills_path,
                     adapter_config: None,
+                    user_tags: Vec::new(),
                 }];
             }
             return vec![];
@@ -177,6 +179,7 @@ impl AgentAdapter for DirectoryAdapter {
                     agent_type: self.agent_type.clone(),
                     skills_path: path.to_string_lossy().to_string(),
                     adapter_config: None,
+                    user_tags: Vec::new(),
                 }
             })
             .collect()

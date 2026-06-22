@@ -93,6 +93,9 @@ export const api = {
   setSkillTags(title: string, tags: string[]) {
     return command<string[]>("set_skill_tags", { title, tags }, () => tags);
   },
+  setAgentTags(agentId: string, tags: string[]) {
+    return command<string[]>("set_agent_tags", { agentId, tags }, () => tags);
+  },
   listCatalogSources() {
     return command<CatalogSource[]>("list_catalog_sources", {}, () => []);
   },

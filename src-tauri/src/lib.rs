@@ -41,6 +41,7 @@ pub fn run() {
             toggle_no_full_coverage,
             toggle_no_full_coverage_mcp,
             set_skill_tags,
+            set_agent_tags,
             list_catalog_sources,
             save_catalog_source,
             refresh_catalog_source,

@@ -140,6 +140,15 @@ pub fn set_skill_tags(
 }
 
 #[tauri::command]
+pub fn set_agent_tags(
+    agent_id: String,
+    tags: Vec<String>,
+    service: State<AppService>,
+) -> AppResult<Vec<String>> {
+    service.set_agent_tags(&agent_id, tags)
+}
+
+#[tauri::command]
 pub fn list_catalog_sources(service: State<AppService>) -> AppResult<Vec<CatalogSource>> {
     service.list_catalog_sources()
 }

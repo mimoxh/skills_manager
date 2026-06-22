@@ -60,6 +60,7 @@ export interface AgentProfile {
   type: AgentType;
   skillsPath: string;
   adapterConfig?: Record<string, unknown> | null;
+  userTags: string[];
 }
 
 export interface InstallResult {

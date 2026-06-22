@@ -32,6 +32,8 @@ struct AppState {
     catalog_sources: Vec<CatalogSource>,
     #[serde(default)]
     skill_tags: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    agent_tags: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,6 +140,7 @@ impl AppStore {
             .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
         state.agents.retain(|a| a.id != agent_id);
         state.installs.retain(|i| i.agent_id != agent_id);
+        state.agent_tags.remove(agent_id);
         drop(state);
         self.save()
     }
@@ -324,7 +327,7 @@ impl AppStore {
         if key.is_empty() {
             return Err(AppError::Message("Skill 标题不能为空。".to_string()));
         }
-        let tags = sanitize_skill_tags(tags)?;
+        let tags = sanitize_tags(tags)?;
         let mut state = self
             .state
             .lock()
@@ -347,6 +350,38 @@ impl AppStore {
         Ok(state
             .skill_tags
             .get(&normalize_skill_title(title))
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    pub fn set_agent_tags(&self, agent_id: &str, tags: Vec<String>) -> AppResult<Vec<String>> {
+        let key = agent_id.trim();
+        if key.is_empty() {
+            return Err(AppError::Message("Agent ID 不能为空。".to_string()));
+        }
+        let tags = sanitize_tags(tags)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        if tags.is_empty() {
+            state.agent_tags.remove(key);
+        } else {
+            state.agent_tags.insert(key.to_string(), tags.clone());
+        }
+        drop(state);
+        self.save()?;
+        Ok(tags)
+    }
+
+    pub fn list_agent_tags(&self, agent_id: &str) -> AppResult<Vec<String>> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        Ok(state
+            .agent_tags
+            .get(agent_id.trim())
             .cloned()
             .unwrap_or_default())
     }
@@ -384,7 +419,7 @@ fn normalize_skill_title(title: &str) -> String {
     title.trim().to_lowercase()
 }
 
-fn sanitize_skill_tags(tags: Vec<String>) -> AppResult<Vec<String>> {
+fn sanitize_tags(tags: Vec<String>) -> AppResult<Vec<String>> {
     let mut seen = HashSet::new();
     let mut cleaned = Vec::new();
     for tag in tags {
@@ -420,6 +455,7 @@ mod tests {
             agent_type: AgentType::Custom,
             skills_path: "/tmp/test".into(),
             adapter_config: None,
+            user_tags: Vec::new(),
         };
         store.save_agent(&profile).unwrap();
         let agents = store.list_agents().unwrap();
@@ -436,6 +472,7 @@ mod tests {
             agent_type: AgentType::Custom,
             skills_path: "/tmp/test".into(),
             adapter_config: None,
+            user_tags: Vec::new(),
         };
         store.save_agent(&profile).unwrap();
         store
@@ -500,5 +537,46 @@ mod tests {
 
         let tags = store.list_skill_tags("demo skill").unwrap();
         assert_eq!(tags, vec!["AI".to_string(), "中文标签".to_string()]);
+    }
+
+    #[test]
+    fn saves_sanitized_agent_tags_by_agent_id() {
+        let store = AppStore::in_memory().unwrap();
+
+        store
+            .set_agent_tags(
+                "agent-1",
+                vec![
+                    " 生产力 ".to_string(),
+                    "生产力".to_string(),
+                    "".to_string(),
+                    "AI".to_string(),
+                ],
+            )
+            .unwrap();
+
+        let tags = store.list_agent_tags("agent-1").unwrap();
+        assert_eq!(tags, vec!["生产力".to_string(), "AI".to_string()]);
+    }
+
+    #[test]
+    fn rejects_agent_tags_longer_than_thirty_two_chars() {
+        let store = AppStore::in_memory().unwrap();
+
+        let result = store.set_agent_tags("agent-1", vec!["a".repeat(33)]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn empty_agent_tags_clear_existing_tags() {
+        let store = AppStore::in_memory().unwrap();
+        store
+            .set_agent_tags("agent-1", vec!["测试".to_string()])
+            .unwrap();
+
+        store.set_agent_tags("agent-1", Vec::new()).unwrap();
+
+        assert!(store.list_agent_tags("agent-1").unwrap().is_empty());
     }
 }

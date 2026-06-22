@@ -66,6 +66,7 @@ impl CherryStudioAdapter {
             agent_type: crate::models::AgentType::CherryStudio,
             skills_path: skills_dir.to_string_lossy().to_string(),
             adapter_config: None,
+            user_tags: Vec::new(),
         })
     }
 

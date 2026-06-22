@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { AgentProfile, AgentType, ConflictPolicy, GroupedSkill, InstallResult } from "../../types";
 
 const agentTypeOptions: Array<{ value: AgentType; label: string }> = [
@@ -35,7 +35,8 @@ interface AgentsViewProps {
   busy: boolean;
   onCustomChange: (agent: AgentProfile) => void;
   onSaveCustom: () => void;
-  onSaveAgent?: (agent: AgentProfile) => void;
+  onSaveAgent?: (agent: AgentProfile) => Promise<void> | void;
+  onSetAgentTags: (agentId: string, tags: string[]) => Promise<string[]>;
   onDelete: (agentId: string) => void;
   onSync: (title: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) => Promise<InstallResult[]>;
   onUninstall: (skillId: string, agentIds: string[]) => Promise<void>;
@@ -43,16 +44,30 @@ interface AgentsViewProps {
   onRefresh: () => void;
 }
 
-export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, onSaveCustom, onSaveAgent, onDelete, onSync, onUninstall, onRepairCowork, onRefresh }: AgentsViewProps) {
+export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, onSaveCustom, onSaveAgent, onSetAgentTags, onDelete, onSync, onUninstall, onRepairCowork, onRefresh }: AgentsViewProps) {
   const [previewAgent, setPreviewAgent] = useState<AgentProfile | null>(null);
   const [editAgent, setEditAgent] = useState<AgentProfile | null>(null);
   const [deleteAgent, setDeleteAgent] = useState<AgentProfile | null>(null);
   const [selectedMissing, setSelectedMissing] = useState<string[]>([]);
   const [selectedInstalled, setSelectedInstalled] = useState<string[]>([]);
   const [deleteSkillsConfirm, setDeleteSkillsConfirm] = useState(false);
+  const [selectedTagFilters, setSelectedTagFilters] = useState<string[]>([]);
 
   const previewInstalled = previewAgent ? skills.filter((s) => s.installedAgentIds.includes(previewAgent.id)) : [];
   const previewMissing = previewAgent ? skills.filter((s) => s.missingAgentIds.includes(previewAgent.id)) : [];
+  const displayedAgents = useMemo(() => {
+    return agents.filter((agent) => matchesAgentTagFilters(agent, selectedTagFilters));
+  }, [agents, selectedTagFilters]);
+  const allUserTags = useMemo(() => {
+    const tags = new Map<string, string>();
+    for (const agent of agents) {
+      for (const tag of agent.userTags ?? []) {
+        const key = tag.toLowerCase();
+        if (!tags.has(key)) tags.set(key, tag);
+      }
+    }
+    return [...tags.values()].sort((a, b) => a.localeCompare(b));
+  }, [agents]);
 
   function handleAgentClick(agentId: string) {
     const agent = agents.find((a) => a.id === agentId);
@@ -66,19 +81,30 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
 
   function handleEditFromPreview() {
     if (!previewAgent) return;
-    setEditAgent({ ...previewAgent });
+    setEditAgent({ ...previewAgent, userTags: [...(previewAgent.userTags ?? [])] });
     setPreviewAgent(null);
   }
 
-  function handleSaveEdit() {
+  async function handleSaveEdit() {
     if (!editAgent) return;
     if (onSaveAgent) {
-      onSaveAgent(editAgent);
+      await onSaveAgent(editAgent);
     } else {
       onCustomChange(editAgent);
       onSaveCustom();
     }
+    if (editAgent.id) {
+      await onSetAgentTags(editAgent.id, editAgent.userTags ?? []);
+    }
     setEditAgent(null);
+  }
+
+  function toggleTagFilter(tag: string) {
+    setSelectedTagFilters((current) =>
+      current.some((value) => value.toLowerCase() === tag.toLowerCase())
+        ? current.filter((value) => value.toLowerCase() !== tag.toLowerCase())
+        : [...current, tag],
+    );
   }
 
   async function handleAddMissing() {
@@ -108,15 +134,38 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
         <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div>
             <div className="card-title">Agents</div>
-            <div className="card-desc">{agents.length} 个本地 Agent 配置</div>
+            <div className="card-desc">{displayedAgents.length} / {agents.length} 个本地 Agent 配置</div>
           </div>
           <button className="btn btn-secondary btn-sm" onClick={onRefresh} disabled={busy} type="button" title="刷新">
             <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>
           </button>
         </div>
         <div className="card-body flex-1 overflow-auto" style={{ padding: 8 }}>
+          {allUserTags.length > 0 && (
+            <div className="skills-tag-filter-row" style={{ padding: "0 0 8px" }}>
+              <span className="skills-tag-filter-label">标签</span>
+              {allUserTags.map((tag) => {
+                const selected = selectedTagFilters.some((value) => value.toLowerCase() === tag.toLowerCase());
+                return (
+                  <button
+                    className={`badge badge-user-tag skill-tag-filter${selected ? " selected" : ""}`}
+                    key={tag}
+                    onClick={() => toggleTagFilter(tag)}
+                    type="button"
+                  >
+                    {tag}
+                  </button>
+                );
+              })}
+              {selectedTagFilters.length > 0 && (
+                <button className="skills-tag-filter-clear" onClick={() => setSelectedTagFilters([])} type="button">
+                  清空标签筛选
+                </button>
+              )}
+            </div>
+          )}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {agents.map((agent) => {
+            {displayedAgents.map((agent) => {
               const installedCount = skills.filter((s) => s.installedAgentIds.includes(agent.id)).length;
               const missingCount = skills.filter((s) => s.missingAgentIds.includes(agent.id)).length;
               return (
@@ -128,6 +177,9 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
                     <div className="agent-name">{agent.name}<span className="badge" style={{ marginLeft: 6, fontSize: 10 }}>{agentTypeLabel(agent.type)}</span></div>
                     <div className="agent-path">{agent.skillsPath}</div>
                     <div className="agent-tags">
+                      {(agent.userTags ?? []).map((tag) => (
+                        <span className="badge badge-user-tag" key={tag}>{tag}</span>
+                      ))}
                       <span className="badge badge-success">{installedCount} 已有</span>
                       {missingCount > 0 && <span className="badge badge-warning">{missingCount} 缺失</span>}
                     </div>
@@ -138,10 +190,12 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
                 </div>
               );
             })}
-            {!agents.length && (
+            {!displayedAgents.length && (
               <div style={{ textAlign: "center", padding: "40px 0", color: "var(--text-secondary)" }}>
-                <p style={{ fontSize: 14, fontWeight: 500 }}>没有发现 Agent</p>
-                <p style={{ fontSize: 12, color: "var(--text-tertiary)", marginTop: 4 }}>可以添加自定义 Agent，把普通目录纳入管理</p>
+                <p style={{ fontSize: 14, fontWeight: 500 }}>{agents.length === 0 ? "没有发现 Agent" : "没有匹配的 Agent"}</p>
+                <p style={{ fontSize: 12, color: "var(--text-tertiary)", marginTop: 4 }}>
+                  {agents.length === 0 ? "可以添加自定义 Agent，把普通目录纳入管理" : "当前标签筛选条件下没有匹配项"}
+                </p>
               </div>
             )}
           </div>
@@ -249,9 +303,16 @@ function AgentPreviewDialog({ agent, installedSkills, missingSkills, selectedMis
             <svg className="icon" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text)" }}>{agent.name}</h2>
               <span className="badge" style={{ fontSize: 10 }}>{agentTypeLabel(agent.type)}</span>
+              {(agent.userTags ?? []).length > 0 ? (
+                (agent.userTags ?? []).map((tag) => (
+                  <span className="badge badge-user-tag" key={tag}>{tag}</span>
+                ))
+              ) : (
+                <span className="badge badge-muted">未标注</span>
+              )}
             </div>
           </div>
           <button className="btn-icon" onClick={onClose} type="button" title="关闭" style={{ width: 36, height: 36 }}>
@@ -263,6 +324,18 @@ function AgentPreviewDialog({ agent, installedSkills, missingSkills, selectedMis
         <div style={{ flex: 1, minHeight: 0, overflow: "hidden", padding: "20px 24px", display: "flex", flexDirection: "column" }}>
           {/* 路径信息 */}
           <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20, flexShrink: 0 }}>
+            <div className="detail-item">
+              <span style={{ fontSize: 12, color: "var(--text-secondary)", minWidth: 80 }}>自定义标签</span>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {(agent.userTags ?? []).length > 0 ? (
+                  (agent.userTags ?? []).map((tag) => (
+                    <span className="badge badge-user-tag" key={tag}>{tag}</span>
+                  ))
+                ) : (
+                  <span className="badge badge-muted">未标注</span>
+                )}
+              </div>
+            </div>
             <div className="detail-item">
               <span style={{ fontSize: 12, color: "var(--text-secondary)", minWidth: 80 }}>Skills 目录</span>
               <code style={{ fontFamily: "var(--font-mono)", fontSize: 12, wordBreak: "break-all" }}>{agent.skillsPath}</code>
@@ -424,6 +497,12 @@ function skillDescription(skill: GroupedSkill, agentId: string): string {
   return description || "暂无描述";
 }
 
+function matchesAgentTagFilters(agent: AgentProfile, selectedTags: string[]): boolean {
+  if (!selectedTags.length) return true;
+  const tags = new Set((agent.userTags ?? []).map((tag) => tag.toLowerCase()));
+  return selectedTags.every((tag) => tags.has(tag.toLowerCase()));
+}
+
 // ── 编辑弹窗 ──────────────────────────────────────────────────────
 
 function AgentEditDialog({ agent, busy, onChange, onClose, onSave, pickFolder, pickFile }: {
@@ -433,6 +512,32 @@ function AgentEditDialog({ agent, busy, onChange, onClose, onSave, pickFolder, p
   pickFile: (filters?: Array<{ name: string; extensions: string[] }>) => Promise<string | null>;
 }) {
   const showMcpPath = isMcpAgent(agent.type);
+  const [tagInput, setTagInput] = useState("");
+  const [tagError, setTagError] = useState<string | null>(null);
+
+  function addTag() {
+    const tag = tagInput.trim();
+    if (!tag) return;
+    if (Array.from(tag).length > 32) {
+      setTagError("标签不能超过 32 个字符。");
+      return;
+    }
+    if ((agent.userTags ?? []).some((existing) => existing.toLowerCase() === tag.toLowerCase())) {
+      setTagInput("");
+      setTagError(null);
+      return;
+    }
+    setTagInput("");
+    setTagError(null);
+    onChange({ ...agent, userTags: [...(agent.userTags ?? []), tag] });
+  }
+
+  function removeTag(tag: string) {
+    onChange({
+      ...agent,
+      userTags: (agent.userTags ?? []).filter((existing) => existing.toLowerCase() !== tag.toLowerCase()),
+    });
+  }
 
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(47, 48, 44, 0.28)", padding: 20 }}>
@@ -478,6 +583,51 @@ function AgentEditDialog({ agent, busy, onChange, onClose, onSave, pickFolder, p
               <p style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>{mcpHint(agent.type)}</p>
             </div>
           )}
+          <div className="input-group">
+            <label className="input-label">自定义标签</label>
+            <div className="skill-tag-editor">
+              {(agent.userTags ?? []).length > 0 ? (
+                (agent.userTags ?? []).map((tag) => (
+                  <button
+                    className="badge badge-user-tag skill-tag-remove"
+                    disabled={busy}
+                    key={tag}
+                    onClick={() => removeTag(tag)}
+                    title={`删除标签 ${tag}`}
+                    type="button"
+                  >
+                    {tag}
+                    <span aria-hidden="true">×</span>
+                  </button>
+                ))
+              ) : (
+                <span className="skill-tag-editor-empty">暂无标签</span>
+              )}
+            </div>
+            <div className="skill-tag-editor-input">
+              <input
+                disabled={busy}
+                maxLength={64}
+                onChange={(event) => {
+                  setTagInput(event.target.value);
+                  if (tagError) setTagError(null);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    addTag();
+                  }
+                }}
+                placeholder="输入标签后按 Enter"
+                type="text"
+                value={tagInput}
+              />
+              <button className="btn btn-secondary btn-sm" disabled={busy || !tagInput.trim()} onClick={addTag} type="button">
+                添加
+              </button>
+            </div>
+            {tagError && <p className="skill-tag-editor-error">{tagError}</p>}
+          </div>
         </div>
 
         {/* Footer */}

@@ -133,6 +133,8 @@ pub struct AgentProfile {
     pub skills_path: String,
     #[serde(default)]
     pub adapter_config: Option<Value>,
+    #[serde(default)]
+    pub user_tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

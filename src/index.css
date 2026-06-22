@@ -439,7 +439,7 @@ input { cursor: text; outline: none; }
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  padding: 0 18px 10px;
+  padding: 12px 18px 8px;
   color: var(--text-secondary);
 }
 .skills-tag-filter-label {
@@ -871,7 +871,7 @@ input { cursor: text; outline: none; }
 .agent-info { flex: 1; min-width: 0; }
 .agent-name { font-size: 13.5px; font-weight: 600; color: var(--text); }
 .agent-path { font-size: 12px; color: var(--text-secondary); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.agent-tags { display: flex; gap: 6px; margin-top: 8px; }
+.agent-tags { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
 
 /* ===== Quick Actions ===== */
 .quick-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
