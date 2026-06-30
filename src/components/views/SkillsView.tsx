@@ -145,11 +145,16 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
   }
 
   function toggleTagFilter(tag: string) {
-    setSelectedTagFilters((current) =>
-      current.some((value) => value.toLowerCase() === tag.toLowerCase())
-        ? current.filter((value) => value.toLowerCase() !== tag.toLowerCase())
-        : [...current, tag],
-    );
+    setSelectedTagFilters((current) => {
+      if (tag === "__untagged__") {
+        return current.includes("__untagged__") ? [] : ["__untagged__"];
+      }
+      const withoutUntagged = current.filter((v) => v !== "__untagged__");
+      const lower = tag.toLowerCase();
+      return withoutUntagged.some((v) => v.toLowerCase() === lower)
+        ? withoutUntagged.filter((v) => v.toLowerCase() !== lower)
+        : [...withoutUntagged, tag];
+    });
   }
 
   const hasSyncChanges = useMemo(() => {
@@ -267,9 +272,16 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
             </button>
           </div>
         </div>
-        {allUserTags.length > 0 && (
+        {skills.length > 0 && (
           <div className="skills-tag-filter-row">
             <span className="skills-tag-filter-label">标签</span>
+            <button
+              className={`badge skill-tag-filter untagged${selectedTagFilters.includes("__untagged__") ? " selected" : ""}`}
+              onClick={() => toggleTagFilter("__untagged__")}
+              type="button"
+            >
+              无标签
+            </button>
             {allUserTags.map((tag) => {
               const selected = selectedTagFilters.some((value) => value.toLowerCase() === tag.toLowerCase());
               return (
@@ -435,6 +447,9 @@ function selectedSourceCopy(skill: GroupedSkill, agentId: string | null): AgentS
 
 function matchesTagFilters(skill: GroupedSkill, selectedTags: string[]): boolean {
   if (!selectedTags.length) return true;
+  if (selectedTags.includes("__untagged__")) {
+    return !(skill.userTags ?? []).length;
+  }
   const tags = new Set((skill.userTags ?? []).map((tag) => tag.toLowerCase()));
   return selectedTags.every((tag) => tags.has(tag.toLowerCase()));
 }

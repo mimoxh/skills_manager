@@ -101,11 +101,16 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
   }
 
   function toggleTagFilter(tag: string) {
-    setSelectedTagFilters((current) =>
-      current.some((value) => value.toLowerCase() === tag.toLowerCase())
-        ? current.filter((value) => value.toLowerCase() !== tag.toLowerCase())
-        : [...current, tag],
-    );
+    setSelectedTagFilters((current) => {
+      if (tag === "__untagged__") {
+        return current.includes("__untagged__") ? [] : ["__untagged__"];
+      }
+      const withoutUntagged = current.filter((v) => v !== "__untagged__");
+      const lower = tag.toLowerCase();
+      return withoutUntagged.some((v) => v.toLowerCase() === lower)
+        ? withoutUntagged.filter((v) => v.toLowerCase() !== lower)
+        : [...withoutUntagged, tag];
+    });
   }
 
   async function handleAddMissing() {
@@ -142,9 +147,16 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
           </button>
         </div>
         <div className="card-body flex-1 overflow-auto" style={{ padding: 8 }}>
-          {allUserTags.length > 0 && (
+          {agents.length > 0 && (
             <div className="skills-tag-filter-row" style={{ padding: "0 0 8px" }}>
               <span className="skills-tag-filter-label">标签</span>
+              <button
+                className={`badge skill-tag-filter untagged${selectedTagFilters.includes("__untagged__") ? " selected" : ""}`}
+                onClick={() => toggleTagFilter("__untagged__")}
+                type="button"
+              >
+                无标签
+              </button>
               {allUserTags.map((tag) => {
                 const selected = selectedTagFilters.some((value) => value.toLowerCase() === tag.toLowerCase());
                 return (
@@ -501,6 +513,9 @@ function skillDescription(skill: GroupedSkill, agentId: string): string {
 
 function matchesAgentTagFilters(agent: AgentProfile, selectedTags: string[]): boolean {
   if (!selectedTags.length) return true;
+  if (selectedTags.includes("__untagged__")) {
+    return !(agent.userTags ?? []).length;
+  }
   const tags = new Set((agent.userTags ?? []).map((tag) => tag.toLowerCase()));
   return selectedTags.every((tag) => tags.has(tag.toLowerCase()));
 }

@@ -471,6 +471,20 @@ input { cursor: text; outline: none; }
   border-color: var(--accent-hover);
   color: white;
 }
+.badge.skill-tag-filter.untagged {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+.badge.skill-tag-filter.untagged.selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+  font-style: normal;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(196, 125, 46, 0.22);
+}
 .skills-tag-filter-clear {
   color: var(--text-tertiary);
   font-size: 12px;

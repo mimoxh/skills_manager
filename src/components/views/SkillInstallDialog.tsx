@@ -94,11 +94,16 @@ export function SkillInstallDialog({
   }
 
   function toggleAgentTagFilter(tag: string) {
-    setSelectedAgentTagFilters((current) =>
-      current.some((value) => value.toLowerCase() === tag.toLowerCase())
-        ? current.filter((value) => value.toLowerCase() !== tag.toLowerCase())
-        : [...current, tag],
-    );
+    setSelectedAgentTagFilters((current) => {
+      if (tag === "__untagged__") {
+        return current.includes("__untagged__") ? [] : ["__untagged__"];
+      }
+      const withoutUntagged = current.filter((v) => v !== "__untagged__");
+      const lower = tag.toLowerCase();
+      return withoutUntagged.some((v) => v.toLowerCase() === lower)
+        ? withoutUntagged.filter((v) => v.toLowerCase() !== lower)
+        : [...withoutUntagged, tag];
+    });
   }
 
   return (
@@ -169,9 +174,16 @@ export function SkillInstallDialog({
           <div style={{ overflow: "auto", padding: "20px 24px", display: "flex", flexDirection: "column", gap: 20 }}>
             <div>
               <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>目标 Agent</p>
-              {enableAgentTagFilter && agentTagOptions.length > 0 && (
+              {enableAgentTagFilter && agents.length > 0 && (
                 <div className="skills-tag-filter-row" style={{ padding: "0 0 10px" }}>
                   <span className="skills-tag-filter-label">标签</span>
+                  <button
+                    className={`badge skill-tag-filter untagged${selectedAgentTagFilters.includes("__untagged__") ? " selected" : ""}`}
+                    onClick={() => toggleAgentTagFilter("__untagged__")}
+                    type="button"
+                  >
+                    无标签
+                  </button>
                   {agentTagOptions.map((tag) => {
                     const selected = selectedAgentTagFilters.some((value) => value.toLowerCase() === tag.toLowerCase());
                     return (
@@ -317,6 +329,9 @@ export function SkillInstallDialog({
 
 function matchesAgentTagFilters(agent: AgentProfile, selectedTags: string[]): boolean {
   if (!selectedTags.length) return true;
+  if (selectedTags.includes("__untagged__")) {
+    return !(agent.userTags ?? []).length;
+  }
   const tags = new Set((agent.userTags ?? []).map((tag) => tag.toLowerCase()));
   return selectedTags.every((tag) => tags.has(tag.toLowerCase()));
 }
