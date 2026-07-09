@@ -13,7 +13,19 @@ const agentTypeOptions: Array<{ value: AgentType; label: string }> = [
 ];
 
 const mcpAgentTypes: AgentType[] = ["codex", "claudeCode", "opencode", "trae"];
-function isMcpAgent(type: AgentType): boolean { return mcpAgentTypes.includes(type); }
+function isMcpAgent(type: AgentType, adapterConfig?: Record<string, unknown> | null): boolean {
+  if (mcpAgentTypes.includes(type)) return true;
+  if (type === "custom" && adapterConfig?.mcpFormat) return true;
+  return false;
+}
+
+type McpFormat = "claude" | "opencode" | "codex" | "trae";
+const mcpFormatOptions: Array<{ value: McpFormat; label: string }> = [
+  { value: "claude", label: "Claude 格式 (JSON)" },
+  { value: "opencode", label: "OpenCode 格式 (JSON)" },
+  { value: "codex", label: "Codex 格式 (TOML)" },
+  { value: "trae", label: "Trae 格式 (JSON)" },
+];
 
 async function pickFolder(): Promise<string | null> {
   if (!("__TAURI_INTERNALS__" in window)) return null;
@@ -529,7 +541,9 @@ function AgentEditDialog({ agent, availableUserTags, busy, onChange, onClose, on
   pickFolder: () => Promise<string | null>;
   pickFile: (filters?: Array<{ name: string; extensions: string[] }>) => Promise<string | null>;
 }) {
-  const showMcpPath = isMcpAgent(agent.type);
+  const mcpFormat = (agent.adapterConfig as Record<string, unknown>)?.mcpFormat as string | undefined;
+  const showMcpPath = isMcpAgent(agent.type, agent.adapterConfig as Record<string, unknown> | null | undefined);
+  const showMcpFormat = agent.type === "custom";
 
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(47, 48, 44, 0.28)", padding: 20 }}>
@@ -550,7 +564,11 @@ function AgentEditDialog({ agent, availableUserTags, busy, onChange, onClose, on
         <div style={{ flex: 1, overflow: "auto", padding: "20px 24px" }}>
           <div className="input-group">
             <label className="input-label">类型</label>
-            <select className="input" value={agent.type} onChange={(e) => onChange({ ...agent, type: e.target.value as AgentType, adapterConfig: isMcpAgent(e.target.value as AgentType) ? { mcpConfigPath: "" } : {} })}>
+            <select className="input" value={agent.type} onChange={(e) => {
+              const newType = e.target.value as AgentType;
+              const newAdapterConfig: Record<string, unknown> = isMcpAgent(newType, {}) ? { mcpConfigPath: "" } : {};
+              onChange({ ...agent, type: newType, adapterConfig: newAdapterConfig });
+            }}>
               {agentTypeOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
             </select>
           </div>
@@ -565,14 +583,27 @@ function AgentEditDialog({ agent, availableUserTags, busy, onChange, onClose, on
               <button className="btn btn-secondary" onClick={async () => { const p = await pickFolder(); if (p) onChange({ ...agent, skillsPath: p }); }} disabled={busy} type="button">浏览</button>
             </div>
           </div>
+          {showMcpFormat && (
+            <div className="input-group">
+              <label className="input-label">MCP 配置格式</label>
+              <select className="input" value={mcpFormat ?? ""} onChange={(e) => {
+                const newFormat = e.target.value || undefined;
+                onChange({ ...agent, adapterConfig: { ...agent.adapterConfig, mcpFormat: newFormat, mcpConfigPath: "" } });
+              }}>
+                <option value="">不使用 MCP</option>
+                {mcpFormatOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+              </select>
+              <p style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>选择你的自定义 Agent 使用的 MCP 配置文件格式</p>
+            </div>
+          )}
           {showMcpPath && (
             <div className="input-group">
               <label className="input-label">MCP 配置文件路径（可选）</label>
               <div style={{ display: "flex", gap: 8 }}>
-                <input className="input" value={(agent.adapterConfig as Record<string, unknown>)?.mcpConfigPath as string ?? ""} onChange={(e) => onChange({ ...agent, adapterConfig: { ...agent.adapterConfig, mcpConfigPath: e.target.value } })} placeholder={mcpPlaceholder(agent.type)} style={{ flex: 1 }} />
-                <button className="btn btn-secondary" onClick={async () => { const p = await pickFile(mcpFileFilter(agent.type)); if (p) onChange({ ...agent, adapterConfig: { ...agent.adapterConfig, mcpConfigPath: p } }); }} disabled={busy} type="button">浏览</button>
+                <input className="input" value={(agent.adapterConfig as Record<string, unknown>)?.mcpConfigPath as string ?? ""} onChange={(e) => onChange({ ...agent, adapterConfig: { ...agent.adapterConfig, mcpConfigPath: e.target.value } })} placeholder={mcpPlaceholder(agent.type, mcpFormat)} style={{ flex: 1 }} />
+                <button className="btn btn-secondary" onClick={async () => { const p = await pickFile(mcpFileFilter(agent.type, mcpFormat)); if (p) onChange({ ...agent, adapterConfig: { ...agent.adapterConfig, mcpConfigPath: p } }); }} disabled={busy} type="button">浏览</button>
               </div>
-              <p style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>{mcpHint(agent.type)}</p>
+              <p style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>{mcpHint(agent.type, mcpFormat)}</p>
             </div>
           )}
           <div className="input-group">
@@ -604,7 +635,9 @@ function AddAgentPanel({ customAgent, busy, onCustomChange, onSaveCustom, pickFo
   pickFolder: () => Promise<string | null>;
   pickFile: (filters?: Array<{ name: string; extensions: string[] }>) => Promise<string | null>;
 }) {
-  const showMcpPath = isMcpAgent(customAgent.type);
+  const mcpFormat = (customAgent.adapterConfig as Record<string, unknown>)?.mcpFormat as string | undefined;
+  const showMcpPath = isMcpAgent(customAgent.type, customAgent.adapterConfig as Record<string, unknown> | null | undefined);
+  const showMcpFormat = customAgent.type === "custom";
 
   return (
     <div className="card">
@@ -615,7 +648,7 @@ function AddAgentPanel({ customAgent, busy, onCustomChange, onSaveCustom, pickFo
       <div className="card-body">
         <div className="input-group">
           <label className="input-label">类型</label>
-          <select className="input" value={customAgent.type} onChange={(e) => { const t = e.target.value as AgentType; onCustomChange({ ...customAgent, type: t, adapterConfig: isMcpAgent(t) ? { mcpConfigPath: "" } : {} }); }}>
+          <select className="input" value={customAgent.type} onChange={(e) => { const t = e.target.value as AgentType; onCustomChange({ ...customAgent, type: t, adapterConfig: isMcpAgent(t, {}) ? { mcpConfigPath: "" } : {} }); }}>
             {agentTypeOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
           </select>
         </div>
@@ -630,14 +663,27 @@ function AddAgentPanel({ customAgent, busy, onCustomChange, onSaveCustom, pickFo
             <button className="btn btn-secondary" onClick={async () => { const p = await pickFolder(); if (p) onCustomChange({ ...customAgent, skillsPath: p }); }} disabled={busy} type="button">浏览</button>
           </div>
         </div>
+        {showMcpFormat && (
+          <div className="input-group">
+            <label className="input-label">MCP 配置格式</label>
+            <select className="input" value={mcpFormat ?? ""} onChange={(e) => {
+              const newFormat = e.target.value || undefined;
+              onCustomChange({ ...customAgent, adapterConfig: { ...customAgent.adapterConfig, mcpFormat: newFormat, mcpConfigPath: "" } });
+            }}>
+              <option value="">不使用 MCP</option>
+              {mcpFormatOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+            </select>
+            <p style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>选择你的自定义 Agent 使用的 MCP 配置文件格式</p>
+          </div>
+        )}
         {showMcpPath && (
           <div className="input-group">
             <label className="input-label">MCP 配置文件路径（可选）</label>
             <div style={{ display: "flex", gap: 8 }}>
-              <input className="input" value={(customAgent.adapterConfig as Record<string, unknown>)?.mcpConfigPath as string ?? ""} onChange={(e) => onCustomChange({ ...customAgent, adapterConfig: { ...customAgent.adapterConfig, mcpConfigPath: e.target.value } })} placeholder={mcpPlaceholder(customAgent.type)} style={{ flex: 1 }} />
-              <button className="btn btn-secondary" onClick={async () => { const p = await pickFile(mcpFileFilter(customAgent.type)); if (p) onCustomChange({ ...customAgent, adapterConfig: { ...customAgent.adapterConfig, mcpConfigPath: p } }); }} disabled={busy} type="button">浏览</button>
+              <input className="input" value={(customAgent.adapterConfig as Record<string, unknown>)?.mcpConfigPath as string ?? ""} onChange={(e) => onCustomChange({ ...customAgent, adapterConfig: { ...customAgent.adapterConfig, mcpConfigPath: e.target.value } })} placeholder={mcpPlaceholder(customAgent.type, mcpFormat)} style={{ flex: 1 }} />
+              <button className="btn btn-secondary" onClick={async () => { const p = await pickFile(mcpFileFilter(customAgent.type, mcpFormat)); if (p) onCustomChange({ ...customAgent, adapterConfig: { ...customAgent.adapterConfig, mcpConfigPath: p } }); }} disabled={busy} type="button">浏览</button>
             </div>
-            <p style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>{mcpHint(customAgent.type)}</p>
+            <p style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>{mcpHint(customAgent.type, mcpFormat)}</p>
           </div>
         )}
         <button className="btn btn-primary" onClick={() => onSaveCustom()} disabled={busy} type="button" style={{ marginTop: 4 }}>
@@ -666,17 +712,29 @@ function skillsPlaceholder(type: AgentType): string {
   return map[type] ?? "C:\\Users\\you\\.agent\\skills";
 }
 
-function mcpPlaceholder(type: AgentType): string {
+function mcpPlaceholder(type: AgentType, format?: string): string {
+  if (type === "custom" && format) {
+    const map: Partial<Record<McpFormat, string>> = { claude: "~/.claude.json", opencode: "~/.opencode.json", codex: "~/.codex/config.toml", trae: "~/.trae/mcp.json" };
+    return map[format as McpFormat] ?? "MCP 配置文件路径";
+  }
   const map: Partial<Record<AgentType, string>> = { opencode: "~/.opencode.json", codex: "~/.codex/config.toml", claudeCode: "~/.claude.json", trae: "~/.trae/mcp.json" };
   return map[type] ?? "MCP 配置文件路径";
 }
 
-function mcpHint(type: AgentType): string {
+function mcpHint(type: AgentType, format?: string): string {
+  if (type === "custom" && format) {
+    const map: Partial<Record<McpFormat, string>> = { claude: "留空使用默认 ~/.claude.json", opencode: "留空使用默认 ~/.opencode.json", codex: "留空使用默认 ~/.codex/config.toml", trae: "留空使用默认 ~/.trae/mcp.json" };
+    return map[format as McpFormat] ?? "留空则使用默认路径";
+  }
   const map: Partial<Record<AgentType, string>> = { opencode: "留空使用默认 ~/.opencode.json", codex: "留空使用默认 ~/.codex/config.toml", claudeCode: "留空使用默认 ~/.claude.json", trae: "留空使用默认 ~/.trae/mcp.json" };
   return map[type] ?? "留空则使用默认路径";
 }
 
-function mcpFileFilter(type: AgentType): Array<{ name: string; extensions: string[] }> | undefined {
+function mcpFileFilter(type: AgentType, format?: string): Array<{ name: string; extensions: string[] }> | undefined {
+  if (type === "custom" && format) {
+    const map: Partial<Record<McpFormat, Array<{ name: string; extensions: string[] }>>> = { claude: [{ name: "JSON", extensions: ["json"] }], opencode: [{ name: "JSON", extensions: ["json"] }], codex: [{ name: "TOML", extensions: ["toml"] }], trae: [{ name: "JSON", extensions: ["json"] }] };
+    return map[format as McpFormat];
+  }
   const map: Partial<Record<AgentType, Array<{ name: string; extensions: string[] }>>> = { opencode: [{ name: "JSON", extensions: ["json"] }], codex: [{ name: "TOML", extensions: ["toml"] }], claudeCode: [{ name: "JSON", extensions: ["json"] }], trae: [{ name: "JSON", extensions: ["json"] }] };
   return map[type];
 }

@@ -33,7 +33,11 @@ export function McpView({ servers, agents, busy, noFullCoverageMcpTitles, onAdd,
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [formDiscardConfirm, setFormDiscardConfirm] = useState(false);
 
-  const mcpAgents = agents.filter((a) => a.type === "codex" || a.type === "claudeCode" || a.type === "opencode" || a.type === "trae");
+  const mcpAgents = agents.filter((a) => {
+    if (a.type === "codex" || a.type === "claudeCode" || a.type === "opencode" || a.type === "trae") return true;
+    if (a.type === "custom" && a.adapterConfig?.mcpFormat) return true;
+    return false;
+  });
 
   const coveredCount = useMemo(() => {
     return servers.filter((s) => s.agentIds.length === mcpAgents.length).length;
