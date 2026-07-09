@@ -30,16 +30,7 @@ export function Titlebar() {
 
   return (
     <div className="titlebar" onMouseDown={startDrag} onDoubleClick={toggleMaximize}>
-      <div className="titlebar-logo">
-        <div className="titlebar-logo-icon">
-          <svg viewBox="0 0 24 24">
-            <polygon points="12 2 2 7 12 12 22 7 12 2" />
-            <polyline points="2 17 12 22 22 17" />
-            <polyline points="2 12 12 17 22 12" />
-          </svg>
-        </div>
-        <span className="titlebar-text">Skills Manager</span>
-      </div>
+      <div className="titlebar-logo" />
       <div className="titlebar-spacer" />
       <div onMouseDown={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()} style={{ display: "flex", height: "100%" }}>
         <button className="titlebar-btn" onClick={() => appWindow()?.minimize()} title="最小化" type="button">
