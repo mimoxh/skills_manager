@@ -11,12 +11,14 @@ Skills Manager is a local Windows desktop tool for managing Agent Skills and MCP
 ## Features
 
 - **Skills coverage:** scan local skill directories, group matching skills by title, compare installed and missing agents, choose a source copy, narrow sync targets by Agent tag, sync to selected agents, uninstall from selected agents, mark skills that do not need full coverage, and read `SKILL.md` or README content in the detail dialog.
-- **Agent management:** detect and manage Codex, Claude, Claude Code, Claude Desktop Cowork, Cursor, Trae, OpenCode, and custom skill directories. The agent preview shows installed and missing skills, can add selected missing skills, can delete selected installed skills from that agent, and can repair Claude Desktop Cowork manifests when needed. Agents can have custom user tags, and those tags appear in the list, preview, editor, and sync-target picker for filtering.
+- **Agent management:** detect and manage Codex, Claude, Claude Code, Claude Desktop Cowork, Cursor, Trae, OpenCode, and custom skill directories. The agent preview shows installed and missing skills, can add selected missing skills, can delete selected installed skills from that agent, and can repair Claude Desktop Cowork manifests when needed. Agents can have custom user tags, and those tags appear in the list, preview, editor, and sync-target picker for filtering. Supports custom agents configuration file path.
 - **Skill import:** import a skill folder or `.zip` archive and choose target agents with conflict handling.
 - **Skills repository:** browse built-in ClawHub, Claude, and Codex sources; search, sort, filter, refresh cached sources, use safety-mode filtering, add custom Git sources, and install skills to selected agents.
-- **MCP management:** scan, add, update, enable or disable, sync, and remove MCP servers for Codex, Claude Code, OpenCode, and Trae. Supported transports are `stdio`, `http`, and `sse`.
+- **MCP management:** scan, add, update, enable or disable, sync, and remove MCP servers for Codex, Claude Code, OpenCode, and Trae. Supported transports are `stdio`, `http`, and `sse`. Supports custom MCP configuration file path.
+- **No-tag filtering:** filter skills and agents lists by "no tag" to quickly locate uncategorized items.
+- **Independent view scrolling:** Skills, MCP, and Agents view lists scroll independently, the page no longer scrolls as a whole.
 - **Theme switching:** choose light mode, dark mode, or follow the system theme. The app remembers the local theme preference on each machine.
-- **Usability:** use wider responsive agent preview dialogs, more readable skills repository cards, and higher-contrast text selection for copying README text, paths, and configuration snippets.
+- **Streamlined UI:** removed title bar icon and text, removed bottom status bar, sidebar theme switcher uses icon mode for a cleaner interface with more content area.
 
 ## Tech Stack
 
@@ -90,7 +92,7 @@ and writes a portable-package `README.txt` into the same directory.
 To create the versioned zip package for GitHub Releases:
 
 ```powershell
-Compress-Archive -LiteralPath "dist-native\Skills Manager" -DestinationPath "SkillsManager-v0.2.3-windows-portable.zip" -Force
+Compress-Archive -LiteralPath "dist-native\Skills Manager" -DestinationPath "SkillsManager-v0.2.4-windows-portable.zip" -Force
 ```
 
-The root-level `SkillsManager.exe` and `SkillsManager-v0.2.3-windows-portable.zip` are release artifacts. The zip package is suitable for GitHub Releases, while the standalone exe is useful for quick local verification.
+The root-level `SkillsManager.exe` and `SkillsManager-v0.2.4-windows-portable.zip` are release artifacts. The zip package is suitable for GitHub Releases, while the standalone exe is useful for quick local verification.
