@@ -147,7 +147,7 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
   }
 
   return (
-    <div className="grid-main-side" style={{ height: "100%", minHeight: 0 }}>
+    <div className="grid-main-side" style={{ flex: 1, minHeight: 0 }}>
       {/* Agent List */}
       <div className="card flex-col" style={{ minHeight: 0 }}>
         <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
