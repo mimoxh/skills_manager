@@ -80,7 +80,7 @@ export function Sidebar({
           resolvedTheme={resolvedTheme}
           onChange={onThemeChange}
         />
-        <div className="sidebar-stat">
+        <div className="sidebar-footer-stat">
           <span className="sidebar-stat-dot" />
           <span className="sidebar-footer-text">已识别 {skillCount} 个 skills，{agentCount} 个 agents</span>
         </div>

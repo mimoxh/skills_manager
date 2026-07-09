@@ -125,7 +125,7 @@ input { cursor: text; outline: none; }
 
 /* ===== Sidebar ===== */
 .sidebar {
-  width: 260px;
+  width: 220px;
   background: var(--surface);
   border-right: 1px solid var(--border);
   display: flex;
@@ -140,12 +140,15 @@ input { cursor: text; outline: none; }
 .sidebar.collapsed .nav-section-label,
 .sidebar.collapsed .nav-item span,
 .sidebar.collapsed .sidebar-footer-text { display: none; }
-.sidebar.collapsed .sidebar-header { padding: 12px; justify-content: center; }
-.sidebar.collapsed .sidebar-logo { justify-content: center; }
+.sidebar.collapsed .sidebar-header { padding: 12px; justify-content: center; display: flex; align-items: center; }
+.sidebar.collapsed .sidebar-logo { justify-content: center; gap: 0; }
 .sidebar.collapsed .sidebar-nav { padding: 8px 6px; align-items: center; }
 .sidebar.collapsed .nav-item { justify-content: center; padding: 10px; width: 40px; }
 .sidebar.collapsed .sidebar-footer { padding: 12px 8px; text-align: center; }
-.sidebar.collapsed .sidebar-stat span:last-child { display: none; }
+.sidebar.collapsed .sidebar-footer-stat span:last-child { display: none; }
+.sidebar.collapsed .theme-icon-switcher { margin-bottom: 8px; width: 100%; }
+.sidebar.collapsed .theme-icon-current { width: 32px; height: 32px; transform: scale(1); }
+.sidebar.collapsed .theme-icon-option { width: 28px; height: 28px; }
 .sidebar.collapsed .sidebar-toggle { margin: 0 auto; }
 
 .sidebar-header { padding: 20px 20px 16px; border-bottom: 1px solid var(--border); }
@@ -185,60 +188,80 @@ input { cursor: text; outline: none; }
   padding: 16px 20px; border-top: 1px solid var(--border);
   font-size: 12px; color: var(--text-tertiary);
 }
-.sidebar-stat { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.sidebar-footer-stat { display: flex; align-items: center; gap: 6px; }
 .sidebar-stat-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); flex-shrink: 0; }
-.theme-switcher {
-  display: grid;
-  gap: 8px;
-  margin-bottom: 14px;
-}
-.theme-switcher-label {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-tertiary);
-}
-.theme-switcher-options {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+
+/* Theme Icon Row (expanded sidebar) */
+.theme-icon-row {
+  display: flex;
+  align-items: center;
   gap: 4px;
   padding: 3px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-raised);
+  margin-bottom: 12px;
 }
-.theme-switcher-option {
-  min-width: 0;
-  height: 28px;
-  border-radius: 4px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  transition: all 0.15s ease;
-}
-.theme-switcher-option:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-.theme-switcher-option.active {
-  background: var(--accent);
-  color: white;
-  font-weight: 600;
-}
-.theme-switcher-icon {
+.theme-icon-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
-  margin: 0 auto 8px;
-  border-radius: var(--radius-sm);
+  flex: 1;
+  height: 30px;
+  border-radius: 4px;
   color: var(--text-tertiary);
   transition: all 0.15s ease;
 }
-.theme-switcher-icon:hover {
+.theme-icon-btn:hover {
   background: var(--surface-hover);
   color: var(--text);
+}
+.theme-icon-btn.active {
+  background: var(--accent);
+  color: white;
+  box-shadow: 0 2px 8px rgba(196, 125, 46, 0.25);
+}
+
+/* Theme Icon Switcher (collapsed sidebar) */
+.theme-icon-switcher {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+.theme-icon-current {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  transform: scale(1.15);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.theme-icon-current:hover {
+  background: var(--accent-light);
+}
+.theme-icon-option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  opacity: 0;
+  animation: themeIconAppear 0.25s ease forwards;
+}
+.theme-icon-option:hover {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+@keyframes themeIconAppear {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 .sidebar-toggle {
   display: flex; align-items: center; justify-content: center;
