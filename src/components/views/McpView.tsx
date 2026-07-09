@@ -153,17 +153,6 @@ export function McpView({ servers, agents, busy, noFullCoverageMcpTitles, onAdd,
 
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, gap: 16 }}>
-      <div className="view-header">
-        <div>
-          <h2 className="view-title">MCP Servers</h2>
-          <p className="view-subtitle">管理 Codex、Claude Code、OpenCode 和 Trae 的 MCP server 配置</p>
-        </div>
-        <div className="view-header-actions">
-          <button className="btn btn-secondary" onClick={onRefresh} disabled={busy}>刷新</button>
-          <button className="btn btn-primary" onClick={handleAdd} disabled={busy}>添加 MCP</button>
-        </div>
-      </div>
-
       <div className="metrics" style={{ marginBottom: 0 }}>
         <div
           className="metric-card"
@@ -202,7 +191,13 @@ export function McpView({ servers, agents, busy, noFullCoverageMcpTitles, onAdd,
       <div className="skills-panel">
         <div className="skills-header">
           <div><div className="card-title">MCP Servers 控制台</div><div className="card-desc">点击任意 MCP server 查看详情和管理配置</div></div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span className="skills-header-badge">{displayedServers.length} 个可见项目</span></div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span className="skills-header-badge">{displayedServers.length} 个可见项目</span>
+            <button className="btn btn-secondary btn-sm" onClick={onRefresh} disabled={busy} type="button" title="刷新">
+              <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>
+            </button>
+            <button className="btn btn-primary" onClick={handleAdd} disabled={busy}>添加 MCP</button>
+          </div>
         </div>
         <div className="skills-list">
           {displayedServers.length === 0 ? (
