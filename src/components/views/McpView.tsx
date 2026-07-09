@@ -152,7 +152,7 @@ export function McpView({ servers, agents, busy, noFullCoverageMcpTitles, onAdd,
   }
 
   return (
-    <>
+    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, gap: 16 }}>
       <div className="view-header">
         <div>
           <h2 className="view-title">MCP Servers</h2>
@@ -164,7 +164,7 @@ export function McpView({ servers, agents, busy, noFullCoverageMcpTitles, onAdd,
         </div>
       </div>
 
-      <div className="metrics">
+      <div className="metrics" style={{ marginBottom: 0 }}>
         <div
           className="metric-card"
           onClick={() => setFilter("all")}
@@ -289,7 +289,7 @@ export function McpView({ servers, agents, busy, noFullCoverageMcpTitles, onAdd,
         />
       )}
 
-    </>
+    </div>
   );
 }
 

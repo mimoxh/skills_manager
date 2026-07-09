@@ -176,9 +176,9 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
   }
 
   return (
-    <>
+    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, gap: 16 }}>
       {/* Metrics */}
-      <div className="metrics">
+      <div className="metrics" style={{ flexShrink: 0, marginBottom: 0 }}>
         <div
           className="metric-card"
           onClick={() => setFilter("all")}
@@ -219,7 +219,7 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
         onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
-        style={dragging ? { borderColor: "var(--accent)", background: "var(--accent-soft)" } : undefined}
+        style={{ flexShrink: 0, ...(dragging ? { borderColor: "var(--accent)", background: "var(--accent-soft)" } : {}) }}
       >
         <div className="import-zone-icon">
           <svg className="icon icon-lg" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
@@ -370,7 +370,7 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
 
       {/* Last results */}
       {lastResults.length > 0 && (
-        <div style={{ marginTop: 16, padding: "12px 16px", background: "var(--surface-raised)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: 12, color: "var(--text-secondary)" }}>
+        <div style={{ flexShrink: 0, padding: "12px 16px", background: "var(--surface-raised)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: 12, color: "var(--text-secondary)" }}>
           最近同步完成 {lastResults.length} 个任务
         </div>
       )}
@@ -433,7 +433,7 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
           onConfirm={() => { setDiscardConfirm(false); setSelectedSkill(null); setSelectedSourceAgentId(null); }}
         />
       )}
-    </>
+    </div>
   );
 }
 
