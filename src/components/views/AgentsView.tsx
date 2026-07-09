@@ -19,8 +19,9 @@ function isMcpAgent(type: AgentType, adapterConfig?: Record<string, unknown> | n
   return false;
 }
 
-type McpFormat = "claude" | "opencode" | "codex" | "trae";
+type McpFormat = "generic" | "claude" | "opencode" | "codex" | "trae";
 const mcpFormatOptions: Array<{ value: McpFormat; label: string }> = [
+  { value: "generic", label: "通用 JSON 格式" },
   { value: "claude", label: "Claude 格式 (JSON)" },
   { value: "opencode", label: "OpenCode 格式 (JSON)" },
   { value: "codex", label: "Codex 格式 (TOML)" },
@@ -714,7 +715,7 @@ function skillsPlaceholder(type: AgentType): string {
 
 function mcpPlaceholder(type: AgentType, format?: string): string {
   if (type === "custom" && format) {
-    const map: Partial<Record<McpFormat, string>> = { claude: "~/.claude.json", opencode: "~/.opencode.json", codex: "~/.codex/config.toml", trae: "~/.trae/mcp.json" };
+    const map: Partial<Record<McpFormat, string>> = { generic: "mcp_config.json", claude: "~/.claude.json", opencode: "~/.opencode.json", codex: "~/.codex/config.toml", trae: "~/.trae/mcp.json" };
     return map[format as McpFormat] ?? "MCP 配置文件路径";
   }
   const map: Partial<Record<AgentType, string>> = { opencode: "~/.opencode.json", codex: "~/.codex/config.toml", claudeCode: "~/.claude.json", trae: "~/.trae/mcp.json" };
@@ -723,7 +724,7 @@ function mcpPlaceholder(type: AgentType, format?: string): string {
 
 function mcpHint(type: AgentType, format?: string): string {
   if (type === "custom" && format) {
-    const map: Partial<Record<McpFormat, string>> = { claude: "留空使用默认 ~/.claude.json", opencode: "留空使用默认 ~/.opencode.json", codex: "留空使用默认 ~/.codex/config.toml", trae: "留空使用默认 ~/.trae/mcp.json" };
+    const map: Partial<Record<McpFormat, string>> = { generic: "标准 JSON 格式，使用 mcpServers 作为顶层 key", claude: "留空使用默认 ~/.claude.json", opencode: "留空使用默认 ~/.opencode.json", codex: "留空使用默认 ~/.codex/config.toml", trae: "留空使用默认 ~/.trae/mcp.json" };
     return map[format as McpFormat] ?? "留空则使用默认路径";
   }
   const map: Partial<Record<AgentType, string>> = { opencode: "留空使用默认 ~/.opencode.json", codex: "留空使用默认 ~/.codex/config.toml", claudeCode: "留空使用默认 ~/.claude.json", trae: "留空使用默认 ~/.trae/mcp.json" };
@@ -732,7 +733,7 @@ function mcpHint(type: AgentType, format?: string): string {
 
 function mcpFileFilter(type: AgentType, format?: string): Array<{ name: string; extensions: string[] }> | undefined {
   if (type === "custom" && format) {
-    const map: Partial<Record<McpFormat, Array<{ name: string; extensions: string[] }>>> = { claude: [{ name: "JSON", extensions: ["json"] }], opencode: [{ name: "JSON", extensions: ["json"] }], codex: [{ name: "TOML", extensions: ["toml"] }], trae: [{ name: "JSON", extensions: ["json"] }] };
+    const map: Partial<Record<McpFormat, Array<{ name: string; extensions: string[] }>>> = { generic: [{ name: "JSON", extensions: ["json"] }], claude: [{ name: "JSON", extensions: ["json"] }], opencode: [{ name: "JSON", extensions: ["json"] }], codex: [{ name: "TOML", extensions: ["toml"] }], trae: [{ name: "JSON", extensions: ["json"] }] };
     return map[format as McpFormat];
   }
   const map: Partial<Record<AgentType, Array<{ name: string; extensions: string[] }>>> = { opencode: [{ name: "JSON", extensions: ["json"] }], codex: [{ name: "TOML", extensions: ["toml"] }], claudeCode: [{ name: "JSON", extensions: ["json"] }], trae: [{ name: "JSON", extensions: ["json"] }] };

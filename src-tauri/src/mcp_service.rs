@@ -38,7 +38,7 @@ impl McpService {
                 .and_then(|c| c.get("mcpFormat"))
                 .and_then(|v| v.as_str());
             match format {
-                Some("claude") => self.adapters.get(&AgentType::ClaudeCode).map(|a| a.as_ref()),
+                Some("claude") | Some("generic") => self.adapters.get(&AgentType::ClaudeCode).map(|a| a.as_ref()),
                 Some("opencode") => self.adapters.get(&AgentType::OpenCode).map(|a| a.as_ref()),
                 Some("codex") => self.adapters.get(&AgentType::Codex).map(|a| a.as_ref()),
                 Some("trae") => self.adapters.get(&AgentType::Trae).map(|a| a.as_ref()),
@@ -115,19 +115,45 @@ impl McpService {
         let mut results = Vec::new();
 
         for agent_id in agent_ids {
-            let agent = agent_map.get(agent_id).ok_or_else(|| {
-                AppError::Message(format!("找不到 Agent: {}", agent_id))
-            })?;
+            let agent = match agent_map.get(agent_id) {
+                Some(a) => a,
+                None => {
+                    results.push(McpOperationResult {
+                        agent_id: agent_id.clone(),
+                        server_name: config.name.clone(),
+                        action: "error".to_string(),
+                        message: format!("找不到 Agent: {}", agent_id),
+                    });
+                    continue;
+                }
+            };
 
-            let adapter = self.get_adapter_for_agent(agent).ok_or_else(|| {
-                AppError::Message(format!(
-                    "Agent '{}' 不支持 MCP 管理",
-                    agent.name
-                ))
-            })?;
+            let adapter = match self.get_adapter_for_agent(agent) {
+                Some(a) => a,
+                None => {
+                    results.push(McpOperationResult {
+                        agent_id: agent_id.clone(),
+                        server_name: config.name.clone(),
+                        action: "skipped".to_string(),
+                        message: format!("{} 不支持 MCP 管理，已跳过", agent.name),
+                    });
+                    continue;
+                }
+            };
 
             // 检查是否已存在
-            let existing = adapter.scan(agent)?;
+            let existing = match adapter.scan(agent) {
+                Ok(servers) => servers,
+                Err(e) => {
+                    results.push(McpOperationResult {
+                        agent_id: agent_id.clone(),
+                        server_name: config.name.clone(),
+                        action: "error".to_string(),
+                        message: format!("扫描 {} 的 MCP 配置失败: {}", agent.name, e),
+                    });
+                    continue;
+                }
+            };
             let exists = existing.iter().any(|s| s.config.name == config.name);
 
             if exists {
@@ -142,14 +168,22 @@ impl McpService {
                         continue;
                     }
                     ConflictPolicy::BackupOverwrite => {
-                        adapter.backup(agent)?;
-                        adapter.update(agent, &config.name, config)?;
-                        results.push(McpOperationResult {
-                            agent_id: agent_id.clone(),
-                            server_name: config.name.clone(),
-                            action: "updated".to_string(),
-                            message: format!("{} 已更新于 {}", config.name, agent.name),
-                        });
+                        let _ = adapter.backup(agent);
+                        if let Err(e) = adapter.update(agent, &config.name, config) {
+                            results.push(McpOperationResult {
+                                agent_id: agent_id.clone(),
+                                server_name: config.name.clone(),
+                                action: "error".to_string(),
+                                message: format!("更新 {} 于 {} 失败: {}", config.name, agent.name, e),
+                            });
+                        } else {
+                            results.push(McpOperationResult {
+                                agent_id: agent_id.clone(),
+                                server_name: config.name.clone(),
+                                action: "updated".to_string(),
+                                message: format!("{} 已更新于 {}", config.name, agent.name),
+                            });
+                        }
                         continue;
                     }
                     ConflictPolicy::Prompt => {
@@ -160,25 +194,44 @@ impl McpService {
                     }
                     ConflictPolicy::Rename => {
                         // 不适用，直接覆盖
-                        adapter.update(agent, &config.name, config)?;
-                        results.push(McpOperationResult {
-                            agent_id: agent_id.clone(),
-                            server_name: config.name.clone(),
-                            action: "updated".to_string(),
-                            message: format!("{} 已更新于 {}", config.name, agent.name),
-                        });
+                        if let Err(e) = adapter.update(agent, &config.name, config) {
+                            results.push(McpOperationResult {
+                                agent_id: agent_id.clone(),
+                                server_name: config.name.clone(),
+                                action: "error".to_string(),
+                                message: format!("更新 {} 于 {} 失败: {}", config.name, agent.name, e),
+                            });
+                        } else {
+                            results.push(McpOperationResult {
+                                agent_id: agent_id.clone(),
+                                server_name: config.name.clone(),
+                                action: "updated".to_string(),
+                                message: format!("{} 已更新于 {}", config.name, agent.name),
+                            });
+                        }
                         continue;
                     }
                 }
             }
 
-            adapter.add(agent, config)?;
-            results.push(McpOperationResult {
-                agent_id: agent_id.clone(),
-                server_name: config.name.clone(),
-                action: "added".to_string(),
-                message: format!("{} 已添加到 {}", config.name, agent.name),
-            });
+            match adapter.add(agent, config) {
+                Ok(()) => {
+                    results.push(McpOperationResult {
+                        agent_id: agent_id.clone(),
+                        server_name: config.name.clone(),
+                        action: "added".to_string(),
+                        message: format!("{} 已添加到 {}", config.name, agent.name),
+                    });
+                }
+                Err(e) => {
+                    results.push(McpOperationResult {
+                        agent_id: agent_id.clone(),
+                        server_name: config.name.clone(),
+                        action: "error".to_string(),
+                        message: format!("添加 {} 到 {} 失败: {}", config.name, agent.name, e),
+                    });
+                }
+            }
         }
 
         Ok(results)
@@ -291,14 +344,43 @@ impl McpService {
         let mut results = Vec::new();
 
         for agent_id in target_agent_ids {
-            let agent = agent_map.get(agent_id).ok_or_else(|| {
-                AppError::Message(format!("找不到 Agent: {}", agent_id))
-            })?;
-            let adapter = self.get_adapter_for_agent(agent).ok_or_else(|| {
-                AppError::Message(format!("Agent '{}' 不支持 MCP 管理", agent.name))
-            })?;
+            let agent = match agent_map.get(agent_id) {
+                Some(a) => a,
+                None => {
+                    results.push(McpOperationResult {
+                        agent_id: agent_id.clone(),
+                        server_name: server_name.to_string(),
+                        action: "error".to_string(),
+                        message: format!("找不到 Agent: {}", agent_id),
+                    });
+                    continue;
+                }
+            };
+            let adapter = match self.get_adapter_for_agent(agent) {
+                Some(a) => a,
+                None => {
+                    results.push(McpOperationResult {
+                        agent_id: agent_id.clone(),
+                        server_name: server_name.to_string(),
+                        action: "skipped".to_string(),
+                        message: format!("{} 不支持 MCP 管理，已跳过", agent.name),
+                    });
+                    continue;
+                }
+            };
 
-            let existing = adapter.scan(agent)?;
+            let existing = match adapter.scan(agent) {
+                Ok(servers) => servers,
+                Err(e) => {
+                    results.push(McpOperationResult {
+                        agent_id: agent_id.clone(),
+                        server_name: server_name.to_string(),
+                        action: "error".to_string(),
+                        message: format!("扫描 {} 的 MCP 配置失败: {}", agent.name, e),
+                    });
+                    continue;
+                }
+            };
             let exists = existing.iter().any(|s| s.config.name == server_name);
 
             if exists {
@@ -313,14 +395,22 @@ impl McpService {
                         continue;
                     }
                     ConflictPolicy::BackupOverwrite => {
-                        adapter.backup(agent)?;
-                        adapter.update(agent, server_name, config)?;
-                        results.push(McpOperationResult {
-                            agent_id: agent_id.clone(),
-                            server_name: server_name.to_string(),
-                            action: "updated".to_string(),
-                            message: format!("{} 已更新于 {}", server_name, agent.name),
-                        });
+                        let _ = adapter.backup(agent);
+                        if let Err(e) = adapter.update(agent, server_name, config) {
+                            results.push(McpOperationResult {
+                                agent_id: agent_id.clone(),
+                                server_name: server_name.to_string(),
+                                action: "error".to_string(),
+                                message: format!("更新 {} 于 {} 失败: {}", server_name, agent.name, e),
+                            });
+                        } else {
+                            results.push(McpOperationResult {
+                                agent_id: agent_id.clone(),
+                                server_name: server_name.to_string(),
+                                action: "updated".to_string(),
+                                message: format!("{} 已更新于 {}", server_name, agent.name),
+                            });
+                        }
                         continue;
                     }
                     ConflictPolicy::Prompt => {
@@ -330,25 +420,44 @@ impl McpService {
                         )));
                     }
                     ConflictPolicy::Rename => {
-                        adapter.update(agent, server_name, config)?;
-                        results.push(McpOperationResult {
-                            agent_id: agent_id.clone(),
-                            server_name: server_name.to_string(),
-                            action: "updated".to_string(),
-                            message: format!("{} 已更新于 {}", server_name, agent.name),
-                        });
+                        if let Err(e) = adapter.update(agent, server_name, config) {
+                            results.push(McpOperationResult {
+                                agent_id: agent_id.clone(),
+                                server_name: server_name.to_string(),
+                                action: "error".to_string(),
+                                message: format!("更新 {} 于 {} 失败: {}", server_name, agent.name, e),
+                            });
+                        } else {
+                            results.push(McpOperationResult {
+                                agent_id: agent_id.clone(),
+                                server_name: server_name.to_string(),
+                                action: "updated".to_string(),
+                                message: format!("{} 已更新于 {}", server_name, agent.name),
+                            });
+                        }
                         continue;
                     }
                 }
             }
 
-            adapter.add(agent, config)?;
-            results.push(McpOperationResult {
-                agent_id: agent_id.clone(),
-                server_name: server_name.to_string(),
-                action: "added".to_string(),
-                message: format!("{} 已添加到 {}", server_name, agent.name),
-            });
+            match adapter.add(agent, config) {
+                Ok(()) => {
+                    results.push(McpOperationResult {
+                        agent_id: agent_id.clone(),
+                        server_name: server_name.to_string(),
+                        action: "added".to_string(),
+                        message: format!("{} 已添加到 {}", server_name, agent.name),
+                    });
+                }
+                Err(e) => {
+                    results.push(McpOperationResult {
+                        agent_id: agent_id.clone(),
+                        server_name: server_name.to_string(),
+                        action: "error".to_string(),
+                        message: format!("添加 {} 到 {} 失败: {}", server_name, agent.name, e),
+                    });
+                }
+            }
         }
 
         Ok(results)
@@ -368,18 +477,47 @@ impl McpService {
             let agent = agent_map.get(agent_id).ok_or_else(|| {
                 AppError::Message(format!("找不到 Agent: {}", agent_id))
             })?;
-            let adapter = self.get_adapter_for_agent(agent).ok_or_else(|| {
-                AppError::Message(format!("Agent '{}' 不支持 MCP 管理", agent.name))
-            })?;
+            let adapter = match self.get_adapter_for_agent(agent) {
+                Some(a) => a,
+                None => {
+                    results.push(McpOperationResult {
+                        agent_id: agent_id.clone(),
+                        server_name: server_name.to_string(),
+                        action: "skipped".to_string(),
+                        message: format!("{} 不支持 MCP 管理，已跳过", agent.name),
+                    });
+                    continue;
+                }
+            };
 
-            adapter.backup(agent)?;
-            adapter.remove(agent, server_name)?;
-            results.push(McpOperationResult {
-                agent_id: agent_id.clone(),
-                server_name: server_name.to_string(),
-                action: "removed".to_string(),
-                message: format!("{} 已从 {} 删除", server_name, agent.name),
-            });
+            // backup 或 remove 失败时记录错误并继续，不中断批量操作
+            if let Err(e) = adapter.backup(agent) {
+                results.push(McpOperationResult {
+                    agent_id: agent_id.clone(),
+                    server_name: server_name.to_string(),
+                    action: "error".to_string(),
+                    message: format!("备份 {} 的配置失败: {}", agent.name, e),
+                });
+                continue;
+            }
+            match adapter.remove(agent, server_name) {
+                Ok(()) => {
+                    results.push(McpOperationResult {
+                        agent_id: agent_id.clone(),
+                        server_name: server_name.to_string(),
+                        action: "removed".to_string(),
+                        message: format!("{} 已从 {} 删除", server_name, agent.name),
+                    });
+                }
+                Err(e) => {
+                    results.push(McpOperationResult {
+                        agent_id: agent_id.clone(),
+                        server_name: server_name.to_string(),
+                        action: "error".to_string(),
+                        message: format!("从 {} 删除 {} 失败: {}", agent.name, server_name, e),
+                    });
+                }
+            }
         }
 
         Ok(results)
