@@ -31,6 +31,24 @@ impl McpService {
         self.adapters.get(agent_type).map(|a| a.as_ref())
     }
 
+    /// 为 Custom 类型 agent 根据 adapterConfig.mcpFormat 路由到对应适配器
+    fn get_adapter_for_agent(&self, agent: &AgentProfile) -> Option<&(dyn McpAdapter + Send + Sync)> {
+        if agent.agent_type == AgentType::Custom {
+            let format = agent.adapter_config.as_ref()
+                .and_then(|c| c.get("mcpFormat"))
+                .and_then(|v| v.as_str());
+            match format {
+                Some("claude") => self.adapters.get(&AgentType::ClaudeCode).map(|a| a.as_ref()),
+                Some("opencode") => self.adapters.get(&AgentType::OpenCode).map(|a| a.as_ref()),
+                Some("codex") => self.adapters.get(&AgentType::Codex).map(|a| a.as_ref()),
+                Some("trae") => self.adapters.get(&AgentType::Trae).map(|a| a.as_ref()),
+                _ => None,
+            }
+        } else {
+            self.get_adapter(&agent.agent_type)
+        }
+    }
+
     /// 扫描所有 Agent 的 MCP server，按名称分组
     pub fn scan_mcp_servers(
         &self,
@@ -39,7 +57,7 @@ impl McpService {
         let mut all_servers: Vec<AgentMcpServer> = Vec::new();
 
         for agent in agents {
-            if let Some(adapter) = self.get_adapter(&agent.agent_type) {
+            if let Some(adapter) = self.get_adapter_for_agent(agent) {
                 match adapter.scan(agent) {
                     Ok(servers) => all_servers.extend(servers),
                     Err(_) => {
@@ -101,7 +119,7 @@ impl McpService {
                 AppError::Message(format!("找不到 Agent: {}", agent_id))
             })?;
 
-            let adapter = self.get_adapter(&agent.agent_type).ok_or_else(|| {
+            let adapter = self.get_adapter_for_agent(agent).ok_or_else(|| {
                 AppError::Message(format!(
                     "Agent '{}' 不支持 MCP 管理",
                     agent.name
@@ -178,7 +196,7 @@ impl McpService {
             AppError::Message(format!("找不到 Agent: {}", agent_id))
         })?;
 
-        let adapter = self.get_adapter(&agent.agent_type).ok_or_else(|| {
+        let adapter = self.get_adapter_for_agent(agent).ok_or_else(|| {
             AppError::Message(format!("Agent '{}' 不支持 MCP 管理", agent.name))
         })?;
 
@@ -204,7 +222,7 @@ impl McpService {
             AppError::Message(format!("找不到 Agent: {}", agent_id))
         })?;
 
-        let adapter = self.get_adapter(&agent.agent_type).ok_or_else(|| {
+        let adapter = self.get_adapter_for_agent(agent).ok_or_else(|| {
             AppError::Message(format!("Agent '{}' 不支持 MCP 管理", agent.name))
         })?;
 
@@ -231,7 +249,7 @@ impl McpService {
             AppError::Message(format!("找不到 Agent: {}", agent_id))
         })?;
 
-        let adapter = self.get_adapter(&agent.agent_type).ok_or_else(|| {
+        let adapter = self.get_adapter_for_agent(agent).ok_or_else(|| {
             AppError::Message(format!("Agent '{}' 不支持 MCP 管理", agent.name))
         })?;
 
@@ -259,7 +277,7 @@ impl McpService {
         let source_agent = agents.iter().find(|a| a.id == source_agent_id).ok_or_else(|| {
             AppError::Message(format!("找不到源 Agent: {}", source_agent_id))
         })?;
-        let source_adapter = self.get_adapter(&source_agent.agent_type).ok_or_else(|| {
+        let source_adapter = self.get_adapter_for_agent(source_agent).ok_or_else(|| {
             AppError::Message(format!("源 Agent '{}' 不支持 MCP 管理", source_agent.name))
         })?;
         let source_servers = source_adapter.scan(source_agent)?;
@@ -276,7 +294,7 @@ impl McpService {
             let agent = agent_map.get(agent_id).ok_or_else(|| {
                 AppError::Message(format!("找不到 Agent: {}", agent_id))
             })?;
-            let adapter = self.get_adapter(&agent.agent_type).ok_or_else(|| {
+            let adapter = self.get_adapter_for_agent(agent).ok_or_else(|| {
                 AppError::Message(format!("Agent '{}' 不支持 MCP 管理", agent.name))
             })?;
 
@@ -350,7 +368,7 @@ impl McpService {
             let agent = agent_map.get(agent_id).ok_or_else(|| {
                 AppError::Message(format!("找不到 Agent: {}", agent_id))
             })?;
-            let adapter = self.get_adapter(&agent.agent_type).ok_or_else(|| {
+            let adapter = self.get_adapter_for_agent(agent).ok_or_else(|| {
                 AppError::Message(format!("Agent '{}' 不支持 MCP 管理", agent.name))
             })?;
 
