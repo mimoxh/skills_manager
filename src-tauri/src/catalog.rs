@@ -1,5 +1,6 @@
 use crate::{
     error::{AppError, AppResult},
+    manifest::{read_markdown_heading, read_skill_md_frontmatter},
     models::{CatalogInstallStatus, CatalogSkill, CatalogSort, CatalogSource},
 };
 use chrono::{DateTime, Utc};
@@ -393,49 +394,6 @@ fn read_supported_agents(item: &Value) -> Vec<String> {
         agents.push("openclaw".to_string());
     }
     agents
-}
-
-fn read_skill_md_frontmatter(text: &str) -> Option<(Option<String>, Option<String>, Vec<String>)> {
-    let trimmed = text.trim_start();
-    if !trimmed.starts_with("---") {
-        return None;
-    }
-    let after_first = &trimmed[3..];
-    let end_idx = after_first.find("\n---")?;
-    let frontmatter = &after_first[..end_idx];
-    let value = serde_yaml::from_str::<Value>(frontmatter).ok()?;
-    let name = value
-        .get("name")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string);
-    let description = value
-        .get("description")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string);
-    let tags = value
-        .get("tags")
-        .and_then(Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(Value::as_str)
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    Some((name, description, tags))
-}
-
-fn read_markdown_heading(text: &str) -> Option<String> {
-    text.lines()
-        .find_map(|line| line.strip_prefix("# "))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
 }
 
 fn infer_supported_agents(source: &CatalogSource) -> Vec<String> {

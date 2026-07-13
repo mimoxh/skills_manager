@@ -8,7 +8,7 @@ use crate::{
     cherry_studio::CherryStudioAdapter,
     error::{AppError, AppResult},
     hash::{copy_dir_all, hash_dir},
-    manifest::{read_skill, scan_repository},
+    manifest::{read_skill, scan_repository, scan_skill_md_only, synthesize_manifest_from_skill_md},
     mcp_service::McpService,
     models::{
         AgentProfile, AgentSkillCopy, AgentType, CatalogFilters, CatalogInstallStatus,
@@ -797,7 +797,20 @@ impl AppService {
         target_agent_ids: &[String],
         conflict_policy: ConflictPolicy,
     ) -> AppResult<ImportSkillResult> {
-        let dirs = self.manifest_source_dirs(source_root)?;
+        let mut dirs = self.manifest_source_dirs(source_root)?;
+        let mut using_skill_md_fallback = false;
+
+        // Fallback: scan for SKILL.md-only directories when no manifest files found
+        if dirs.is_empty() {
+            let skill_md_skills = scan_skill_md_only(source_root)?;
+            if !skill_md_skills.is_empty() {
+                using_skill_md_fallback = true;
+                for skill in &skill_md_skills {
+                    dirs.push(PathBuf::from(&skill.source_path));
+                }
+            }
+        }
+
         if dirs.is_empty() {
             // Provide a more descriptive error with directory contents hint
             let mut hint = String::new();
@@ -835,7 +848,12 @@ impl AppService {
         let mut skipped = 0;
 
         for source in &dirs {
-            let skill = read_skill(&self.manifest_path_for(source)?)?;
+            let skill = if using_skill_md_fallback {
+                let skill_md = source.join("SKILL.md");
+                synthesize_manifest_from_skill_md(&skill_md)?
+            } else {
+                read_skill(&self.manifest_path_for(source)?)?
+            };
             let skill_dir_name = source
                 .file_name()
                 .and_then(|v| v.to_str())
