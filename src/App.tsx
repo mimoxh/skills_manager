@@ -1,5 +1,6 @@
 import { ChangeEvent, Suspense, lazy, useEffect, useRef, useState } from "react";
 import { TooltipProvider } from "./components/ui/tooltip";
+import { Toast } from "./components/ui/Toast";
 import { Titlebar } from "./components/layout/Titlebar";
 import { Sidebar } from "./components/layout/Sidebar";
 import { ImportAgentDialog } from "./components/views/ImportAgentDialog";
@@ -53,7 +54,7 @@ export default function App() {
     try {
       await state.importFiles(files[0]?.name ?? "upload", await Promise.all(files.map((f) => fileToUpload(f))));
     } catch (error) {
-      state.setMessage(String(error));
+      state.showToast(String(error), "error");
     } finally {
       if (folderInputRef.current) folderInputRef.current.value = "";
       if (archiveInputRef.current) archiveInputRef.current.value = "";
@@ -226,6 +227,11 @@ export default function App() {
           onImport={state.executeImport}
         />
       )}
+
+      <Toast
+        message={state.toastText ? { text: state.toastText, type: state.toastType } : null}
+        onDismiss={state.dismissToast}
+      />
     </TooltipProvider>
   );
 }
