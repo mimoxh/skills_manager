@@ -320,6 +320,7 @@ function McpServerItem({ server, mcpAgents, noFullCoverageMcpTitles, onClick }: 
 const mcpPolicyOptions: Array<{ value: ConflictPolicy; label: string; helper: string }> = [
   { value: "backupOverwrite", label: "备份覆盖", helper: "保留备份后更新目标配置" },
   { value: "skip", label: "跳过冲突", helper: "目标已存在时不做修改" },
+  { value: "rename", label: "重命名追加", helper: "目标已存在时以原名称+时间戳重命名归入" },
 ];
 
 function McpSyncDialog({ server, mcpAgents, busy, selectedAgentIds, conflictPolicy, isNoFullCoverage, onClose, onEdit, onToggleAgent, onPolicy, onSync, onToggle, onToggleNoFullCoverage }: {
@@ -776,6 +777,7 @@ function McpFormDialog({ server, agents, selectedAgentIds, onClose, onSubmit }: 
                 <option value="backupOverwrite">备份覆盖</option>
                 <option value="skip">跳过</option>
                 <option value="prompt">提示</option>
+                <option value="rename">重命名追加</option>
               </select>
             </div>
           )}

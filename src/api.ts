@@ -117,10 +117,10 @@ export const api = {
       () => ({ items: [], total: 0, page, pageSize, hasMore: false }),
     );
   },
-  startCatalogRefresh(sourceId: string, safetyMode: CatalogSafetyMode, mode = "full") {
+  startCatalogRefresh(sourceId: string, safetyMode: CatalogSafetyMode) {
     return command<CatalogRefreshStatus>(
       "start_catalog_refresh",
-      { sourceId, mode, safetyMode },
+      { sourceId, safetyMode },
       () => ({
         sourceId,
         safetyMode,

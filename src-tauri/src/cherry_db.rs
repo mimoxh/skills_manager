@@ -182,13 +182,7 @@ impl CherryDb {
 
 /// Generate a lowercase UUID v4 string.
 fn uuid_v4() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let seed = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    // Simple pseudo-UUID using timestamp + random-ish bits
-    format!("{:032x}", seed)
+    uuid::Uuid::new_v4().to_string()
 }
 
 #[cfg(test)]

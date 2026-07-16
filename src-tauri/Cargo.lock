@@ -3002,6 +3002,7 @@ dependencies = [
  "thiserror 1.0.69",
  "toml 0.8.2",
  "ureq",
+ "uuid",
  "walkdir",
  "zip",
 ]

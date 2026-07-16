@@ -193,21 +193,74 @@ impl McpService {
                         )));
                     }
                     ConflictPolicy::Rename => {
-                        // 不适用，直接覆盖
-                        if let Err(e) = adapter.update(agent, &config.name, config) {
-                            results.push(McpOperationResult {
-                                agent_id: agent_id.clone(),
-                                server_name: config.name.clone(),
-                                action: "error".to_string(),
-                                message: format!("更新 {} 于 {} 失败: {}", config.name, agent.name, e),
-                            });
-                        } else {
-                            results.push(McpOperationResult {
-                                agent_id: agent_id.clone(),
-                                server_name: config.name.clone(),
-                                action: "updated".to_string(),
-                                message: format!("{} 已更新于 {}", config.name, agent.name),
-                            });
+                        // 将既有同名 server 内容改名保留（追时间戳），腾出原名供新配置写入
+                        let suffix = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
+                        let renamed_name = format!("{}-{}", config.name, suffix);
+                        let existing_cfg = existing
+                            .iter()
+                            .find(|s| s.config.name == config.name)
+                            .map(|s| s.config.clone());
+                        match existing_cfg {
+                            Some(mut old) => {
+                                old.name = renamed_name.clone();
+                                match adapter.update(agent, &config.name, &old) {
+                                    Ok(()) => {
+                                        results.push(McpOperationResult {
+                                            agent_id: agent_id.clone(),
+                                            server_name: config.name.clone(),
+                                            action: "renamed".to_string(),
+                                            message: format!(
+                                                "{} 已重命名既有配置为 {} 于 {}",
+                                                config.name, renamed_name, agent.name
+                                            ),
+                                        });
+                                        // 继续写入新配置（原名已被腾出）
+                                        match adapter.add(agent, config) {
+                                            Ok(()) => results.push(McpOperationResult {
+                                                agent_id: agent_id.clone(),
+                                                server_name: config.name.clone(),
+                                                action: "added".to_string(),
+                                                message: format!(
+                                                    "{} 已添加到 {}",
+                                                    config.name, agent.name
+                                                ),
+                                            }),
+                                            Err(e) => results.push(McpOperationResult {
+                                                agent_id: agent_id.clone(),
+                                                server_name: config.name.clone(),
+                                                action: "error".to_string(),
+                                                message: format!(
+                                                    "添加 {} 到 {} 失败: {}",
+                                                    config.name, agent.name, e
+                                                ),
+                                            }),
+                                        }
+                                    }
+                                    Err(e) => {
+                                        results.push(McpOperationResult {
+                                            agent_id: agent_id.clone(),
+                                            server_name: config.name.clone(),
+                                            action: "error".to_string(),
+                                            message: format!(
+                                                "重命名 {} 于 {} 失败: {}",
+                                                config.name, agent.name, e
+                                            ),
+                                        });
+                                    }
+                                }
+                            }
+                            None => {
+                                // exists 为 true 却未取到配置，记录异常
+                                results.push(McpOperationResult {
+                                    agent_id: agent_id.clone(),
+                                    server_name: config.name.clone(),
+                                    action: "error".to_string(),
+                                    message: format!(
+                                        "无法读取 {} 的既有 MCP 配置",
+                                        agent.name
+                                    ),
+                                });
+                            }
                         }
                         continue;
                     }
@@ -420,20 +473,73 @@ impl McpService {
                         )));
                     }
                     ConflictPolicy::Rename => {
-                        if let Err(e) = adapter.update(agent, server_name, config) {
-                            results.push(McpOperationResult {
-                                agent_id: agent_id.clone(),
-                                server_name: server_name.to_string(),
-                                action: "error".to_string(),
-                                message: format!("更新 {} 于 {} 失败: {}", server_name, agent.name, e),
-                            });
-                        } else {
-                            results.push(McpOperationResult {
-                                agent_id: agent_id.clone(),
-                                server_name: server_name.to_string(),
-                                action: "updated".to_string(),
-                                message: format!("{} 已更新于 {}", server_name, agent.name),
-                            });
+                        // 将目标同名 server 内容改名保留（追时间戳），腾出原名供同步写入
+                        let suffix = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
+                        let renamed_name = format!("{}-{}", server_name, suffix);
+                        let existing_cfg = existing
+                            .iter()
+                            .find(|s| s.config.name == server_name)
+                            .map(|s| s.config.clone());
+                        match existing_cfg {
+                            Some(mut old) => {
+                                old.name = renamed_name.clone();
+                                match adapter.update(agent, server_name, &old) {
+                                    Ok(()) => {
+                                        results.push(McpOperationResult {
+                                            agent_id: agent_id.clone(),
+                                            server_name: server_name.to_string(),
+                                            action: "renamed".to_string(),
+                                            message: format!(
+                                                "{} 已重命名既有配置为 {} 于 {}",
+                                                server_name, renamed_name, agent.name
+                                            ),
+                                        });
+                                        // 继续写入源 server 配置（原名已被腾出）
+                                        match adapter.add(agent, config) {
+                                            Ok(()) => results.push(McpOperationResult {
+                                                agent_id: agent_id.clone(),
+                                                server_name: server_name.to_string(),
+                                                action: "added".to_string(),
+                                                message: format!(
+                                                    "{} 已添加到 {}",
+                                                    server_name, agent.name
+                                                ),
+                                            }),
+                                            Err(e) => results.push(McpOperationResult {
+                                                agent_id: agent_id.clone(),
+                                                server_name: server_name.to_string(),
+                                                action: "error".to_string(),
+                                                message: format!(
+                                                    "添加 {} 到 {} 失败: {}",
+                                                    server_name, agent.name, e
+                                                ),
+                                            }),
+                                        }
+                                    }
+                                    Err(e) => {
+                                        results.push(McpOperationResult {
+                                            agent_id: agent_id.clone(),
+                                            server_name: server_name.to_string(),
+                                            action: "error".to_string(),
+                                            message: format!(
+                                                "重命名 {} 于 {} 失败: {}",
+                                                server_name, agent.name, e
+                                            ),
+                                        });
+                                    }
+                                }
+                            }
+                            None => {
+                                results.push(McpOperationResult {
+                                    agent_id: agent_id.clone(),
+                                    server_name: server_name.to_string(),
+                                    action: "error".to_string(),
+                                    message: format!(
+                                        "无法读取 {} 的既有 MCP 配置",
+                                        agent.name
+                                    ),
+                                });
+                            }
                         }
                         continue;
                     }

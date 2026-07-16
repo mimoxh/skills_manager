@@ -108,11 +108,36 @@ impl AppService {
     }
 
     pub fn get_initial_data(&self) -> AppResult<InitialData> {
-        let agents = self.list_agents().unwrap_or_default();
-        let skills = self.scan_agent_skills().unwrap_or_default();
-        let no_full_coverage_titles = self.store.list_no_full_coverage().unwrap_or_default();
-        let no_full_coverage_mcp_titles =
-            self.store.list_no_full_coverage_mcp().unwrap_or_default();
+        let agents = match self.list_agents() {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("[skills_manager] get_initial_data list_agents failed: {e}");
+                Vec::new()
+            }
+        };
+        let skills = match self.scan_agent_skills() {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("[skills_manager] get_initial_data scan_agent_skills failed: {e}");
+                Vec::new()
+            }
+        };
+        let no_full_coverage_titles = match self.store.list_no_full_coverage() {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("[skills_manager] get_initial_data list_no_full_coverage failed: {e}");
+                Vec::new()
+            }
+        };
+        let no_full_coverage_mcp_titles = match self.store.list_no_full_coverage_mcp() {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!(
+                    "[skills_manager] get_initial_data list_no_full_coverage_mcp failed: {e}"
+                );
+                Vec::new()
+            }
+        };
         Ok(InitialData {
             skills,
             agents,
@@ -265,7 +290,6 @@ impl AppService {
     pub fn start_catalog_refresh(
         &self,
         source_id: &str,
-        _mode: Option<String>,
         safety_mode: CatalogSafetyMode,
     ) -> AppResult<CatalogRefreshStatus> {
         if source_id != "clawhub" {

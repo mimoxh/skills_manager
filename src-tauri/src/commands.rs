@@ -173,11 +173,10 @@ pub async fn refresh_catalog_source(
 #[tauri::command]
 pub fn start_catalog_refresh(
     source_id: String,
-    mode: Option<String>,
     safety_mode: CatalogSafetyMode,
     service: State<AppService>,
 ) -> AppResult<CatalogRefreshStatus> {
-    service.start_catalog_refresh(&source_id, mode, safety_mode)
+    service.start_catalog_refresh(&source_id, safety_mode)
 }
 
 #[tauri::command]
