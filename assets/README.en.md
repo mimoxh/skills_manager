@@ -92,7 +92,7 @@ and writes a portable-package `README.txt` into the same directory.
 To create the versioned zip package for GitHub Releases:
 
 ```powershell
-Compress-Archive -LiteralPath "dist-native\Skills Manager" -DestinationPath "SkillsManager-v0.2.4-windows-portable.zip" -Force
+Compress-Archive -LiteralPath "dist-native\Skills Manager" -DestinationPath "SkillsManager-v0.3.1-windows-portable.zip" -Force
 ```
 
-The root-level `SkillsManager.exe` and `SkillsManager-v0.2.4-windows-portable.zip` are release artifacts. The zip package is suitable for GitHub Releases, while the standalone exe is useful for quick local verification.
+The root-level `SkillsManager.exe` and `SkillsManager-v0.3.1-windows-portable.zip` are release artifacts. The zip package is suitable for GitHub Releases, while the standalone exe is useful for quick local verification.

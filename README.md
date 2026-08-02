@@ -92,7 +92,7 @@ dist-native\Skills Manager\Skills Manager.exe
 生成 GitHub Releases 可上传的版本 zip 包：
 
 ```powershell
-Compress-Archive -LiteralPath "dist-native\Skills Manager" -DestinationPath "SkillsManager-v0.2.4-windows-portable.zip" -Force
+Compress-Archive -LiteralPath "dist-native\Skills Manager" -DestinationPath "SkillsManager-v0.3.1-windows-portable.zip" -Force
 ```
 
-根目录中的 `SkillsManager.exe` 和 `SkillsManager-v0.2.4-windows-portable.zip` 是发布产物。zip 包适合上传到 GitHub Releases，单独的 exe 可用于本地快速验证。
+根目录中的 `SkillsManager.exe` 和 `SkillsManager-v0.3.1-windows-portable.zip` 是发布产物。zip 包适合上传到 GitHub Releases，单独的 exe 可用于本地快速验证。
