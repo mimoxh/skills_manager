@@ -6,6 +6,7 @@ import { Sidebar } from "./components/layout/Sidebar";
 import { ImportAgentDialog } from "./components/views/ImportAgentDialog";
 import { CatalogView } from "./components/views/CatalogView";
 import { McpView } from "./components/views/McpView";
+import { SettingsView } from "./components/views/SettingsView";
 import { useAppState } from "./hooks/useAppState";
 import { useTheme } from "./hooks/useTheme";
 import type { ImportSkillFile } from "./types";
@@ -14,7 +15,7 @@ const SkillsView = lazy(() => import("./components/views/SkillsView").then((m) =
 const OverviewView = lazy(() => import("./components/views/OverviewView").then((m) => ({ default: m.OverviewView })));
 const AgentsView = lazy(() => import("./components/views/AgentsView").then((m) => ({ default: m.AgentsView })));
 
-export type View = "overview" | "skills" | "catalog" | "agents" | "mcp";
+export type View = "overview" | "skills" | "catalog" | "agents" | "mcp" | "settings";
 export type SkillsFilter = "all" | "covered" | "partial" | "needed";
 
 function ViewLoading() {
@@ -159,6 +160,16 @@ export default function App() {
             onToggleNoFullCoverage={state.toggleMcpNoFullCoverage}
           />
         );
+      case "settings":
+        return (
+          <SettingsView
+            palette={theme.palette}
+            themeMode={theme.themeMode}
+            resolvedTheme={theme.resolvedTheme}
+            onPaletteChange={theme.setPalette}
+            onThemeChange={theme.setThemeMode}
+          />
+        );
       default:
         return (
           <Suspense fallback={<ViewLoading />}>
@@ -183,9 +194,6 @@ export default function App() {
           onNavigate={setView}
           skillCount={state.skills.length}
           agentCount={state.agents.length}
-          themeMode={theme.themeMode}
-          resolvedTheme={theme.resolvedTheme}
-          onThemeChange={theme.setThemeMode}
         />
         <div className="main">
           <Titlebar />

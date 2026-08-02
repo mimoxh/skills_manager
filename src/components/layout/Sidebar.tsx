@@ -1,7 +1,5 @@
 import { useState } from "react";
 import type { View } from "../../App";
-import type { ResolvedTheme, ThemeMode } from "../../hooks/useTheme";
-import { ThemeSwitcher } from "./ThemeSwitcher";
 
 const navItems: Array<{ id: View; label: string; icon: string }> = [
   { id: "overview", label: "概览", icon: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z" },
@@ -9,6 +7,7 @@ const navItems: Array<{ id: View; label: string; icon: string }> = [
   { id: "catalog", label: "skills 仓库", icon: "M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z" },
   { id: "mcp", label: "MCP", icon: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" },
   { id: "agents", label: "Agents", icon: "M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8z" },
+  { id: "settings", label: "设置", icon: "M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" },
 ];
 
 interface SidebarProps {
@@ -16,9 +15,6 @@ interface SidebarProps {
   onNavigate: (view: View) => void;
   skillCount?: number;
   agentCount?: number;
-  themeMode: ThemeMode;
-  resolvedTheme: ResolvedTheme;
-  onThemeChange: (mode: ThemeMode) => void;
 }
 
 export function Sidebar({
@@ -26,9 +22,6 @@ export function Sidebar({
   onNavigate,
   skillCount = 0,
   agentCount = 0,
-  themeMode,
-  resolvedTheme,
-  onThemeChange,
 }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -74,12 +67,6 @@ export function Sidebar({
         ))}
       </nav>
       <div className="sidebar-footer">
-        <ThemeSwitcher
-          collapsed={collapsed}
-          mode={themeMode}
-          resolvedTheme={resolvedTheme}
-          onChange={onThemeChange}
-        />
         <div className="sidebar-footer-stat">
           <span className="sidebar-stat-dot" />
           <span className="sidebar-footer-text">已识别 {skillCount} 个 skills，{agentCount} 个 agents</span>
