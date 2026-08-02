@@ -21,6 +21,7 @@ CLAUDE.md
 RELEASE.md
 doc/
 .claude/
+.mimocode/
 .dev-logs/
 .npm-cache/
 .sisyphus/
