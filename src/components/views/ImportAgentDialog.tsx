@@ -35,8 +35,8 @@ export function ImportAgentDialog({
   }
 
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(47, 48, 44, 0.28)", padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ maxHeight: "88vh", width: "100%", maxWidth: 560, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(80,60,30,0.14), 0 2px 8px rgba(80,60,30,0.06)" }}>
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0, 0, 0, 0.28)", padding: 20 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ maxHeight: "88vh", width: "100%", maxWidth: 560, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.06)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, borderBottom: "1px solid var(--border)", padding: "20px 24px" }}>
           <div style={{ width: 40, height: 40, background: "var(--accent-light)", borderRadius: "var(--radius-sm)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)", flexShrink: 0 }}>
             <svg className="icon" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
@@ -59,7 +59,11 @@ export function ImportAgentDialog({
               </button>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {agents.map((agent) => {
+              {agents.length === 0 ? (
+                <p style={{ fontSize: 13, color: "var(--text-tertiary)", padding: "12px 0", textAlign: "center" }}>
+                  暂无可用 Agent，请先在「Agent 管理」中添加至少一个 Agent。
+                </p>
+              ) : agents.map((agent) => {
                 const checked = selectedAgents.includes(agent.id);
                 return (
                   <button
@@ -110,7 +114,7 @@ export function ImportAgentDialog({
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, borderTop: "1px solid var(--border)", background: "var(--surface-raised)", padding: "16px 24px" }}>
           <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>已选择 {selectedAgents.length} 个 Agent</p>
           <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn btn-primary" onClick={() => onImport(selectedAgents, conflictPolicy)} disabled={busy || selectedAgents.length === 0} type="button">
+            <button className="btn btn-primary" onClick={() => onImport(selectedAgents, conflictPolicy)} disabled={busy || selectedAgents.length === 0} type="button" title={selectedAgents.length === 0 ? "请先选择至少一个 Agent" : undefined}>
               <svg className="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
               导入
             </button>

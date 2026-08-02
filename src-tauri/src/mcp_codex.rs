@@ -219,19 +219,20 @@ impl McpAdapter for CodexMcpAdapter {
 
         // 确保 mcp_servers 表存在
         if root.get("mcp_servers").is_none() {
-            root.as_table_mut().unwrap().insert(
-                "mcp_servers".to_string(),
-                toml::Value::Table(toml::map::Map::new()),
-            );
+            root.as_table_mut()
+                .ok_or_else(|| AppError::Message("配置格式错误".to_string()))?
+                .insert(
+                    "mcp_servers".to_string(),
+                    toml::Value::Table(toml::map::Map::new()),
+                );
         }
 
         let mcp_servers = root
             .as_table_mut()
-            .unwrap()
+            .ok_or_else(|| AppError::Message("配置格式错误".to_string()))?
             .get_mut("mcp_servers")
-            .unwrap()
-            .as_table_mut()
-            .unwrap();
+            .and_then(|v| v.as_table_mut())
+            .ok_or_else(|| AppError::Message("未找到 mcp_servers 配置".to_string()))?;
 
         if mcp_servers.contains_key(&config.name) {
             return Err(AppError::Message(format!(

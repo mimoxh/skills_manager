@@ -1,6 +1,6 @@
 [package]
 name = "skill-sync-manager"
-version = "0.2.4"
+version = "0.3.1"
 description = "A multi-agent skills manager"
 authors = ["Skill Sync Manager"]
 edition = "2021"
@@ -26,6 +26,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 thiserror = "1"
 ureq = { version = "2", features = ["tls"] }
+uuid = { version = "1", features = ["v4"] }
 walkdir = "2"
 toml = "0.8"
 zip = { version = "2", default-features = false, features = ["deflate"] }

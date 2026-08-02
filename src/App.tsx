@@ -1,10 +1,12 @@
 import { ChangeEvent, Suspense, lazy, useEffect, useRef, useState } from "react";
 import { TooltipProvider } from "./components/ui/tooltip";
+import { Toast } from "./components/ui/Toast";
 import { Titlebar } from "./components/layout/Titlebar";
 import { Sidebar } from "./components/layout/Sidebar";
 import { ImportAgentDialog } from "./components/views/ImportAgentDialog";
 import { CatalogView } from "./components/views/CatalogView";
 import { McpView } from "./components/views/McpView";
+import { SettingsView } from "./components/views/SettingsView";
 import { useAppState } from "./hooks/useAppState";
 import { useTheme } from "./hooks/useTheme";
 import type { ImportSkillFile } from "./types";
@@ -13,7 +15,7 @@ const SkillsView = lazy(() => import("./components/views/SkillsView").then((m) =
 const OverviewView = lazy(() => import("./components/views/OverviewView").then((m) => ({ default: m.OverviewView })));
 const AgentsView = lazy(() => import("./components/views/AgentsView").then((m) => ({ default: m.AgentsView })));
 
-export type View = "overview" | "skills" | "catalog" | "agents" | "mcp";
+export type View = "overview" | "skills" | "catalog" | "agents" | "mcp" | "settings";
 export type SkillsFilter = "all" | "covered" | "partial" | "needed";
 
 function ViewLoading() {
@@ -53,7 +55,7 @@ export default function App() {
     try {
       await state.importFiles(files[0]?.name ?? "upload", await Promise.all(files.map((f) => fileToUpload(f))));
     } catch (error) {
-      state.setMessage(String(error));
+      state.showToast(String(error), "error");
     } finally {
       if (folderInputRef.current) folderInputRef.current.value = "";
       if (archiveInputRef.current) archiveInputRef.current.value = "";
@@ -158,6 +160,16 @@ export default function App() {
             onToggleNoFullCoverage={state.toggleMcpNoFullCoverage}
           />
         );
+      case "settings":
+        return (
+          <SettingsView
+            palette={theme.palette}
+            themeMode={theme.themeMode}
+            resolvedTheme={theme.resolvedTheme}
+            onPaletteChange={theme.setPalette}
+            onThemeChange={theme.setThemeMode}
+          />
+        );
       default:
         return (
           <Suspense fallback={<ViewLoading />}>
@@ -182,9 +194,6 @@ export default function App() {
           onNavigate={setView}
           skillCount={state.skills.length}
           agentCount={state.agents.length}
-          themeMode={theme.themeMode}
-          resolvedTheme={theme.resolvedTheme}
-          onThemeChange={theme.setThemeMode}
         />
         <div className="main">
           <Titlebar />
@@ -226,6 +235,11 @@ export default function App() {
           onImport={state.executeImport}
         />
       )}
+
+      <Toast
+        message={state.toastText ? { text: state.toastText, type: state.toastType } : null}
+        onDismiss={state.dismissToast}
+      />
     </TooltipProvider>
   );
 }

@@ -193,19 +193,20 @@ impl McpAdapter for TraeMcpAdapter {
         let mut root = Self::read_json(&path)?;
 
         if root.get("mcpServers").is_none() {
-            root.as_object_mut().unwrap().insert(
-                "mcpServers".to_string(),
-                JsonValue::Object(serde_json::Map::new()),
-            );
+            root.as_object_mut()
+                .ok_or_else(|| AppError::Message("配置格式错误".to_string()))?
+                .insert(
+                    "mcpServers".to_string(),
+                    JsonValue::Object(serde_json::Map::new()),
+                );
         }
 
         let mcp_servers = root
             .as_object_mut()
-            .unwrap()
+            .ok_or_else(|| AppError::Message("配置格式错误".to_string()))?
             .get_mut("mcpServers")
-            .unwrap()
-            .as_object_mut()
-            .unwrap();
+            .and_then(|v| v.as_object_mut())
+            .ok_or_else(|| AppError::Message("未找到 mcpServers 配置".to_string()))?;
 
         if mcp_servers.contains_key(&config.name) {
             return Err(AppError::Message(format!(

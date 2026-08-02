@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import type { ToastType } from "../components/ui/Toast";
 import type {
   AgentProfile,
   CatalogFilters,
@@ -41,6 +42,8 @@ export function useAppState() {
   const [agents, setAgents] = useState<AgentProfile[]>([]);
   const [customAgent, setCustomAgent] = useState<AgentProfile>(emptyCustom);
   const [message, setMessage] = useState("正在加载...");
+  const [toastText, setToastText] = useState<string | null>(null);
+  const [toastType, setToastType] = useState<ToastType>("info");
   const [busy, setBusy] = useState(false);
   const [catalogBusy, setCatalogBusy] = useState(false);
   const [catalogStartupRefreshing, setCatalogStartupRefreshing] = useState(false);
@@ -534,9 +537,18 @@ export function useAppState() {
     return nested.flat();
   }
 
+  function showToast(text: string, type: ToastType = "info") {
+    setToastText(text);
+    setToastType(type);
+  }
+
+  function dismissToast() {
+    setToastText(null);
+  }
+
   async function importFiles(fileName: string, files: ImportSkillFile[]) {
     if (!files.length) {
-      setMessage("没有可导入的文件。");
+      showToast("没有可导入的文件。", "error");
       return;
     }
     setPendingImport({ fileName, files });
@@ -548,9 +560,10 @@ export function useAppState() {
     try {
       const result = await api.importSkillUpload(pendingImport.fileName, pendingImport.files, targetAgentIds, conflictPolicy);
       await refreshAll();
-      setMessage(result.message);
+      showToast(result.message, "success");
     } catch (error) {
-      setMessage(String(error));
+      const msg = String(error).replace(/^Error invoking plugin /, "");
+      showToast(msg, "error");
     } finally {
       setBusy(false);
       setPendingImport(null);
@@ -635,7 +648,7 @@ export function useAppState() {
     catalogRefreshStatuses, refreshCatalogStatus, startCatalogRefresh, cancelCatalogRefresh,
     agents, filteredAgents,
     customAgent, setCustomAgent, saveCustomAgent, saveAgent: saveCustomAgent,
-    message, setMessage,
+    message, setMessage, showToast, dismissToast, toastText, toastType,
     busy, catalogBusy, catalogStartupRefreshing, query, setQuery, setCatalogQuery, setCatalogSort, setCatalogFilters,
     isInitialLoading,
     pendingImport, executeImport, cancelImport,
