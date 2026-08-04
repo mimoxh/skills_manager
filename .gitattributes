@@ -1,0 +1,3 @@
+# 统一文本文件行尾为 LF（git 规范存储）；Windows 检出时由 core.autocrlf=true 转回 CRLF。
+# 二进制文件由 text=auto 自动识别，不参与归一化。
+* text=auto
