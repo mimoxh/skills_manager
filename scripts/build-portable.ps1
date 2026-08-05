@@ -1,9 +1,12 @@
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $PSScriptRoot
-$ReleaseDir = Join-Path $Root "dist-native\Skills Manager"
 $ExeSource = Join-Path $Root "src-tauri\target\release\skill-sync-manager.exe"
-$ExeTarget = Join-Path $ReleaseDir "Skills Manager.exe"
+$ReleaseRoot = Join-Path $Root "release"
+$PackageDir = Join-Path $ReleaseRoot "Skills Manager"
+$Version = (Get-Content (Join-Path $Root "package.json") -Raw | ConvertFrom-Json).version
+$ZipPath = Join-Path $ReleaseRoot "SkillsManager-v${Version}-windows-portable.zip"
+$RootExe = Join-Path $Root "SkillsManager.exe"
 
 Push-Location $Root
 try {
@@ -15,14 +18,20 @@ try {
   Pop-Location
 }
 
-New-Item -ItemType Directory -Force -Path $ReleaseDir | Out-Null
-try {
-  Copy-Item -LiteralPath $ExeSource -Destination $ExeTarget -Force
-} catch {
-  $FallbackExe = Join-Path $ReleaseDir "Skills Manager.updated.exe"
-  Copy-Item -LiteralPath $ExeSource -Destination $FallbackExe -Force
-  Write-Warning "Skills Manager.exe is currently running, so the updated executable was written to Skills Manager.updated.exe."
+# Copy the exe; if the target is locked (app running), write a .updated.exe sibling and warn.
+function Copy-ExeWithFallback([string]$Source, [string]$Target) {
+  try {
+    Copy-Item -LiteralPath $Source -Destination $Target -Force
+  } catch {
+    $fallback = [System.IO.Path]::ChangeExtension($Target, ".updated.exe")
+    Copy-Item -LiteralPath $Source -Destination $fallback -Force
+    Write-Warning "$Target is currently running, so the updated executable was written to $fallback."
+  }
 }
+
+# Stage the portable package under release\Skills Manager
+New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
+Copy-ExeWithFallback $ExeSource (Join-Path $PackageDir "Skills Manager.exe")
 
 $Readme = @(
   "Skills Manager",
@@ -39,6 +48,14 @@ $Readme = @(
   "- This portable package does not require a browser or localhost preview service.",
   "- Source development uses React, TypeScript, Vite, and Rust."
 )
-$Readme | Set-Content -LiteralPath (Join-Path $ReleaseDir "README.txt") -Encoding UTF8
+$Readme | Set-Content -LiteralPath (Join-Path $PackageDir "README.txt") -Encoding UTF8
 
-Write-Output "Portable build created at: $ReleaseDir"
+# Create the versioned zip under release/ and clean up the staging dir.
+# Also refresh the root-level SkillsManager.exe for quick local verification.
+if (Test-Path $ZipPath) { Remove-Item -LiteralPath $ZipPath -Force }
+Compress-Archive -Path $PackageDir -DestinationPath $ZipPath -Force
+Remove-Item -LiteralPath $PackageDir -Recurse -Force
+Copy-ExeWithFallback $ExeSource $RootExe
+
+Write-Output "Portable zip created at: $ZipPath"
+Write-Output "Local exe updated at: $RootExe"
