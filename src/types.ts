@@ -1,5 +1,6 @@
 export type AgentType = "codex" | "claude" | "claudeCode" | "claudeCowork" | "cursor" | "trae" | "custom" | "cherryStudio" | "opencode";
 export type ConflictPolicy = "prompt" | "backupOverwrite" | "skip" | "rename";
+export type SkillsFilter = "all" | "covered" | "partial" | "needed";
 
 export interface SkillManifest {
   id: string;
@@ -25,7 +26,6 @@ export interface AgentSkillCopy {
   skillPath: string;
   title: string;
   version?: string | null;
-  fingerprint: string;
   updatedAt?: string | null;
   description?: string;
   readme?: string;
@@ -77,6 +77,8 @@ export interface InitialData {
   agents: AgentProfile[];
   noFullCoverageTitles: string[];
   noFullCoverageMcpTitles: string[];
+  /** 后端下发的内置默认 catalog 源 id（避免前端硬编码 "clawhub"） */
+  defaultCatalogSourceId: string;
 }
 
 export type CatalogSourceKind = "builtIn" | "custom";

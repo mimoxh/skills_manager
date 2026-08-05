@@ -1,13 +1,15 @@
 import { useMemo, useState } from "react";
-import type { AgentProfile, AgentSkillCopy, ConflictPolicy, GroupedSkill, InstallResult } from "../../types";
+import { handleCardActivation, matchesTags } from "../../lib/utils";
+import type { AgentProfile, AgentSkillCopy, ConflictPolicy, GroupedSkill, InstallResult, SkillsFilter } from "../../types";
 import { SkillInstallDialog } from "./SkillInstallDialog";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 
 interface SkillsViewProps {
   skills: GroupedSkill[];
   agents: AgentProfile[];
   busy: boolean;
   noFullCoverageTitles: Set<string>;
-  initialFilter?: "all" | "covered" | "partial" | "needed";
+  initialFilter?: SkillsFilter;
   onDrop: (event: React.DragEvent<HTMLElement>) => void;
   onFolder: () => void;
   onArchive: () => void;
@@ -26,7 +28,7 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
   const [conflictPolicy, setConflictPolicy] = useState<ConflictPolicy>("backupOverwrite");
   const [lastResults, setLastResults] = useState<InstallResult[]>([]);
   const [dragging, setDragging] = useState(false);
-  const [filter, setFilter] = useState<"all" | "covered" | "partial" | "needed">(initialFilter);
+  const [filter, setFilter] = useState<SkillsFilter>(initialFilter);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTagFilters, setSelectedTagFilters] = useState<string[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<GroupedSkill | null>(null);
@@ -185,7 +187,7 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
           style={{ cursor: filter !== "all" ? "pointer" : "default" }}
         >
           <div className="metric-value">{skills.length}</div>
-          <div className="metric-label">Skills</div>
+          <div className="metric-label">技能</div>
         </div>
         <div
           className="metric-card"
@@ -218,7 +220,7 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
         className="import-zone"
         onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
-        onDrop={onDrop}
+        onDrop={(e) => { setDragging(false); onDrop(e); }}
         style={{ flexShrink: 0, ...(dragging ? { borderColor: "var(--accent)", background: "var(--accent-soft)" } : {}) }}
       >
         <div className="import-zone-icon">
@@ -308,6 +310,7 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
               key={skill.title}
               className="skill-item"
               onClick={() => openSync(skill)}
+              onKeyDown={(e) => handleCardActivation(e, () => openSync(skill))}
               role="button"
               tabIndex={0}
             >
@@ -446,12 +449,7 @@ function selectedSourceCopy(skill: GroupedSkill, agentId: string | null): AgentS
 }
 
 function matchesTagFilters(skill: GroupedSkill, selectedTags: string[]): boolean {
-  if (!selectedTags.length) return true;
-  if (selectedTags.includes("__untagged__")) {
-    return !(skill.userTags ?? []).length;
-  }
-  const tags = new Set((skill.userTags ?? []).map((tag) => tag.toLowerCase()));
-  return selectedTags.every((tag) => tags.has(tag.toLowerCase()));
+  return matchesTags(skill.userTags, selectedTags);
 }
 
 function matchesSkillSearch(skill: GroupedSkill, query: string): boolean {
@@ -474,31 +472,4 @@ function matchesSkillSearch(skill: GroupedSkill, query: string): boolean {
   ].join(" ").toLowerCase();
 
   return terms.every((term) => searchableText.includes(term));
-}
-
-function ConfirmDialog({
-  title, message, confirmLabel, busy,
-  onClose, onConfirm,
-}: {
-  title: string;
-  message: string;
-  confirmLabel: string;
-  busy: boolean;
-  onClose: () => void;
-  onConfirm: () => void;
-}) {
-  return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0, 0, 0, 0.36)", padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 420, borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(0,0,0,0.14)" }}>
-        <div style={{ padding: "20px 24px" }}>
-          <h3 style={{ fontSize: 15, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>{title}</h3>
-          <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6 }}>{message}</p>
-        </div>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "14px 24px", borderTop: "1px solid var(--border)" }}>
-          <button className="btn btn-secondary" onClick={onClose} disabled={busy} type="button">取消</button>
-          <button className="btn btn-danger" onClick={onConfirm} disabled={busy} type="button">{confirmLabel}</button>
-        </div>
-      </div>
-    </div>
-  );
 }

@@ -1,9 +1,6 @@
 import { MouseEvent, useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-
-function hasTauriRuntime() {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
+import { hasTauriRuntime } from "../../lib/env";
 
 function appWindow() {
   return hasTauriRuntime() ? getCurrentWindow() : null;
@@ -14,7 +11,7 @@ export function Titlebar() {
 
   useEffect(() => {
     const win = appWindow();
-    if (win) win.isMaximized().then(setMaximized);
+    if (win) win.isMaximized().then(setMaximized).catch(() => {});
   }, []);
 
   async function startDrag(event: MouseEvent<HTMLElement>) {

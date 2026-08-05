@@ -69,7 +69,7 @@ export function Sidebar({
       <div className="sidebar-footer">
         <div className="sidebar-footer-stat">
           <span className="sidebar-stat-dot" />
-          <span className="sidebar-footer-text">已识别 {skillCount} 个 skills，{agentCount} 个 agents</span>
+          <span className="sidebar-footer-text">已识别 {skillCount} 个技能，{agentCount} 个 Agent</span>
         </div>
       </div>
     </aside>

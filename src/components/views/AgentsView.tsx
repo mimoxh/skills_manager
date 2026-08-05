@@ -1,5 +1,8 @@
 import { useMemo, useState } from "react";
+import { handleCardActivation, matchesTags } from "../../lib/utils";
 import type { AgentProfile, AgentType, ConflictPolicy, GroupedSkill, InstallResult } from "../../types";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
+import { Dialog } from "../ui/Dialog";
 import { UserTagEditor } from "./UserTagEditor";
 
 const agentTypeOptions: Array<{ value: AgentType; label: string }> = [
@@ -152,7 +155,7 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
       <div className="card flex-col" style={{ minHeight: 0 }}>
         <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div>
-            <div className="card-title">Agents</div>
+            <div className="card-title">Agent</div>
             <div className="card-desc">{displayedAgents.length} / {agents.length} 个本地 Agent 配置</div>
           </div>
           <button className="btn btn-secondary btn-sm" onClick={onRefresh} disabled={busy} type="button" title="刷新">
@@ -195,7 +198,7 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
               const installedCount = skills.filter((s) => s.installedAgentIds.includes(agent.id)).length;
               const missingCount = skills.filter((s) => s.missingAgentIds.includes(agent.id)).length;
               return (
-                <div key={agent.id} className="agent-item" onClick={() => handleAgentClick(agent.id)} role="button" tabIndex={0}>
+                <div key={agent.id} className="agent-item" onClick={() => handleAgentClick(agent.id)} onKeyDown={(e) => handleCardActivation(e, () => handleAgentClick(agent.id))} role="button" tabIndex={0}>
                   <div className="agent-icon">
                     <svg className="icon" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
                   </div>
@@ -267,35 +270,25 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
 
       {/* Delete Confirm */}
       {deleteAgent && (
-        <div onClick={() => setDeleteAgent(null)} style={{ position: "fixed", inset: 0, zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0, 0, 0, 0.36)", padding: 20 }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 420, borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(0,0,0,0.14)" }}>
-            <div style={{ padding: "20px 24px" }}>
-              <h3 style={{ fontSize: 15, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>确认删除</h3>
-              <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6 }}>是否确定删除「{deleteAgent.name}」？此操作不可撤销。</p>
-            </div>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "14px 24px", borderTop: "1px solid var(--border)" }}>
-              <button className="btn btn-secondary" onClick={() => setDeleteAgent(null)} disabled={busy} type="button">取消</button>
-              <button className="btn btn-danger" onClick={() => { onDelete(deleteAgent.id); setDeleteAgent(null); }} disabled={busy} type="button">确认删除</button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          title="确认删除"
+          message={`是否确定删除「${deleteAgent.name}」？此操作不可撤销。`}
+          confirmLabel="确认删除"
+          busy={busy}
+          onClose={() => setDeleteAgent(null)}
+          onConfirm={() => { onDelete(deleteAgent.id); setDeleteAgent(null); }}
+        />
       )}
 
       {previewAgent && deleteSkillsConfirm && (
-        <div onClick={() => setDeleteSkillsConfirm(false)} style={{ position: "fixed", inset: 0, zIndex: 70, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0, 0, 0, 0.36)", padding: 20 }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 460, borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(0,0,0,0.14)" }}>
-            <div style={{ padding: "20px 24px" }}>
-              <h3 style={{ fontSize: 15, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>删除已安装 Skills</h3>
-              <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6 }}>
-                确定要从「{previewAgent.name}」删除已选的 {selectedInstalled.length} 个 Skills 吗？其他 Agent 中的同名 Skill 不会被删除。
-              </p>
-            </div>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "14px 24px", borderTop: "1px solid var(--border)" }}>
-              <button className="btn btn-secondary" onClick={() => setDeleteSkillsConfirm(false)} disabled={busy} type="button">取消</button>
-              <button className="btn btn-danger" onClick={handleDeleteInstalled} disabled={busy || selectedInstalled.length === 0} type="button">确认删除</button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          title="删除已安装 Skills"
+          message={`确定要从「${previewAgent.name}」删除已选的 ${selectedInstalled.length} 个 Skills 吗？其他 Agent 中的同名 Skill 不会被删除。`}
+          confirmLabel="确认删除"
+          busy={busy}
+          onClose={() => setDeleteSkillsConfirm(false)}
+          onConfirm={handleDeleteInstalled}
+        />
       )}
     </div>
   );
@@ -322,8 +315,7 @@ function AgentPreviewDialog({ agent, installedSkills, missingSkills, selectedMis
   });
 
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0, 0, 0, 0.28)", padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ height: "88vh", maxHeight: "88vh", width: "100%", maxWidth: 980, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.06)" }}>
+    <Dialog maxWidth={980} large fillHeight onClose={onClose}>
         {/* Header */}
         <div style={{ display: "flex", alignItems: "flex-start", gap: 12, borderBottom: "1px solid var(--border)", padding: "20px 24px" }}>
           <div style={{ width: 40, height: 40, background: "var(--accent-light)", borderRadius: "var(--radius-sm)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)", flexShrink: 0 }}>
@@ -468,8 +460,7 @@ function AgentPreviewDialog({ agent, installedSkills, missingSkills, selectedMis
             </button>
           </div>
         </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }
 
@@ -495,6 +486,7 @@ function AgentSkillCard({ agentId, skill, kind, selected = false, onToggle }: {
       onClick={onToggle}
       role={onToggle ? "button" : undefined}
       tabIndex={onToggle ? 0 : undefined}
+      onKeyDown={onToggle ? (event) => handleCardActivation(event, onToggle) : undefined}
       title={description}
     >
       <div className="agent-skill-card-main">
@@ -525,12 +517,7 @@ function skillDescription(skill: GroupedSkill, agentId: string): string {
 }
 
 function matchesAgentTagFilters(agent: AgentProfile, selectedTags: string[]): boolean {
-  if (!selectedTags.length) return true;
-  if (selectedTags.includes("__untagged__")) {
-    return !(agent.userTags ?? []).length;
-  }
-  const tags = new Set((agent.userTags ?? []).map((tag) => tag.toLowerCase()));
-  return selectedTags.every((tag) => tags.has(tag.toLowerCase()));
+  return matchesTags(agent.userTags, selectedTags);
 }
 
 // ── 编辑弹窗 ──────────────────────────────────────────────────────
@@ -547,8 +534,7 @@ function AgentEditDialog({ agent, availableUserTags, busy, onChange, onClose, on
   const showMcpFormat = agent.type === "custom";
 
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0, 0, 0, 0.28)", padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ maxHeight: "88vh", width: "100%", maxWidth: 540, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.06)" }}>
+    <Dialog maxWidth={540} large onClose={onClose}>
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", gap: 12, borderBottom: "1px solid var(--border)", padding: "20px 24px" }}>
           <div style={{ width: 40, height: 40, background: "var(--accent-light)", borderRadius: "var(--radius-sm)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)", flexShrink: 0 }}>
@@ -623,8 +609,7 @@ function AgentEditDialog({ agent, availableUserTags, busy, onChange, onClose, on
           <button className="btn btn-secondary" onClick={onClose} disabled={busy} type="button">取消</button>
           <button className="btn btn-primary" onClick={onSave} disabled={busy || !agent.name.trim() || !agent.skillsPath.trim()} type="button">保存</button>
         </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }
 

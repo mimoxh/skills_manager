@@ -917,7 +917,6 @@ input { cursor: text; outline: none; }
   color: var(--text-tertiary);
   font-size: 12.5px;
 }
-.catalog-dialog { max-width: 620px; }
 
 @media (max-width: 900px) {
   .catalog-layout { grid-template-columns: 1fr; }
@@ -1452,70 +1451,6 @@ select.input:focus {
 .text-secondary {
   color: var(--text-tertiary);
   font-size: 13px;
-}
-
-/* ===== Dialog ===== */
-.dialog-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-}
-.dialog {
-  background: var(--surface);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
-  width: 520px;
-  max-height: 80vh;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-.dialog-header {
-  padding: 20px 24px;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.dialog-header h3 {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text);
-}
-.btn-close {
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-size: 18px;
-  cursor: pointer;
-  background: none;
-  border: none;
-}
-.btn-close:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-.dialog-body {
-  padding: 24px;
-  overflow-y: auto;
-}
-.dialog-footer {
-  padding: 16px 24px;
-  border-top: 1px solid var(--border);
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
 }
 
 /* ===== Responsive ===== */
