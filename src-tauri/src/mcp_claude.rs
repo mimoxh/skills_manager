@@ -1,15 +1,17 @@
 use crate::{
     error::{AppError, AppResult},
-    mcp_adapter::McpAdapter,
+    mcp_adapter::{self, McpAdapter},
     models::{AgentMcpServer, AgentProfile, McpServerConfig, McpTransport},
 };
 use serde_json::Value as JsonValue;
 use std::{
-    fs,
     path::{Path, PathBuf},
 };
 
 /// Claude Code MCP 适配器，读写 `~/.claude.json`
+const AGENT_LABEL: &str = "Claude";
+const SECTION_KEY: &str = "mcpServers";
+
 pub struct ClaudeMcpAdapter;
 
 impl ClaudeMcpAdapter {
@@ -17,26 +19,9 @@ impl ClaudeMcpAdapter {
         Self
     }
 
-    fn claude_json_path() -> Option<PathBuf> {
+    /// 获取默认配置文件路径
+    fn default_config_path() -> Option<PathBuf> {
         dirs::home_dir().map(|home| home.join(".claude.json"))
-    }
-
-    fn read_json(path: &Path) -> AppResult<JsonValue> {
-        if !path.exists() {
-            return Ok(JsonValue::Object(Default::default()));
-        }
-        let text = fs::read_to_string(path)?;
-        let value: JsonValue = serde_json::from_str(&text)?;
-        Ok(value)
-    }
-
-    fn write_json(path: &Path, value: &JsonValue) -> AppResult<()> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let text = serde_json::to_string_pretty(value)?;
-        fs::write(path, text)?;
-        Ok(())
     }
 
     fn parse_mcp_server(name: &str, obj: &serde_json::Map<String, JsonValue>) -> McpServerConfig {
@@ -186,7 +171,7 @@ impl ClaudeMcpAdapter {
 impl McpAdapter for ClaudeMcpAdapter {
     fn scan(&self, profile: &AgentProfile) -> AppResult<Vec<AgentMcpServer>> {
         let path = self.config_path(profile)?;
-        let root = Self::read_json(&path)?;
+        let root = mcp_adapter::read_json_file(&path)?;
         let mut servers = Vec::new();
 
         if let Some(mcp_obj) = root.get("mcpServers").and_then(|v| v.as_object()) {
@@ -196,12 +181,12 @@ impl McpAdapter for ClaudeMcpAdapter {
                     // 包装为 { "server_name": { ... } } 完整结构
                     let mut wrapper = serde_json::Map::new();
                     wrapper.insert(name.clone(), value.clone());
-                    let raw = serde_json::to_string_pretty(&wrapper).ok();
+                    let raw = Some(serde_json::to_string_pretty(&wrapper)?);
                     servers.push(AgentMcpServer {
                         agent_id: profile.id.clone(),
                         agent_name: profile.name.clone(),
                         config_path: path.to_string_lossy().to_string(),
-                        fingerprint: format!("{:x}", md5_hash(&format!("{:?}", server_config))),
+                        fingerprint: crate::hash::stable_fingerprint(&server_config)?,
                         config: server_config,
                         raw_config: raw,
                     });
@@ -214,24 +199,10 @@ impl McpAdapter for ClaudeMcpAdapter {
 
     fn add(&self, profile: &AgentProfile, config: &McpServerConfig) -> AppResult<()> {
         let path = self.config_path(profile)?;
-        let mut root = Self::read_json(&path)?;
+        let mut root = mcp_adapter::read_json_file(&path)?;
 
-        // 确保 mcpServers 对象存在
-        if root.get("mcpServers").is_none() {
-            root.as_object_mut()
-                .ok_or_else(|| AppError::Message("配置格式错误".to_string()))?
-                .insert(
-                    "mcpServers".to_string(),
-                    JsonValue::Object(serde_json::Map::new()),
-                );
-        }
-
-        let mcp_servers = root
-            .as_object_mut()
-            .ok_or_else(|| AppError::Message("配置格式错误".to_string()))?
-            .get_mut("mcpServers")
-            .and_then(|v| v.as_object_mut())
-            .ok_or_else(|| AppError::Message("未找到 mcpServers 配置".to_string()))?;
+        mcp_adapter::ensure_json_mcp_section(&mut root, SECTION_KEY)?;
+        let mcp_servers = mcp_adapter::json_mcp_section_mut(&mut root, SECTION_KEY, AGENT_LABEL)?;
 
         if mcp_servers.contains_key(&config.name) {
             return Err(AppError::Message(format!(
@@ -242,7 +213,7 @@ impl McpAdapter for ClaudeMcpAdapter {
 
         mcp_servers.insert(config.name.clone(), Self::config_to_json_object(config));
 
-        Self::write_json(&path, &root)
+        mcp_adapter::write_json_file(&path, &root)
     }
 
     fn update(
@@ -252,14 +223,9 @@ impl McpAdapter for ClaudeMcpAdapter {
         config: &McpServerConfig,
     ) -> AppResult<()> {
         let path = self.config_path(profile)?;
-        let mut root = Self::read_json(&path)?;
+        let mut root = mcp_adapter::read_json_file(&path)?;
 
-        let mcp_servers = root
-            .as_object_mut()
-            .ok_or_else(|| AppError::Message("配置格式错误".to_string()))?
-            .get_mut("mcpServers")
-            .and_then(|v| v.as_object_mut())
-            .ok_or_else(|| AppError::Message("未找到 mcpServers 配置".to_string()))?;
+        let mcp_servers = mcp_adapter::json_mcp_section_mut(&mut root, SECTION_KEY, AGENT_LABEL)?;
 
         if !mcp_servers.contains_key(original_name) {
             return Err(AppError::Message(format!(
@@ -275,19 +241,14 @@ impl McpAdapter for ClaudeMcpAdapter {
 
         mcp_servers.insert(config.name.clone(), Self::config_to_json_object(config));
 
-        Self::write_json(&path, &root)
+        mcp_adapter::write_json_file(&path, &root)
     }
 
     fn remove(&self, profile: &AgentProfile, name: &str) -> AppResult<()> {
         let path = self.config_path(profile)?;
-        let mut root = Self::read_json(&path)?;
+        let mut root = mcp_adapter::read_json_file(&path)?;
 
-        let mcp_servers = root
-            .as_object_mut()
-            .ok_or_else(|| AppError::Message("配置格式错误".to_string()))?
-            .get_mut("mcpServers")
-            .and_then(|v| v.as_object_mut())
-            .ok_or_else(|| AppError::Message("未找到 mcpServers 配置".to_string()))?;
+        let mcp_servers = mcp_adapter::json_mcp_section_mut(&mut root, SECTION_KEY, AGENT_LABEL)?;
 
         if mcp_servers.remove(name).is_none() {
             return Err(AppError::Message(format!(
@@ -296,19 +257,14 @@ impl McpAdapter for ClaudeMcpAdapter {
             )));
         }
 
-        Self::write_json(&path, &root)
+        mcp_adapter::write_json_file(&path, &root)
     }
 
     fn toggle(&self, profile: &AgentProfile, name: &str, disabled: bool) -> AppResult<()> {
         let path = self.config_path(profile)?;
-        let mut root = Self::read_json(&path)?;
+        let mut root = mcp_adapter::read_json_file(&path)?;
 
-        let mcp_servers = root
-            .as_object_mut()
-            .ok_or_else(|| AppError::Message("配置格式错误".to_string()))?
-            .get_mut("mcpServers")
-            .and_then(|v| v.as_object_mut())
-            .ok_or_else(|| AppError::Message("未找到 mcpServers 配置".to_string()))?;
+        let mcp_servers = mcp_adapter::json_mcp_section_mut(&mut root, SECTION_KEY, AGENT_LABEL)?;
 
         let server_obj = mcp_servers
             .get_mut(name)
@@ -321,52 +277,22 @@ impl McpAdapter for ClaudeMcpAdapter {
             server_obj.remove("disabled");
         }
 
-        Self::write_json(&path, &root)
+        mcp_adapter::write_json_file(&path, &root)
     }
 
-    fn backup(&self, profile: &AgentProfile) -> AppResult<PathBuf> {
+    fn backup(&self, profile: &AgentProfile, backup_root: &Path) -> AppResult<PathBuf> {
         let path = self.config_path(profile)?;
-        if !path.exists() {
-            return Err(AppError::Message("Claude 配置文件不存在".to_string()));
-        }
-        let backup_name = format!(
-            "claude-config-{}.json",
-            chrono::Utc::now().format("%Y%m%d%H%M%S")
-        );
-        let backup_path = Path::new(&profile.skills_path)
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join("backups")
-            .join(backup_name);
-        if let Some(parent) = backup_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::copy(&path, &backup_path)?;
-        Ok(backup_path)
+        mcp_adapter::backup_config_file(&path, backup_root, "claude-config", "json", AGENT_LABEL)
     }
 
     fn config_path(&self, profile: &AgentProfile) -> AppResult<PathBuf> {
-        // 优先使用 adapter_config 中的自定义路径
-        if let Some(config) = &profile.adapter_config {
-            if let Some(path) = config.get("mcpConfigPath").and_then(|v| v.as_str()) {
-                let trimmed = path.trim();
-                if !trimmed.is_empty() {
-                    return Ok(PathBuf::from(trimmed));
-                }
-            }
-        }
-        Self::claude_json_path()
-            .ok_or_else(|| AppError::Message("无法确定 Claude 配置路径".to_string()))
+        mcp_adapter::resolve_mcp_config_path(
+            &profile.adapter_config,
+            &["json"],
+            Self::default_config_path(),
+            AGENT_LABEL,
+        )
     }
-}
-
-/// 简单的哈希（用于 fingerprint，非密码学用途）
-fn md5_hash(input: &str) -> u128 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    input.hash(&mut hasher);
-    hasher.finish() as u128
 }
 
 #[cfg(test)]

@@ -35,7 +35,6 @@ pub struct AgentSkillCopy {
     pub skill_path: String,
     pub title: String,
     pub version: Option<String>,
-    pub fingerprint: String,
     pub updated_at: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
@@ -79,23 +78,14 @@ pub struct ImportSkillResult {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub enum AgentType {
-    #[serde(rename = "codex")]
     Codex,
-    #[serde(rename = "claude")]
     Claude,
-    #[serde(rename = "claudeCode")]
     ClaudeCode,
-    #[serde(rename = "claudeCowork")]
     ClaudeCowork,
-    #[serde(rename = "cursor")]
     Cursor,
-    #[serde(rename = "trae")]
     Trae,
-    #[serde(rename = "custom")]
     Custom,
-    #[serde(rename = "cherryStudio")]
     CherryStudio,
-    #[serde(rename = "opencode")]
     OpenCode,
 }
 
@@ -140,13 +130,9 @@ pub struct AgentProfile {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ConflictPolicy {
-    #[serde(rename = "prompt")]
     Prompt,
-    #[serde(rename = "backupOverwrite")]
     BackupOverwrite,
-    #[serde(rename = "skip")]
     Skip,
-    #[serde(rename = "rename")]
     Rename,
 }
 
@@ -170,14 +156,15 @@ pub struct InitialData {
     pub no_full_coverage_titles: Vec<String>,
     #[serde(default)]
     pub no_full_coverage_mcp_titles: Vec<String>,
+    /// 内置默认 catalog 源 id（当前为 "clawhub"），由后端下发，避免前端硬编码。
+    #[serde(default)]
+    pub default_catalog_source_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum CatalogSourceKind {
-    #[serde(rename = "builtIn")]
     BuiltIn,
-    #[serde(rename = "custom")]
     Custom,
 }
 
@@ -199,26 +186,18 @@ pub struct CatalogSource {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum CatalogSort {
-    #[serde(rename = "downloads")]
     Downloads,
-    #[serde(rename = "publishedDesc")]
     PublishedDesc,
-    #[serde(rename = "updatedDesc")]
     UpdatedDesc,
-    #[serde(rename = "source")]
     Source,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum CatalogInstallStatus {
-    #[serde(rename = "notInstalled")]
     NotInstalled,
-    #[serde(rename = "installed")]
     Installed,
-    #[serde(rename = "updateAvailable")]
     UpdateAvailable,
-    #[serde(rename = "conflict")]
     Conflict,
 }
 
@@ -257,9 +236,7 @@ pub struct CatalogSkill {
 #[serde(rename_all = "camelCase")]
 pub enum CatalogSafetyMode {
     #[default]
-    #[serde(rename = "all")]
     All,
-    #[serde(rename = "nonSuspicious")]
     NonSuspicious,
 }
 
@@ -333,11 +310,8 @@ pub struct CatalogRefreshStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum McpTransport {
-    #[serde(rename = "stdio")]
     Stdio,
-    #[serde(rename = "http")]
     Http,
-    #[serde(rename = "sse")]
     Sse,
 }
 

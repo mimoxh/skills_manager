@@ -77,8 +77,7 @@ impl CherryStudioAdapter {
 
     /// Install a skill into Cherry Studio:
     /// 1. Copy files to Data\Skills\{folder_name}\
-    /// 2. Insert into skills table
-    /// 3. Link to all Cherry Studio agents
+    /// 2. Insert/update skill + link to all agents in a single DB transaction
     pub fn install_skill(
         &self,
         source_path: &Path,
@@ -89,38 +88,19 @@ impl CherryStudioAdapter {
         copy_dir_all(source_path, &target)?;
 
         let (name, description, _version) = read_skill_md_meta(&target);
-        let content_hash = crate::hash::hash_dir(&target).unwrap_or_default();
+        let content_hash = crate::hash::hash_dir(&target)?;
 
         let db = self.open_db()?;
-        let skill_id = match db.get_skill(folder_name)? {
-            Some(existing) => {
-                // Update existing record
-                db.update_skill(
-                    folder_name,
-                    name.as_deref().unwrap_or(folder_name),
-                    description.as_deref(),
-                    &content_hash,
-                )?;
-                existing.id
-            }
-            None => {
-                db.insert_skill(
-                    name.as_deref().unwrap_or(folder_name),
-                    description.as_deref(),
-                    folder_name,
-                    &content_hash,
-                )?
-            }
-        };
-
-        // Link to all Cherry Studio agents
         let agents = db.list_agents()?;
         let agent_ids: Vec<String> = agents.iter().map(|a| a.id.clone()).collect();
-        if !agent_ids.is_empty() {
-            db.enable_skill_for_agents(&skill_id, &agent_ids)?;
-        }
-
-        Ok(skill_id)
+        // 单连接 + 单事务：插入/更新 skill 并与 agents 关联原子完成，避免半安装状态
+        db.upsert_skill_and_link_agents(
+            name.as_deref().unwrap_or(folder_name),
+            description.as_deref(),
+            folder_name,
+            &content_hash,
+            &agent_ids,
+        )
     }
 
     /// Uninstall a skill from Cherry Studio:
@@ -142,92 +122,11 @@ impl CherryStudioAdapter {
 pub fn read_skill_md_meta(skill_dir: &Path) -> (Option<String>, Option<String>, Option<String>) {
     let skill_md = skill_dir.join("SKILL.md");
     if let Ok(text) = fs::read_to_string(&skill_md) {
-        if let Some((name, version, description)) = parse_frontmatter(&text) {
-            return (name, description, version);
+        if let Some(fm) = crate::manifest::parse_skill_frontmatter(&text) {
+            return (fm.name, fm.description, fm.version);
         }
     }
     (None, None, None)
-}
-
-/// Parse YAML frontmatter from SKILL.md content.
-fn parse_frontmatter(text: &str) -> Option<(Option<String>, Option<String>, Option<String>)> {
-    let trimmed = text.trim();
-    if !trimmed.starts_with("---") {
-        return None;
-    }
-    let after_first = &trimmed[3..];
-    let end_idx = after_first.find("\n---")?;
-    let frontmatter = &after_first[..end_idx];
-
-    let mut name = None;
-    let mut version = None;
-    let mut description = None;
-    let mut collecting_block: Option<String> = None;
-    let mut block_lines: Vec<String> = Vec::new();
-
-    for line in frontmatter.lines() {
-        let trimmed_line = line.trim();
-
-        // Handle YAML block scalars
-        if let Some(ref key) = collecting_block {
-            if line.starts_with(' ') || line.starts_with('\t') {
-                block_lines.push(trimmed_line.to_string());
-                continue;
-            } else {
-                let block_value = block_lines.join("\n");
-                if !block_value.is_empty() {
-                    match key.as_str() {
-                        "name" | "title" => name = Some(block_value),
-                        "version" => version = Some(block_value),
-                        "description" => description = Some(block_value),
-                        _ => {}
-                    }
-                }
-                collecting_block = None;
-                block_lines.clear();
-            }
-        }
-
-        let Some((key, value)) = trimmed_line.split_once(':') else {
-            continue;
-        };
-        let key = key.trim();
-        let value = value.trim();
-
-        // Detect block scalar indicators
-        if matches!(value, "|" | ">" | "|-" | ">-" | "|+" | ">+") {
-            collecting_block = Some(key.to_string());
-            block_lines.clear();
-            continue;
-        }
-
-        let value = value.trim_matches('"').trim_matches('\'');
-        if value.is_empty() {
-            continue;
-        }
-
-        match key {
-            "name" | "title" => name = Some(value.to_string()),
-            "version" => version = Some(value.to_string()),
-            "description" => description = Some(value.to_string()),
-            _ => {}
-        }
-    }
-
-    // Handle block scalar at end of frontmatter
-    if let Some(ref key) = collecting_block {
-        let block_value = block_lines.join("\n");
-        if !block_value.is_empty() {
-            match key.as_str() {
-                "name" | "title" => name = Some(block_value),
-                "version" => version = Some(block_value),
-                "description" => description = Some(block_value),
-                _ => {}
-            }
-        }
-    }
-
-    Some((name, version, description))
 }
 
 #[cfg(test)]
@@ -244,10 +143,10 @@ description: |
   查询 AI 资讯。
 ---
 # Body"#;
-        let (name, version, desc) = parse_frontmatter(text).unwrap();
-        assert_eq!(name.unwrap(), "aihot");
-        assert_eq!(version.unwrap(), "1.0.0");
-        assert_eq!(desc.unwrap(), "AI HOT skill.\n查询 AI 资讯。");
+        let fm = crate::manifest::parse_skill_frontmatter(text).unwrap();
+        assert_eq!(fm.name.unwrap(), "aihot");
+        assert_eq!(fm.version.unwrap(), "1.0.0");
+        assert_eq!(fm.description.unwrap(), "AI HOT skill.\n查询 AI 资讯。");
     }
 
     #[test]
@@ -258,16 +157,16 @@ version: 2.1.1
 description: 去除 AI 写作痕迹。
 ---
 # Body"#;
-        let (name, version, desc) = parse_frontmatter(text).unwrap();
-        assert_eq!(name.unwrap(), "humanizer");
-        assert_eq!(version.unwrap(), "2.1.1");
-        assert_eq!(desc.unwrap(), "去除 AI 写作痕迹。");
+        let fm = crate::manifest::parse_skill_frontmatter(text).unwrap();
+        assert_eq!(fm.name.unwrap(), "humanizer");
+        assert_eq!(fm.version.unwrap(), "2.1.1");
+        assert_eq!(fm.description.unwrap(), "去除 AI 写作痕迹。");
     }
 
     #[test]
     fn returns_none_for_no_frontmatter() {
         let text = "# Just a heading\nSome content";
-        assert!(parse_frontmatter(text).is_none());
+        assert!(crate::manifest::parse_skill_frontmatter(text).is_none());
     }
 
     #[test]

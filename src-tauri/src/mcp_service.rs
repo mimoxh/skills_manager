@@ -11,20 +11,25 @@ use crate::{
     },
     store::AppStore,
 };
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::PathBuf};
 
 pub struct McpService {
     adapters: HashMap<AgentType, Box<dyn McpAdapter + Send + Sync>>,
+    backup_root: PathBuf,
 }
 
 impl McpService {
-    pub fn new(_store: Arc<AppStore>) -> Self {
+    pub fn new(store: &AppStore) -> Self {
         let mut adapters: HashMap<AgentType, Box<dyn McpAdapter + Send + Sync>> = HashMap::new();
         adapters.insert(AgentType::Codex, Box::new(CodexMcpAdapter::new()));
         adapters.insert(AgentType::ClaudeCode, Box::new(ClaudeMcpAdapter::new()));
         adapters.insert(AgentType::OpenCode, Box::new(OpenCodeMcpAdapter::new()));
         adapters.insert(AgentType::Trae, Box::new(TraeMcpAdapter::new()));
-        Self { adapters }
+        Self {
+            adapters,
+            // MCP 配置备份与 skill 备份统一到 data_dir/backups，避免两套约定
+            backup_root: store.backup_root(),
+        }
     }
 
     fn get_adapter(&self, agent_type: &AgentType) -> Option<&(dyn McpAdapter + Send + Sync)> {
@@ -37,32 +42,28 @@ impl McpService {
             let format = agent.adapter_config.as_ref()
                 .and_then(|c| c.get("mcpFormat"))
                 .and_then(|v| v.as_str());
-            match format {
-                Some("claude") | Some("generic") => self.adapters.get(&AgentType::ClaudeCode).map(|a| a.as_ref()),
-                Some("opencode") => self.adapters.get(&AgentType::OpenCode).map(|a| a.as_ref()),
-                Some("codex") => self.adapters.get(&AgentType::Codex).map(|a| a.as_ref()),
-                Some("trae") => self.adapters.get(&AgentType::Trae).map(|a| a.as_ref()),
-                _ => None,
-            }
+            let agent_type = format.and_then(crate::mcp_adapter::mcp_format_to_agent_type);
+            agent_type.and_then(|t| self.get_adapter(&t))
         } else {
             self.get_adapter(&agent.agent_type)
         }
     }
 
-    /// 扫描所有 Agent 的 MCP server，按名称分组
+    /// 扫描所有 Agent 的 MCP server，按名称分组。
+    /// 返回 (servers, warnings)：某个 agent 配置损坏时记入 warnings，不再静默吞错。
     pub fn scan_mcp_servers(
         &self,
         agents: &[AgentProfile],
-    ) -> AppResult<Vec<GroupedMcpServer>> {
+    ) -> AppResult<(Vec<GroupedMcpServer>, Vec<String>)> {
         let mut all_servers: Vec<AgentMcpServer> = Vec::new();
+        let mut warnings: Vec<String> = Vec::new();
 
         for agent in agents {
             if let Some(adapter) = self.get_adapter_for_agent(agent) {
                 match adapter.scan(agent) {
                     Ok(servers) => all_servers.extend(servers),
-                    Err(_) => {
-                        // 某个 agent 扫描失败时跳过，不影响其他 agent
-                        continue;
+                    Err(error) => {
+                        warnings.push(format!("扫描 {} 的 MCP 配置失败: {}", agent.name, error));
                     }
                 }
             }
@@ -96,7 +97,7 @@ impl McpService {
             .collect();
         result.sort_by(|a, b| a.name.cmp(&b.name));
 
-        Ok(result)
+        Ok((result, warnings))
     }
 
     /// 添加 MCP server 到指定的 agents
@@ -168,7 +169,16 @@ impl McpService {
                         continue;
                     }
                     ConflictPolicy::BackupOverwrite => {
-                        let _ = adapter.backup(agent);
+                        // 备份失败则记录错误并跳过覆盖，绝不静默吞掉备份失败后继续覆盖写
+                        if let Err(e) = adapter.backup(agent, &self.backup_root) {
+                            results.push(McpOperationResult {
+                                agent_id: agent_id.clone(),
+                                server_name: config.name.clone(),
+                                action: "error".to_string(),
+                                message: format!("备份 {} 的配置失败，已取消覆盖: {}", agent.name, e),
+                            });
+                            continue;
+                        }
                         if let Err(e) = adapter.update(agent, &config.name, config) {
                             results.push(McpOperationResult {
                                 agent_id: agent_id.clone(),
@@ -187,14 +197,21 @@ impl McpService {
                         continue;
                     }
                     ConflictPolicy::Prompt => {
-                        return Err(AppError::Message(format!(
-                            "MCP server '{}' 已存在于 {}。请先选择冲突策略。",
-                            config.name, agent.name
-                        )));
+                        // 记录错误并继续，避免丢弃已处理结果或中断整批
+                        results.push(McpOperationResult {
+                            agent_id: agent_id.clone(),
+                            server_name: config.name.clone(),
+                            action: "error".to_string(),
+                            message: format!(
+                                "MCP server '{}' 已存在于 {}。请先选择冲突策略。",
+                                config.name, agent.name
+                            ),
+                        });
+                        continue;
                     }
                     ConflictPolicy::Rename => {
                         // 将既有同名 server 内容改名保留（追时间戳），腾出原名供新配置写入
-                        let suffix = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
+                        let suffix = chrono::Utc::now().format("%Y%m%d%H%M%S%3f").to_string();
                         let renamed_name = format!("{}-{}", config.name, suffix);
                         let existing_cfg = existing
                             .iter()
@@ -306,7 +323,7 @@ impl McpService {
             AppError::Message(format!("Agent '{}' 不支持 MCP 管理", agent.name))
         })?;
 
-        adapter.backup(agent)?;
+        adapter.backup(agent, &self.backup_root)?;
         adapter.update(agent, original_name, config)?;
 
         Ok(McpOperationResult {
@@ -332,7 +349,7 @@ impl McpService {
             AppError::Message(format!("Agent '{}' 不支持 MCP 管理", agent.name))
         })?;
 
-        adapter.backup(agent)?;
+        adapter.backup(agent, &self.backup_root)?;
         adapter.remove(agent, name)?;
 
         Ok(McpOperationResult {
@@ -448,7 +465,16 @@ impl McpService {
                         continue;
                     }
                     ConflictPolicy::BackupOverwrite => {
-                        let _ = adapter.backup(agent);
+                        // 备份失败则记录错误并跳过覆盖，绝不静默吞掉备份失败后继续覆盖写
+                        if let Err(e) = adapter.backup(agent, &self.backup_root) {
+                            results.push(McpOperationResult {
+                                agent_id: agent_id.clone(),
+                                server_name: server_name.to_string(),
+                                action: "error".to_string(),
+                                message: format!("备份 {} 的配置失败，已取消覆盖: {}", agent.name, e),
+                            });
+                            continue;
+                        }
                         if let Err(e) = adapter.update(agent, server_name, config) {
                             results.push(McpOperationResult {
                                 agent_id: agent_id.clone(),
@@ -467,14 +493,21 @@ impl McpService {
                         continue;
                     }
                     ConflictPolicy::Prompt => {
-                        return Err(AppError::Message(format!(
-                            "MCP server '{}' 已存在于 {}。请先选择冲突策略。",
-                            server_name, agent.name
-                        )));
+                        // 记录错误并继续，避免丢弃已处理结果或中断整批
+                        results.push(McpOperationResult {
+                            agent_id: agent_id.clone(),
+                            server_name: server_name.to_string(),
+                            action: "error".to_string(),
+                            message: format!(
+                                "MCP server '{}' 已存在于 {}。请先选择冲突策略。",
+                                server_name, agent.name
+                            ),
+                        });
+                        continue;
                     }
                     ConflictPolicy::Rename => {
                         // 将目标同名 server 内容改名保留（追时间戳），腾出原名供同步写入
-                        let suffix = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
+                        let suffix = chrono::Utc::now().format("%Y%m%d%H%M%S%3f").to_string();
                         let renamed_name = format!("{}-{}", server_name, suffix);
                         let existing_cfg = existing
                             .iter()
@@ -580,9 +613,16 @@ impl McpService {
         let mut results = Vec::new();
 
         for agent_id in agent_ids {
-            let agent = agent_map.get(agent_id).ok_or_else(|| {
-                AppError::Message(format!("找不到 Agent: {}", agent_id))
-            })?;
+            let Some(agent) = agent_map.get(agent_id) else {
+                // 与 add/sync 一致：缺失 agent 记入结果并继续，不中断整批
+                results.push(McpOperationResult {
+                    agent_id: agent_id.clone(),
+                    server_name: server_name.to_string(),
+                    action: "error".to_string(),
+                    message: format!("找不到 Agent: {}", agent_id),
+                });
+                continue;
+            };
             let adapter = match self.get_adapter_for_agent(agent) {
                 Some(a) => a,
                 None => {
@@ -597,7 +637,7 @@ impl McpService {
             };
 
             // backup 或 remove 失败时记录错误并继续，不中断批量操作
-            if let Err(e) = adapter.backup(agent) {
+            if let Err(e) = adapter.backup(agent, &self.backup_root) {
                 results.push(McpOperationResult {
                     agent_id: agent_id.clone(),
                     server_name: server_name.to_string(),
