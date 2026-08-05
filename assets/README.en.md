@@ -18,7 +18,7 @@ Skills Manager is a local Windows desktop tool for managing Agent Skills and MCP
 - **No-tag filtering:** filter skills and agents lists by "no tag" to quickly locate uncategorized items.
 - **Independent view scrolling:** Skills, MCP, and Agents view lists scroll independently, the page no longer scrolls as a whole.
 - **Theme switching:** choose light mode, dark mode, or follow the system theme. The app remembers the local theme preference on each machine.
-- **Streamlined UI:** removed title bar icon and text, removed bottom status bar, sidebar theme switcher uses icon mode for a cleaner interface with more content area.
+- **Streamlined UI:** removed title bar icon and text, removed bottom status bar, theme switcher moved to the Settings view for a cleaner interface with more content area.
 
 ## Tech Stack
 
@@ -92,7 +92,7 @@ and writes a portable-package `README.txt` into the same directory.
 To create the versioned zip package for GitHub Releases:
 
 ```powershell
-Compress-Archive -LiteralPath "dist-native\Skills Manager" -DestinationPath "SkillsManager-v0.3.1-windows-portable.zip" -Force
+Compress-Archive -LiteralPath "dist-native\Skills Manager" -DestinationPath "SkillsManager-v0.3.2-windows-portable.zip" -Force
 ```
 
-The root-level `SkillsManager.exe` and `SkillsManager-v0.3.1-windows-portable.zip` are release artifacts. The zip package is suitable for GitHub Releases, while the standalone exe is useful for quick local verification.
+The `release/` folder's `SkillsManager-v0.3.2-windows-portable.zip` is the release artifact, suitable for uploading to GitHub Releases; the root-level `SkillsManager.exe` is useful for quick local verification.
