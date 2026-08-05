@@ -58,6 +58,16 @@ struct OperationRecord {
     created_at: String,
 }
 
+/// 批量安装记录输入：与 `record_install` 参数一一对应，供批量安装合并为一次 save。
+pub struct InstallRecordInput {
+    pub agent_id: String,
+    pub skill_id: String,
+    pub fingerprint: String,
+    pub target_path: String,
+    pub action: String,
+    pub backup_path: Option<String>,
+}
+
 pub struct AppStore {
     state: Mutex<AppState>,
     state_path: PathBuf,
@@ -69,11 +79,28 @@ impl AppStore {
         let data_dir = dirs::data_local_dir()
             .unwrap_or_else(std::env::temp_dir)
             .join("skill-sync-manager");
+        Self::load_from(data_dir)
+    }
+
+    /// 从指定数据目录加载状态；state.json 损坏时保留原文件并回退默认状态，绝不静默覆盖用户数据。
+    fn load_from(data_dir: PathBuf) -> AppResult<Self> {
         fs::create_dir_all(&data_dir)?;
         let state_path = data_dir.join("state.json");
         let state = if state_path.exists() {
             let text = fs::read_to_string(&state_path)?;
-            serde_json::from_str(&text).unwrap_or_default()
+            match serde_json::from_str::<AppState>(&text) {
+                Ok(state) => state,
+                Err(error) => {
+                    // 损坏/半写文件：保留副本供恢复与排查，再以默认状态启动
+                    let backup = state_path.with_extension("json.corrupt");
+                    let _ = fs::rename(&state_path, &backup);
+                    eprintln!(
+                        "[skills_manager] state.json 解析失败（{error}），原文件已保留至 {}，将以默认状态启动",
+                        backup.display()
+                    );
+                    AppState::default()
+                }
+            }
         } else {
             AppState::default()
         };
@@ -85,13 +112,18 @@ impl AppStore {
     }
 
     #[cfg(test)]
+    pub fn with_data_dir(data_dir: PathBuf) -> AppResult<Self> {
+        Self::load_from(data_dir)
+    }
+
+    #[cfg(test)]
     pub fn in_memory() -> AppResult<Self> {
-        let data_dir = std::env::temp_dir().join("skill-sync-manager-test");
-        Ok(Self {
-            state: Mutex::new(AppState::default()),
-            state_path: data_dir.join("state.json"),
-            data_dir,
-        })
+        // 每个实例使用独立临时目录，避免并行测试争用同一 state.json.tmp 造成 rename 竞态
+        let dir = tempfile::tempdir().expect("创建测试临时目录失败");
+        let data_dir = dir.path().to_path_buf();
+        // 保持目录存活（泄漏 guard，由系统临时目录清理兜底）
+        std::mem::forget(dir);
+        Self::with_data_dir(data_dir)
     }
 
     fn save(&self) -> AppResult<()> {
@@ -103,7 +135,10 @@ impl AppStore {
             fs::create_dir_all(parent)?;
         }
         let json = serde_json::to_string_pretty(&*state)?;
-        fs::write(&self.state_path, json)?;
+        // 先写临时文件再原子替换，避免崩溃时产生半写损坏的 state.json
+        let tmp_path = self.state_path.with_extension("json.tmp");
+        fs::write(&tmp_path, json)?;
+        fs::rename(&tmp_path, &self.state_path)?;
         Ok(())
     }
 
@@ -179,8 +214,7 @@ impl AppStore {
         target_path: &str,
         action: &str,
         backup_path: Option<&str>,
-    ) -> AppResult<()> {
-        let mut state = self
+    ) -> AppResult<()> {        let mut state = self
             .state
             .lock()
             .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
@@ -220,6 +254,48 @@ impl AppStore {
         self.save()
     }
 
+    /// 批量记录安装：一次锁内应用全部变更 + 一次 save，避免逐 agent 安装时 N 次全量重写 state.json。
+    pub fn record_installs(&self, records: &[InstallRecordInput]) -> AppResult<()> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let now = chrono::Utc::now().to_rfc3339();
+        for record in records {
+            if let Some(existing) = state
+                .installs
+                .iter_mut()
+                .find(|i| i.agent_id == record.agent_id && i.skill_id == record.skill_id)
+            {
+                existing.fingerprint = record.fingerprint.clone();
+                existing.target_path = record.target_path.clone();
+                existing.installed_at = now.clone();
+            } else {
+                state.installs.push(InstallRecord {
+                    agent_id: record.agent_id.clone(),
+                    skill_id: record.skill_id.clone(),
+                    fingerprint: record.fingerprint.clone(),
+                    target_path: record.target_path.clone(),
+                    installed_at: now.clone(),
+                });
+            }
+
+            let op_id = state.next_operation_id;
+            state.next_operation_id += 1;
+            state.operations.push(OperationRecord {
+                id: op_id,
+                agent_id: record.agent_id.clone(),
+                skill_id: record.skill_id.clone(),
+                action: record.action.clone(),
+                target_path: record.target_path.clone(),
+                backup_path: record.backup_path.clone(),
+                created_at: now.clone(),
+            });
+        }
+        drop(state);
+        self.save()
+    }
+
     pub fn record_uninstall(
         &self,
         agent_id: &str,
@@ -227,6 +303,7 @@ impl AppStore {
         target_path: &str,
         backup_path: Option<&str>,
     ) -> AppResult<()> {
+
         let mut state = self
             .state
             .lock()
@@ -266,10 +343,12 @@ impl AppStore {
             .operations
             .iter()
             .rev()
-            .find(|op| {
-                op.agent_id == agent_id && op.skill_id == skill_id && op.backup_path.is_some()
-            })
-            .map(|op| (op.target_path.clone(), op.backup_path.clone().unwrap())))
+            .find(|op| op.agent_id == agent_id && op.skill_id == skill_id)
+            .and_then(|op| {
+                op.backup_path
+                    .clone()
+                    .map(|backup| (op.target_path.clone(), backup))
+            }))
     }
 
     pub fn toggle_no_full_coverage(&self, title: &str) -> AppResult<bool> {
@@ -323,7 +402,7 @@ impl AppStore {
     }
 
     pub fn set_skill_tags(&self, title: &str, tags: Vec<String>) -> AppResult<Vec<String>> {
-        let key = normalize_skill_title(title);
+        let key = crate::util::normalize_title(title);
         if key.is_empty() {
             return Err(AppError::Message("Skill 标题不能为空。".to_string()));
         }
@@ -349,7 +428,7 @@ impl AppStore {
             .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
         Ok(state
             .skill_tags
-            .get(&normalize_skill_title(title))
+            .get(&crate::util::normalize_title(title))
             .cloned()
             .unwrap_or_default())
     }
@@ -413,10 +492,6 @@ impl AppStore {
         sources.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(sources)
     }
-}
-
-fn normalize_skill_title(title: &str) -> String {
-    title.trim().to_lowercase()
 }
 
 fn sanitize_tags(tags: Vec<String>) -> AppResult<Vec<String>> {
@@ -578,5 +653,40 @@ mod tests {
         store.set_agent_tags("agent-1", Vec::new()).unwrap();
 
         assert!(store.list_agent_tags("agent-1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn save_is_atomic_and_round_trips_through_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AppStore::with_data_dir(dir.path().to_path_buf()).unwrap();
+        let profile = AgentProfile {
+            id: "test-atomic".into(),
+            name: "Atomic Agent".into(),
+            agent_type: AgentType::Custom,
+            skills_path: "/tmp/test".into(),
+            adapter_config: None,
+            user_tags: Vec::new(),
+        };
+        store.save_agent(&profile).unwrap();
+
+        // 新实例应从磁盘重新加载到数据
+        let reloaded = AppStore::with_data_dir(dir.path().to_path_buf()).unwrap();
+        let agents = reloaded.list_agents().unwrap();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].id, "test-atomic");
+        // 无残留临时文件
+        assert!(!dir.path().join("state.json.tmp").exists());
+    }
+
+    #[test]
+    fn corrupt_state_file_is_backed_up_not_lost() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("state.json"), "{ not valid json !!!").unwrap();
+
+        let store = AppStore::with_data_dir(dir.path().to_path_buf()).unwrap();
+        assert!(store.list_agents().unwrap().is_empty());
+        // 原文件被保留而非覆盖
+        assert!(dir.path().join("state.json.corrupt").exists());
+        assert!(!dir.path().join("state.json").exists());
     }
 }

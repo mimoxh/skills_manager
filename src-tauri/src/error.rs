@@ -12,6 +12,10 @@ pub enum AppError {
     Yaml(#[from] serde_yaml::Error),
     #[error("TOML error: {0}")]
     Toml(#[from] toml::de::Error),
+    #[error("TOML 序列化错误: {0}")]
+    TomlSer(#[from] toml::ser::Error),
+    #[error("SQLite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
     #[error("Zip error: {0}")]
     Zip(#[from] zip::result::ZipError),
 }

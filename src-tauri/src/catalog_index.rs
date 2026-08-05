@@ -1,5 +1,5 @@
 use crate::{
-    error::{AppError, AppResult},
+    error::AppResult,
     models::{
         CatalogFilters, CatalogInstallStatus, CatalogRefreshStatus, CatalogSafetyMode,
         CatalogSearchResult, CatalogSkill, CatalogSort, CatalogSource,
@@ -25,6 +25,51 @@ pub struct RefreshStatePatch<'a> {
     pub is_running: bool,
     pub is_complete: bool,
     pub last_error: Option<&'a str>,
+}
+
+const SKILL_SELECT_COLUMNS: &str = "id, name, source_id, source_name, source_icon, source_path, relative_path, description, tags_json, supported_agents_json, published_at, updated_at, download_count, install_count, has_skill_md, has_scripts, has_references, has_assets";
+
+/// 将 catalog_skills 一行映射为 CatalogSkill，并依据已安装集合标记 install_status。
+fn map_row(
+    row: &rusqlite::Row,
+    source_id: &str,
+    installed_titles: &HashSet<String>,
+    installed_slugs: &HashSet<String>,
+) -> rusqlite::Result<CatalogSkill> {
+    let tags_json: String = row.get(8)?;
+    let supported_agents_json: String = row.get(9)?;
+    let name: String = row.get(1)?;
+    let relative_path: String = row.get(6)?;
+    let install_status = if if source_id == "clawhub" {
+        installed_slugs.contains(&relative_path.trim().to_lowercase())
+    } else {
+        installed_titles.contains(&name.trim().to_lowercase())
+    } {
+        CatalogInstallStatus::Installed
+    } else {
+        CatalogInstallStatus::NotInstalled
+    };
+    Ok(CatalogSkill {
+        id: row.get(0)?,
+        name,
+        source_id: row.get(2)?,
+        source_name: row.get(3)?,
+        source_icon: row.get(4)?,
+        source_path: row.get(5)?,
+        relative_path,
+        description: row.get(7)?,
+        tags: serde_json::from_str(&tags_json).unwrap_or_default(),
+        supported_agents: serde_json::from_str(&supported_agents_json).unwrap_or_default(),
+        published_at: row.get(10)?,
+        updated_at: row.get(11)?,
+        download_count: row.get::<_, Option<i64>>(12)?.map(|value| value as u64),
+        install_count: row.get::<_, Option<i64>>(13)?.map(|value| value as u64),
+        has_skill_md: row.get::<_, i64>(14)? != 0,
+        has_scripts: row.get::<_, i64>(15)? != 0,
+        has_references: row.get::<_, i64>(16)? != 0,
+        has_assets: row.get::<_, i64>(17)? != 0,
+        install_status,
+    })
 }
 
 impl CatalogIndex {
@@ -120,6 +165,15 @@ impl CatalogIndex {
 
     pub fn save_refresh_state(&self, patch: RefreshStatePatch<'_>) -> AppResult<()> {
         let conn = self.connect()?;
+        self.save_refresh_state_with_conn(&conn, patch)
+    }
+
+    /// 用给定连接写入刷新状态（供 finish_refresh 在同一事务内复用）。
+    fn save_refresh_state_with_conn(
+        &self,
+        conn: &Connection,
+        patch: RefreshStatePatch<'_>,
+    ) -> AppResult<()> {
         conn.execute(
             r#"
             INSERT INTO catalog_refresh_state
@@ -265,12 +319,14 @@ impl CatalogIndex {
         generation: i64,
         fetched_count: usize,
     ) -> AppResult<()> {
-        let conn = self.connect()?;
-        conn.execute(
+        // DELETE 与状态写入放在同一事务，避免数据已删但状态未置 complete 的中间态
+        let mut conn = self.connect()?;
+        let tx = conn.transaction()?;
+        tx.execute(
             "DELETE FROM catalog_skills WHERE source_id = ?1 AND safety_mode = ?2 AND generation <> ?3",
             params![source_id, safety_mode.as_str(), generation],
         )?;
-        self.save_refresh_state(RefreshStatePatch {
+        self.save_refresh_state_with_conn(&tx, RefreshStatePatch {
             source_id,
             safety_mode,
             cursor: None,
@@ -279,7 +335,9 @@ impl CatalogIndex {
             is_running: false,
             is_complete: true,
             last_error: None,
-        })
+        })?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn count(&self, source_id: &str, safety_mode: CatalogSafetyMode) -> AppResult<usize> {
@@ -304,7 +362,12 @@ impl CatalogIndex {
         page_size: usize,
     ) -> AppResult<CatalogSearchResult> {
         let page = page.max(1);
-        let page_size = page_size.clamp(1, 500);
+        // usize::MAX 表示"取全量"（与内存分页 page_catalog_skills 语义一致），其余 clamp 到 500
+        let page_size = if page_size == usize::MAX {
+            usize::MAX
+        } else {
+            page_size.clamp(1, 500)
+        };
         let offset = page.saturating_sub(1).saturating_mul(page_size);
         let conn = self.connect()?;
         let mut clauses = vec!["source_id = ?".to_string(), "safety_mode = ?".to_string()];
@@ -431,47 +494,22 @@ impl CatalogIndex {
             CatalogSort::UpdatedDesc => "updated_at IS NULL ASC, updated_at DESC, name ASC",
             CatalogSort::Source => "source_name ASC, name ASC",
         };
-        let query_sql = format!(
-            "SELECT id, name, source_id, source_name, source_icon, source_path, relative_path, description, tags_json, supported_agents_json, published_at, updated_at, download_count, install_count, has_skill_md, has_scripts, has_references, has_assets FROM catalog_skills WHERE {where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?"
-        );
-        values.push(rusqlite::types::Value::Integer(page_size as i64));
-        values.push(rusqlite::types::Value::Integer(offset as i64));
+        let query_sql = if page_size == usize::MAX {
+            format!(
+                "SELECT {SKILL_SELECT_COLUMNS} FROM catalog_skills WHERE {where_sql} ORDER BY {order_sql}"
+            )
+        } else {
+            format!(
+                "SELECT {SKILL_SELECT_COLUMNS} FROM catalog_skills WHERE {where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?"
+            )
+        };
+        if page_size != usize::MAX {
+            values.push(rusqlite::types::Value::Integer(page_size as i64));
+            values.push(rusqlite::types::Value::Integer(offset as i64));
+        }
         let mut stmt = conn.prepare(&query_sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(values), |row| {
-            let tags_json: String = row.get(8)?;
-            let supported_agents_json: String = row.get(9)?;
-            let name: String = row.get(1)?;
-            let relative_path: String = row.get(6)?;
-            let install_status = if if source.id == "clawhub" {
-                installed_slugs.contains(&relative_path.trim().to_lowercase())
-            } else {
-                installed_titles.contains(&name.trim().to_lowercase())
-            } {
-                CatalogInstallStatus::Installed
-            } else {
-                CatalogInstallStatus::NotInstalled
-            };
-            Ok(CatalogSkill {
-                id: row.get(0)?,
-                name,
-                source_id: row.get(2)?,
-                source_name: row.get(3)?,
-                source_icon: row.get(4)?,
-                source_path: row.get(5)?,
-                relative_path,
-                description: row.get(7)?,
-                tags: serde_json::from_str(&tags_json).unwrap_or_default(),
-                supported_agents: serde_json::from_str(&supported_agents_json).unwrap_or_default(),
-                published_at: row.get(10)?,
-                updated_at: row.get(11)?,
-                download_count: row.get::<_, Option<i64>>(12)?.map(|value| value as u64),
-                install_count: row.get::<_, Option<i64>>(13)?.map(|value| value as u64),
-                has_skill_md: row.get::<_, i64>(14)? != 0,
-                has_scripts: row.get::<_, i64>(15)? != 0,
-                has_references: row.get::<_, i64>(16)? != 0,
-                has_assets: row.get::<_, i64>(17)? != 0,
-                install_status,
-            })
+            map_row(row, &source.id, installed_titles, installed_slugs)
         })?;
         let items = rows.collect::<Result<Vec<_>, _>>()?;
         Ok(CatalogSearchResult {
@@ -482,11 +520,18 @@ impl CatalogIndex {
             page_size,
         })
     }
-}
 
-impl From<rusqlite::Error> for AppError {
-    fn from(error: rusqlite::Error) -> Self {
-        AppError::Message(format!("SQLite 操作失败: {}", error))
+    /// 按完整 id（如 `clawhub::{slug}`）跨 safety_mode 直接查找单个技能，避免受分页窗口限制。
+    pub fn find_by_id(&self, source_id: &str, id: &str) -> AppResult<Option<CatalogSkill>> {
+        let conn = self.connect()?;
+        let query_sql = format!(
+            "SELECT {SKILL_SELECT_COLUMNS} FROM catalog_skills WHERE source_id = ? AND id = ? ORDER BY safety_mode LIMIT 1"
+        );
+        let mut stmt = conn.prepare(&query_sql)?;
+        let mut rows = stmt.query_map(params![source_id, id], |row| {
+            map_row(row, source_id, &HashSet::new(), &HashSet::new())
+        })?;
+        rows.next().transpose().map_err(Into::into)
     }
 }
 
@@ -496,8 +541,8 @@ mod tests {
 
     use crate::{
         catalog_index::{CatalogIndex, RefreshStatePatch},
+        catalog_refresh::built_in_catalog_sources_for_test,
         models::{CatalogFilters, CatalogSafetyMode, CatalogSkill, CatalogSort, CatalogSource},
-        service::built_in_catalog_sources_for_test,
     };
 
     fn clawhub_source() -> CatalogSource {
