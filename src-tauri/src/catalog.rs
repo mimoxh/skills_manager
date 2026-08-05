@@ -5,7 +5,12 @@ use crate::{
 };
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use std::{cmp::Ordering, fs, path::Path};
+use std::{
+    cmp::Ordering,
+    collections::HashSet,
+    fs,
+    path::Path,
+};
 use walkdir::WalkDir;
 
 pub const CLAWHUB_API_CACHE_FILE: &str = "clawhub-skills.json";
@@ -22,6 +27,7 @@ pub fn scan_catalog_repository(
     }
 
     let mut skills = Vec::new();
+    let mut seen_dirs = HashSet::new();
     for entry in WalkDir::new(repository)
         .max_depth(6)
         .into_iter()
@@ -38,10 +44,8 @@ pub fn scan_catalog_repository(
         let Some(skill_dir) = entry.path().parent() else {
             continue;
         };
-        if skills
-            .iter()
-            .any(|skill: &CatalogSkill| Path::new(&skill.source_path) == skill_dir)
-        {
+        // HashSet 去重避免 O(n²) 的线性扫描
+        if !seen_dirs.insert(skill_dir.to_path_buf()) {
             continue;
         }
         skills.push(read_catalog_skill(repository, skill_dir, source)?);
@@ -63,11 +67,11 @@ pub fn scan_clawhub_api_cache(
     parse_clawhub_api_catalog(&text, source)
 }
 
-pub fn parse_clawhub_api_catalog(
-    text: &str,
+/// 从已解析的 ClawHub API JSON `Value` 中提取 skills，避免序列化→反序列化往返。
+pub fn parse_clawhub_api_catalog_value(
+    value: &Value,
     source: &CatalogSource,
 ) -> AppResult<Vec<CatalogSkill>> {
-    let value = serde_json::from_str::<Value>(text)?;
     let items = value
         .get("items")
         .or_else(|| value.get("skills"))
@@ -81,6 +85,14 @@ pub fn parse_clawhub_api_catalog(
         .collect::<Vec<_>>();
     skills.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(skills)
+}
+
+pub fn parse_clawhub_api_catalog(
+    text: &str,
+    source: &CatalogSource,
+) -> AppResult<Vec<CatalogSkill>> {
+    let value = serde_json::from_str::<Value>(text)?;
+    parse_clawhub_api_catalog_value(&value, source)
 }
 
 pub fn sort_catalog_skills(mut skills: Vec<CatalogSkill>, sort: CatalogSort) -> Vec<CatalogSkill> {
@@ -176,7 +188,7 @@ fn read_catalog_skill(
     let updated_at = fs::metadata(skill_dir)
         .ok()
         .and_then(|metadata| metadata.modified().ok())
-        .map(|time| DateTime::<Utc>::from(time).to_rfc3339());
+        .map(crate::util::system_time_to_rfc3339);
 
     Ok(CatalogSkill {
         id: format!("{}::{}", source.id, relative_path),

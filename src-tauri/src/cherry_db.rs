@@ -1,5 +1,5 @@
 use crate::error::{AppError, AppResult};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
@@ -37,60 +37,56 @@ impl CherryDb {
     }
 
     fn connect(&self) -> AppResult<Connection> {
-        Connection::open_with_flags(
+        let conn = Connection::open_with_flags(
             &self.db_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .map_err(|e| AppError::Message(format!("无法打开 Cherry Studio 数据库: {}", e)))
+        )?;
+        // 数据库可能正被 Cherry Studio 进程占用，设置忙等待避免 SQLITE_BUSY 立即失败
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        Ok(conn)
     }
 
     pub fn list_skills(&self) -> AppResult<Vec<CherrySkillRow>> {
         let conn = self.connect()?;
-        let mut stmt = conn
-            .prepare("SELECT id, name, description, folder_name, source, content_hash, is_enabled FROM skills")
-            .map_err(|e| AppError::Message(format!("查询 skills 失败: {}", e)))?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok(CherrySkillRow {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    description: row.get(2)?,
-                    folder_name: row.get(3)?,
-                    source: row.get(4)?,
-                    content_hash: row.get(5)?,
-                    is_enabled: row.get(6)?,
-                })
+        let mut stmt = conn.prepare(
+            "SELECT id, name, description, folder_name, source, content_hash, is_enabled FROM skills",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(CherrySkillRow {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                folder_name: row.get(3)?,
+                source: row.get(4)?,
+                content_hash: row.get(5)?,
+                is_enabled: row.get(6)?,
             })
-            .map_err(|e| AppError::Message(format!("读取 skills 行失败: {}", e)))?;
+        })?;
         let mut skills = Vec::new();
         for row in rows {
-            skills.push(row.map_err(|e| AppError::Message(format!("解析 skill 行失败: {}", e)))?);
+            skills.push(row?);
         }
         Ok(skills)
     }
 
     pub fn get_skill(&self, folder_name: &str) -> AppResult<Option<CherrySkillRow>> {
         let conn = self.connect()?;
-        let mut stmt = conn
-            .prepare("SELECT id, name, description, folder_name, source, content_hash, is_enabled FROM skills WHERE folder_name = ?1")
-            .map_err(|e| AppError::Message(format!("查询 skill 失败: {}", e)))?;
-        let mut rows = stmt
-            .query_map(params![folder_name], |row| {
-                Ok(CherrySkillRow {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    description: row.get(2)?,
-                    folder_name: row.get(3)?,
-                    source: row.get(4)?,
-                    content_hash: row.get(5)?,
-                    is_enabled: row.get(6)?,
-                })
+        let mut stmt = conn.prepare(
+            "SELECT id, name, description, folder_name, source, content_hash, is_enabled FROM skills WHERE folder_name = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![folder_name], |row| {
+            Ok(CherrySkillRow {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                folder_name: row.get(3)?,
+                source: row.get(4)?,
+                content_hash: row.get(5)?,
+                is_enabled: row.get(6)?,
             })
-            .map_err(|e| AppError::Message(format!("查询 skill 失败: {}", e)))?;
+        })?;
         match rows.next() {
-            Some(row) => Ok(Some(
-                row.map_err(|e| AppError::Message(format!("解析 skill 行失败: {}", e)))?,
-            )),
+            Some(row) => Ok(Some(row?)),
             None => Ok(None),
         }
     }
@@ -108,8 +104,7 @@ impl CherryDb {
         conn.execute(
             "INSERT INTO skills (id, name, description, folder_name, source, content_hash, is_enabled, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![id, name, description, folder_name, "local", content_hash, true, now, now],
-        )
-        .map_err(|e| AppError::Message(format!("插入 skill 失败: {}", e)))?;
+        )?;
         Ok(id)
     }
 
@@ -125,35 +120,29 @@ impl CherryDb {
         conn.execute(
             "UPDATE skills SET name = ?1, description = ?2, content_hash = ?3, updated_at = ?4 WHERE folder_name = ?5",
             params![name, description, content_hash, now, folder_name],
-        )
-        .map_err(|e| AppError::Message(format!("更新 skill 失败: {}", e)))?;
+        )?;
         Ok(())
     }
 
     pub fn delete_skill(&self, folder_name: &str) -> AppResult<()> {
         let conn = self.connect()?;
         // agent_skills 有 CASCADE 外键，删除 skill 自动清理关联
-        conn.execute("DELETE FROM skills WHERE folder_name = ?1", params![folder_name])
-            .map_err(|e| AppError::Message(format!("删除 skill 失败: {}", e)))?;
+        conn.execute("DELETE FROM skills WHERE folder_name = ?1", params![folder_name])?;
         Ok(())
     }
 
     pub fn list_agents(&self) -> AppResult<Vec<CherryAgentRow>> {
         let conn = self.connect()?;
-        let mut stmt = conn
-            .prepare("SELECT id, name FROM agents WHERE deleted_at IS NULL")
-            .map_err(|e| AppError::Message(format!("查询 agents 失败: {}", e)))?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok(CherryAgentRow {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                })
+        let mut stmt = conn.prepare("SELECT id, name FROM agents WHERE deleted_at IS NULL")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(CherryAgentRow {
+                id: row.get(0)?,
+                name: row.get(1)?,
             })
-            .map_err(|e| AppError::Message(format!("读取 agents 行失败: {}", e)))?;
+        })?;
         let mut agents = Vec::new();
         for row in rows {
-            agents.push(row.map_err(|e| AppError::Message(format!("解析 agent 行失败: {}", e)))?);
+            agents.push(row?);
         }
         Ok(agents)
     }
@@ -166,17 +155,65 @@ impl CherryDb {
             conn.execute(
                 "INSERT OR IGNORE INTO agent_skills (agent_id, skill_id, is_enabled, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![agent_id, skill_id, true, now, now],
-            )
-            .map_err(|e| AppError::Message(format!("关联 skill 到 agent 失败: {}", e)))?;
+            )?;
         }
         Ok(())
     }
 
     pub fn unlink_skill(&self, skill_id: &str) -> AppResult<()> {
         let conn = self.connect()?;
-        conn.execute("DELETE FROM agent_skills WHERE skill_id = ?1", params![skill_id])
-            .map_err(|e| AppError::Message(format!("删除 skill 关联失败: {}", e)))?;
+        conn.execute("DELETE FROM agent_skills WHERE skill_id = ?1", params![skill_id])?;
         Ok(())
+    }
+
+    /// 以单连接 + 单事务完成 skill 的插入/更新并与 agents 关联（M-B10）：
+    /// 原实现 get/insert/update 与 enable_skill_for_agents 各开一条连接，中间失败会留下
+    /// "有 skill 记录但未关联任何 agent" 的半完成状态。这里把 DB 部分串成事务保证原子性。
+    pub fn upsert_skill_and_link_agents(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        folder_name: &str,
+        content_hash: &str,
+        agent_ids: &[String],
+    ) -> AppResult<String> {
+        let mut conn = self.connect()?;
+        let tx = conn.transaction()?;
+        let now = chrono::Utc::now().timestamp_millis();
+
+        let skill_id = match tx
+            .query_row(
+                "SELECT id FROM skills WHERE folder_name = ?1",
+                params![folder_name],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            Some(existing_id) => {
+                tx.execute(
+                    "UPDATE skills SET name = ?1, description = ?2, content_hash = ?3, updated_at = ?4 WHERE folder_name = ?5",
+                    params![name, description, content_hash, now, folder_name],
+                )?;
+                existing_id
+            }
+            None => {
+                let id = uuid_v4();
+                tx.execute(
+                    "INSERT INTO skills (id, name, description, folder_name, source, content_hash, is_enabled, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![id, name, description, folder_name, "local", content_hash, true, now, now],
+                )?;
+                id
+            }
+        };
+
+        for agent_id in agent_ids {
+            tx.execute(
+                "INSERT OR IGNORE INTO agent_skills (agent_id, skill_id, is_enabled, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![agent_id, skill_id, true, now, now],
+            )?;
+        }
+        tx.commit()?;
+        Ok(skill_id)
     }
 }
 
@@ -281,5 +318,56 @@ mod tests {
         let db_path = create_test_db(dir.path());
         let db = CherryDb::open(&db_path).unwrap();
         assert!(db.get_skill("nonexistent").unwrap().is_none());
+    }
+
+    #[test]
+    fn upsert_skill_and_link_agents_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = create_test_db(dir.path());
+        let db = CherryDb::open(&db_path).unwrap();
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO agents (id, type, name, model, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params!["agent1", "claude", "Test Agent", "default", "2026-01-01", "2026-01-01"],
+        )
+        .unwrap();
+
+        // 插入并关联
+        let id = db
+            .upsert_skill_and_link_agents(
+                "Atomic Skill",
+                Some("desc"),
+                "atomic-skill",
+                "hash1",
+                &["agent1".to_string()],
+            )
+            .unwrap();
+        assert!(!id.is_empty());
+
+        // 再次调用走更新分支，返回同一 id，不产生重复行
+        let id2 = db
+            .upsert_skill_and_link_agents(
+                "Atomic Skill",
+                Some("desc2"),
+                "atomic-skill",
+                "hash2",
+                &["agent1".to_string()],
+            )
+            .unwrap();
+        assert_eq!(id, id2);
+
+        let skills = db.list_skills().unwrap();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].content_hash, "hash2");
+        // 关联仍在（INSERT OR IGNORE 不重复）
+        let count: i64 = rusqlite::Connection::open(&db_path)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM agent_skills WHERE skill_id = ?1",
+                rusqlite::params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }
