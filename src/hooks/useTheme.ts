@@ -18,16 +18,14 @@ function isPalette(value: string | null): value is Palette {
 
 function readStoredTheme(): ThemeMode {
   if (typeof window === "undefined") return "system";
-  return isThemeMode(window.localStorage.getItem(THEME_STORAGE_KEY))
-    ? window.localStorage.getItem(THEME_STORAGE_KEY) as ThemeMode
-    : "system";
+  const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+  return isThemeMode(stored) ? stored : "system";
 }
 
 function readStoredPalette(): Palette {
   if (typeof window === "undefined") return "modern";
-  return isPalette(window.localStorage.getItem(PALETTE_STORAGE_KEY))
-    ? window.localStorage.getItem(PALETTE_STORAGE_KEY) as Palette
-    : "modern";
+  const stored = window.localStorage.getItem(PALETTE_STORAGE_KEY);
+  return isPalette(stored) ? stored : "modern";
 }
 
 function systemTheme(): ResolvedTheme {
