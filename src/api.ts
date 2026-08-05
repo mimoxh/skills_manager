@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { hasTauriRuntime } from "./lib/env";
 import type {
   AgentProfile,
   CatalogFilters,
@@ -18,10 +19,6 @@ import type {
   McpServerConfig,
 } from "./types";
 
-function hasTauriRuntime() {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
-
 function command<T>(name: string, args: Record<string, unknown>, fallback: () => T | Promise<T>) {
   if (hasTauriRuntime()) {
     return invoke<T>(name, args);
@@ -36,6 +33,7 @@ export const api = {
       agents: [],
       noFullCoverageTitles: [],
       noFullCoverageMcpTitles: [],
+      defaultCatalogSourceId: "clawhub",
     }));
   },
   importSkillUpload(fileName: string, files: ImportSkillFile[], targetAgentIds: string[], conflictPolicy: ConflictPolicy) {
@@ -177,7 +175,7 @@ export const api = {
   },
   // ── MCP API ──
   scanMcpServers() {
-    return command<GroupedMcpServer[]>("scan_mcp_servers", {}, () => []);
+    return command<[GroupedMcpServer[], string[]]>("scan_mcp_servers", {}, () => [[], []]);
   },
   readAgentSkillReadme(skillPath: string) {
     return command<string | null>("read_agent_skill_readme", { skillPath }, () => null);

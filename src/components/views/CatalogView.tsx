@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { handleCardActivation } from "../../lib/utils";
 import type {
   AgentProfile,
   CatalogFilters,
@@ -12,6 +13,7 @@ import type {
   InstallResult,
 } from "../../types";
 import { SkillInstallDialog } from "./SkillInstallDialog";
+import { Dialog } from "../ui/Dialog";
 
 const sortOptions: Array<{ value: CatalogSort; label: string }> = [
   { value: "updatedDesc", label: "最近更新" },
@@ -41,15 +43,18 @@ interface CatalogViewProps {
   query: string;
   sort: CatalogSort;
   filters: CatalogFilters;
+  /** 内置默认 catalog 源 id（后端 InitialData 下发） */
+  defaultSourceId: string;
   onQuery: (query: string) => void;
   onSort: (sort: CatalogSort) => void;
   onFilters: (filters: CatalogFilters) => void;
   onSearch: (query?: string, sort?: CatalogSort, filters?: CatalogFilters, page?: number) => Promise<void>;
+  onEnsureCatalogLoaded: () => Promise<void>;
   onPage: (page: number) => Promise<void>;
   onRefreshSource: (sourceId: string) => Promise<void>;
   onRefreshStatus: (safetyMode?: CatalogSafetyMode) => Promise<CatalogRefreshStatus | null>;
-  onStartRefresh: (safetyMode?: CatalogSafetyMode) => Promise<CatalogRefreshStatus>;
-  onCancelRefresh: (safetyMode?: CatalogSafetyMode) => Promise<CatalogRefreshStatus>;
+  onStartRefresh: (safetyMode?: CatalogSafetyMode) => Promise<CatalogRefreshStatus | undefined>;
+  onCancelRefresh: (safetyMode?: CatalogSafetyMode) => Promise<CatalogRefreshStatus | undefined>;
   onSaveSource: (source: CatalogSource) => Promise<void>;
   onInstallSkill: (catalogSkillId: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) => Promise<InstallResult[]>;
   onUninstallSkill: (skillId: string, agentIds: string[]) => Promise<void>;
@@ -70,10 +75,12 @@ export function CatalogView({
   query,
   sort,
   filters,
+  defaultSourceId,
   onQuery,
   onSort,
   onFilters,
   onSearch,
+  onEnsureCatalogLoaded,
   onPage,
   onRefreshSource,
   onRefreshStatus,
@@ -120,16 +127,14 @@ export function CatalogView({
   }, [localSkills]);
 
   const selectedLocalSkill = useMemo(() => {
-    return selectedSkill ? findLocalSkill(selectedSkill, localSkillLookup) : null;
+    return selectedSkill ? findLocalSkill(selectedSkill, localSkillLookup, defaultSourceId) : null;
   }, [selectedSkill, localSkillLookup]);
 
+  // 首次进入 Catalog 视图时触发一次懒加载（搜索 + 仓库源刷新），避免应用启动即做网络请求
   useEffect(() => {
-    if (startupRefreshing || sources.length || skills.length) {
-      return;
-    }
-    onSearch(query, sort, filters);
+    void onEnsureCatalogLoaded();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [startupRefreshing]);
+  }, []);
 
   useEffect(() => {
     const handle = window.setTimeout(() => {
@@ -189,7 +194,7 @@ export function CatalogView({
   }
 
   function openSkill(skill: CatalogSkill) {
-    const localSkill = findLocalSkill(skill, localSkillLookup);
+    const localSkill = findLocalSkill(skill, localSkillLookup, defaultSourceId);
     setSelectedSkill(skill);
     setSelectedAgents(localSkill?.installedAgentIds ?? []);
     setConflictPolicy("backupOverwrite");
@@ -320,12 +325,12 @@ export function CatalogView({
                 <button
                   className="catalog-source-refresh"
                   key={source.id}
-                  onClick={() => source.id === "clawhub" ? onStartRefresh(filters.safetyMode) : onRefreshSource(source.id)}
-                  disabled={busy || (source.id === "clawhub" && activeRefreshStatus?.isRunning)}
+                  onClick={() => source.id === defaultSourceId ? onStartRefresh(filters.safetyMode) : onRefreshSource(source.id)}
+                  disabled={busy || (source.id === defaultSourceId && activeRefreshStatus?.isRunning)}
                   type="button"
                 >
                   <span>{source.name}</span>
-                  <small>{source.id === "clawhub" ? (activeRefreshStatus?.isComplete ? "已索引" : "可刷新") : source.lastRefreshedAt ? "已刷新" : "未刷新"}</small>
+                  <small>{source.id === defaultSourceId ? (activeRefreshStatus?.isComplete ? "已索引" : "可刷新") : source.lastRefreshedAt ? "已刷新" : "未刷新"}</small>
                 </button>
               ))}
             </FilterSection>
@@ -390,9 +395,9 @@ export function CatalogView({
           <main className="catalog-main">
             <div className="catalog-card-grid">
               {skills.map((skill) => (
-                <article className="catalog-card" key={skill.id} onClick={() => openSkill(skill)} role="button" tabIndex={0}>
+                <article className="catalog-card" key={skill.id} onClick={() => openSkill(skill)} onKeyDown={(e) => handleCardActivation(e, () => openSkill(skill))} role="button" tabIndex={0}>
                   <div className="catalog-card-top">
-                    <SourceIcon icon={skill.sourceIcon} />
+                    <SourceIcon icon={skill.sourceIcon} defaultSourceId={defaultSourceId} />
                     <span className={`badge ${skill.installStatus === "installed" ? "badge-success" : "badge-muted"}`}>
                       {skill.installStatus === "installed" ? "已安装" : "未安装"}
                     </span>
@@ -408,7 +413,7 @@ export function CatalogView({
                     <span>{formatCatalogUsage(skill)}</span>
                     <span className="catalog-card-source">
                       <span>{skill.sourceName}</span>
-                      <SourceIcon icon={skill.sourceIcon} small />
+                      <SourceIcon icon={skill.sourceIcon} defaultSourceId={defaultSourceId} small />
                     </span>
                   </div>
                 </article>
@@ -447,15 +452,15 @@ export function CatalogView({
       </div>
 
       {customOpen && (
-        <div className="dialog-backdrop" onClick={() => setCustomOpen(false)}>
-          <div className="dialog catalog-dialog" onClick={(event) => event.stopPropagation()}>
-            <div className="dialog-header">
-              <div>
-                <div className="dialog-title">添加自定义仓库</div>
-                <div className="dialog-subtitle">支持 Git 仓库地址</div>
-              </div>
-              <button className="btn-icon" onClick={() => setCustomOpen(false)} type="button">×</button>
+        <Dialog maxWidth={560} zIndex={50} onClose={() => setCustomOpen(false)}>
+          <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text)" }}>添加自定义仓库</div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>支持 Git 仓库地址</div>
             </div>
+            <button className="btn-icon" onClick={() => setCustomOpen(false)} type="button">×</button>
+          </div>
+          <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 12 }}>
             <div className="input-group">
               <label className="input-label">名称</label>
               <input className="input" value={customName} onChange={(event) => setCustomName(event.target.value)} />
@@ -464,12 +469,12 @@ export function CatalogView({
               <label className="input-label">Git URL</label>
               <input className="input" value={customUrl} onChange={(event) => setCustomUrl(event.target.value)} placeholder="https://github.com/owner/repo" />
             </div>
-            <div className="dialog-actions">
-              <button className="btn btn-ghost" onClick={() => setCustomOpen(false)} type="button">取消</button>
-              <button className="btn btn-primary" onClick={saveCustomSource} disabled={busy || !customName.trim() || !customUrl.trim()} type="button">保存</button>
-            </div>
           </div>
-        </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "14px 24px", borderTop: "1px solid var(--border)" }}>
+            <button className="btn btn-ghost" onClick={() => setCustomOpen(false)} type="button">取消</button>
+            <button className="btn btn-primary" onClick={saveCustomSource} disabled={busy || !customName.trim() || !customUrl.trim()} type="button">保存</button>
+          </div>
+        </Dialog>
       )}
 
       {selectedSkill && (
@@ -521,8 +526,8 @@ function FilterSection({ title, children }: { title: string; children: React.Rea
   );
 }
 
-function SourceIcon({ icon, small = false }: { icon: string; small?: boolean }) {
-  const label = icon === "clawhub" ? "C" : icon === "claude" ? "A" : icon === "codex" ? "O" : "G";
+function SourceIcon({ icon, defaultSourceId, small = false }: { icon: string; defaultSourceId: string; small?: boolean }) {
+  const label = icon === defaultSourceId ? "C" : icon === "claude" ? "A" : icon === "codex" ? "O" : "G";
   return <span className={`catalog-source-icon ${small ? "small" : ""} ${icon}`}>{label}</span>;
 }
 
@@ -572,8 +577,9 @@ function catalogSkillCandidates(skill: CatalogSkill) {
 function findLocalSkill(
   skill: CatalogSkill,
   lookup: { exact: Map<string, GroupedSkill>; loose: Map<string, GroupedSkill>; slugs: Map<string, GroupedSkill> },
+  defaultSourceId: string,
 ) {
-  if (skill.sourceId === "clawhub") {
+  if (skill.sourceId === defaultSourceId) {
     const slug = clawhubCatalogSlug(skill);
     if (slug) {
       return lookup.slugs.get(normalizeSkillKey(slug))

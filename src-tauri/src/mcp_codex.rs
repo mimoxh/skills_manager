@@ -1,14 +1,16 @@
 use crate::{
     error::{AppError, AppResult},
-    mcp_adapter::McpAdapter,
+    mcp_adapter::{self, McpAdapter},
     models::{AgentMcpServer, AgentProfile, McpServerConfig, McpTransport},
 };
 use std::{
-    fs,
     path::{Path, PathBuf},
 };
 
 /// Codex MCP 适配器，读写 `%USERPROFILE%\.codex\config.toml`
+const AGENT_LABEL: &str = "Codex";
+const SECTION_KEY: &str = "mcp_servers";
+
 pub struct CodexMcpAdapter;
 
 impl CodexMcpAdapter {
@@ -16,27 +18,9 @@ impl CodexMcpAdapter {
         Self
     }
 
-    fn codex_config_path() -> Option<PathBuf> {
+    /// 获取默认配置文件路径
+    fn default_config_path() -> Option<PathBuf> {
         dirs::home_dir().map(|home| home.join(".codex").join("config.toml"))
-    }
-
-    fn read_config(path: &Path) -> AppResult<toml::Value> {
-        if !path.exists() {
-            return Ok(toml::Value::Table(Default::default()));
-        }
-        let text = fs::read_to_string(path)?;
-        let value: toml::Value = toml::from_str(&text)?;
-        Ok(value)
-    }
-
-    fn write_config(path: &Path, config: &toml::Value) -> AppResult<()> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let text = toml::to_string_pretty(config)
-            .map_err(|e| AppError::Message(format!("TOML 序列化失败: {}", e)))?;
-        fs::write(path, text)?;
-        Ok(())
     }
 
     fn parse_mcp_server(
@@ -107,7 +91,7 @@ impl CodexMcpAdapter {
         let timeout_sec = table
             .get("timeout")
             .and_then(|v| v.as_integer())
-            .map(|n| n as u64);
+            .and_then(|n| u64::try_from(n).ok());
 
         McpServerConfig {
             name: name.to_string(),
@@ -185,7 +169,7 @@ impl CodexMcpAdapter {
 impl McpAdapter for CodexMcpAdapter {
     fn scan(&self, profile: &AgentProfile) -> AppResult<Vec<AgentMcpServer>> {
         let path = self.config_path(profile)?;
-        let config = Self::read_config(&path)?;
+        let config = mcp_adapter::read_toml_file(&path)?;
         let mut servers = Vec::new();
 
         if let Some(mcp_table) = config.get("mcp_servers").and_then(|v| v.as_table()) {
@@ -197,12 +181,12 @@ impl McpAdapter for CodexMcpAdapter {
                     let mut mcp_servers = toml::map::Map::new();
                     mcp_servers.insert(name.clone(), value.clone());
                     root_table.insert("mcp_servers".to_string(), toml::Value::Table(mcp_servers));
-                    let raw = toml::to_string_pretty(&toml::Value::Table(root_table)).ok();
+                    let raw = Some(toml::to_string_pretty(&toml::Value::Table(root_table))?);
                     servers.push(AgentMcpServer {
                         agent_id: profile.id.clone(),
                         agent_name: profile.name.clone(),
                         config_path: path.to_string_lossy().to_string(),
-                        fingerprint: format!("{:x}", md5_hash(&format!("{:?}", server_config))),
+                        fingerprint: crate::hash::stable_fingerprint(&server_config)?,
                         config: server_config,
                         raw_config: raw,
                     });
@@ -215,24 +199,10 @@ impl McpAdapter for CodexMcpAdapter {
 
     fn add(&self, profile: &AgentProfile, config: &McpServerConfig) -> AppResult<()> {
         let path = self.config_path(profile)?;
-        let mut root = Self::read_config(&path)?;
+        let mut root = mcp_adapter::read_toml_file(&path)?;
 
-        // 确保 mcp_servers 表存在
-        if root.get("mcp_servers").is_none() {
-            root.as_table_mut()
-                .ok_or_else(|| AppError::Message("配置格式错误".to_string()))?
-                .insert(
-                    "mcp_servers".to_string(),
-                    toml::Value::Table(toml::map::Map::new()),
-                );
-        }
-
-        let mcp_servers = root
-            .as_table_mut()
-            .ok_or_else(|| AppError::Message("配置格式错误".to_string()))?
-            .get_mut("mcp_servers")
-            .and_then(|v| v.as_table_mut())
-            .ok_or_else(|| AppError::Message("未找到 mcp_servers 配置".to_string()))?;
+        mcp_adapter::ensure_toml_mcp_section(&mut root, SECTION_KEY)?;
+        let mcp_servers = mcp_adapter::toml_mcp_section_mut(&mut root, SECTION_KEY, AGENT_LABEL)?;
 
         if mcp_servers.contains_key(&config.name) {
             return Err(AppError::Message(format!(
@@ -246,7 +216,7 @@ impl McpAdapter for CodexMcpAdapter {
             Self::config_to_toml_table(config),
         );
 
-        Self::write_config(&path, &root)
+        mcp_adapter::write_toml_file(&path, &root)
     }
 
     fn update(
@@ -256,14 +226,9 @@ impl McpAdapter for CodexMcpAdapter {
         config: &McpServerConfig,
     ) -> AppResult<()> {
         let path = self.config_path(profile)?;
-        let mut root = Self::read_config(&path)?;
+        let mut root = mcp_adapter::read_toml_file(&path)?;
 
-        let mcp_servers = root
-            .as_table_mut()
-            .ok_or_else(|| AppError::Message("配置格式错误".to_string()))?
-            .get_mut("mcp_servers")
-            .and_then(|v| v.as_table_mut())
-            .ok_or_else(|| AppError::Message("未找到 mcp_servers 配置".to_string()))?;
+        let mcp_servers = mcp_adapter::toml_mcp_section_mut(&mut root, SECTION_KEY, AGENT_LABEL)?;
 
         if !mcp_servers.contains_key(original_name) {
             return Err(AppError::Message(format!(
@@ -279,19 +244,14 @@ impl McpAdapter for CodexMcpAdapter {
 
         mcp_servers.insert(config.name.clone(), Self::config_to_toml_table(config));
 
-        Self::write_config(&path, &root)
+        mcp_adapter::write_toml_file(&path, &root)
     }
 
     fn remove(&self, profile: &AgentProfile, name: &str) -> AppResult<()> {
         let path = self.config_path(profile)?;
-        let mut root = Self::read_config(&path)?;
+        let mut root = mcp_adapter::read_toml_file(&path)?;
 
-        let mcp_servers = root
-            .as_table_mut()
-            .ok_or_else(|| AppError::Message("配置格式错误".to_string()))?
-            .get_mut("mcp_servers")
-            .and_then(|v| v.as_table_mut())
-            .ok_or_else(|| AppError::Message("未找到 mcp_servers 配置".to_string()))?;
+        let mcp_servers = mcp_adapter::toml_mcp_section_mut(&mut root, SECTION_KEY, AGENT_LABEL)?;
 
         if mcp_servers.remove(name).is_none() {
             return Err(AppError::Message(format!(
@@ -300,19 +260,14 @@ impl McpAdapter for CodexMcpAdapter {
             )));
         }
 
-        Self::write_config(&path, &root)
+        mcp_adapter::write_toml_file(&path, &root)
     }
 
     fn toggle(&self, profile: &AgentProfile, name: &str, disabled: bool) -> AppResult<()> {
         let path = self.config_path(profile)?;
-        let mut root = Self::read_config(&path)?;
+        let mut root = mcp_adapter::read_toml_file(&path)?;
 
-        let mcp_servers = root
-            .as_table_mut()
-            .ok_or_else(|| AppError::Message("配置格式错误".to_string()))?
-            .get_mut("mcp_servers")
-            .and_then(|v| v.as_table_mut())
-            .ok_or_else(|| AppError::Message("未找到 mcp_servers 配置".to_string()))?;
+        let mcp_servers = mcp_adapter::toml_mcp_section_mut(&mut root, SECTION_KEY, AGENT_LABEL)?;
 
         let server_table = mcp_servers
             .get_mut(name)
@@ -325,52 +280,22 @@ impl McpAdapter for CodexMcpAdapter {
             server_table.remove("disabled");
         }
 
-        Self::write_config(&path, &root)
+        mcp_adapter::write_toml_file(&path, &root)
     }
 
-    fn backup(&self, profile: &AgentProfile) -> AppResult<PathBuf> {
+    fn backup(&self, profile: &AgentProfile, backup_root: &Path) -> AppResult<PathBuf> {
         let path = self.config_path(profile)?;
-        if !path.exists() {
-            return Err(AppError::Message("Codex 配置文件不存在".to_string()));
-        }
-        let backup_name = format!(
-            "codex-config-{}.toml",
-            chrono::Utc::now().format("%Y%m%d%H%M%S")
-        );
-        let backup_path = Path::new(&profile.skills_path)
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join("backups")
-            .join(backup_name);
-        if let Some(parent) = backup_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::copy(&path, &backup_path)?;
-        Ok(backup_path)
+        mcp_adapter::backup_config_file(&path, backup_root, "codex-config", "toml", AGENT_LABEL)
     }
 
     fn config_path(&self, profile: &AgentProfile) -> AppResult<PathBuf> {
-        // 优先使用 adapter_config 中的自定义路径
-        if let Some(config) = &profile.adapter_config {
-            if let Some(path) = config.get("mcpConfigPath").and_then(|v| v.as_str()) {
-                let trimmed = path.trim();
-                if !trimmed.is_empty() {
-                    return Ok(PathBuf::from(trimmed));
-                }
-            }
-        }
-        Self::codex_config_path()
-            .ok_or_else(|| AppError::Message("无法确定 Codex 配置路径".to_string()))
+        mcp_adapter::resolve_mcp_config_path(
+            &profile.adapter_config,
+            &["toml"],
+            Self::default_config_path(),
+            AGENT_LABEL,
+        )
     }
-}
-
-/// 简单的 MD5 哈希（用于 fingerprint，非密码学用途）
-fn md5_hash(input: &str) -> u128 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    input.hash(&mut hasher);
-    hasher.finish() as u128
 }
 
 #[cfg(test)]

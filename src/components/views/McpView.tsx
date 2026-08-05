@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { handleCardActivation } from "../../lib/utils";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
+import { Dialog } from "../ui/Dialog";
 import type {
   AgentProfile,
   ConflictPolicy,
   GroupedMcpServer,
   McpServerConfig,
   McpTransport,
+  SkillsFilter,
 } from "../../types";
 
 interface McpViewProps {
@@ -28,7 +32,7 @@ export function McpView({ servers, agents, busy, noFullCoverageMcpTitles, onAdd,
   const [selectedServer, setSelectedServer] = useState<GroupedMcpServer | null>(null);
   const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>([]);
   const [conflictPolicy, setConflictPolicy] = useState<ConflictPolicy>("backupOverwrite");
-  const [filter, setFilter] = useState<"all" | "covered" | "partial" | "needed">("all");
+  const [filter, setFilter] = useState<SkillsFilter>("all");
   const [discardConfirm, setDiscardConfirm] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [formDiscardConfirm, setFormDiscardConfirm] = useState(false);
@@ -196,7 +200,7 @@ export function McpView({ servers, agents, busy, noFullCoverageMcpTitles, onAdd,
             <button className="btn btn-secondary btn-sm" onClick={onRefresh} disabled={busy} type="button" title="刷新">
               <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>
             </button>
-            <button className="btn btn-primary" onClick={handleAdd} disabled={busy}>添加 MCP</button>
+            <button className="btn btn-primary" onClick={handleAdd} disabled={busy} type="button">添加 MCP</button>
           </div>
         </div>
         <div className="skills-list">
@@ -298,7 +302,7 @@ function McpServerItem({ server, mcpAgents, noFullCoverageMcpTitles, onClick }: 
   };
 
   return (
-    <div className="skill-item" onClick={onClick} role="button" tabIndex={0}>
+    <div className="skill-item" onClick={onClick} onKeyDown={(e) => handleCardActivation(e, onClick)} role="button" tabIndex={0}>
       <div className="skill-icon">
         <svg className="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83" /></svg>
       </div>
@@ -337,8 +341,7 @@ function McpSyncDialog({ server, mcpAgents, busy, selectedAgentIds, conflictPoli
   const rawConfig = server.copies[0]?.rawConfig;
 
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0, 0, 0, 0.28)", padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ maxHeight: "88vh", width: "100%", maxWidth: 960, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.06)" }}>
+    <Dialog maxWidth={960} large onClose={onClose}>
         {/* Header */}
         <div style={{ display: "flex", alignItems: "flex-start", gap: 12, borderBottom: "1px solid var(--border)", padding: "20px 24px" }}>
           <div style={{ width: 40, height: 40, background: "var(--accent-light)", borderRadius: "var(--radius-sm)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)", flexShrink: 0 }}>
@@ -385,7 +388,7 @@ function McpSyncDialog({ server, mcpAgents, busy, selectedAgentIds, conflictPoli
             {rawConfig && (
               <div style={{ marginTop: 16 }}>
                 <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>原始配置</p>
-                <pre style={{ fontFamily: "var(--font-mono)", fontSize: 12, lineHeight: 1.6, padding: "12px 14px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{rawConfig}</pre>
+                <pre style={{ fontFamily: "var(--font-mono)", fontSize: 12, lineHeight: 1.6, padding: "12px 14px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{maskSensitiveJson(rawConfig)}</pre>
               </div>
             )}
           </div>
@@ -486,8 +489,7 @@ function McpSyncDialog({ server, mcpAgents, busy, selectedAgentIds, conflictPoli
             )}
           </div>
         </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }
 
@@ -496,6 +498,36 @@ function McpSyncDialog({ server, mcpAgents, busy, selectedAgentIds, conflictPoli
 function maskValue(value: string): string {
   if (value.length <= 8) return "***";
   return value.slice(0, 4) + "..." + value.slice(-4);
+}
+
+// 敏感键：命中后其值（或整棵子树）在原始配置展示时被脱敏
+const SENSITIVE_RAW_KEY = /^(token|api[_-]?key|secret|password|authorization|env|headers)$/i;
+
+/** 对原始配置 JSON 字符串做脱敏；解析失败则原样返回。 */
+function maskSensitiveJson(raw: string): string {
+  try {
+    return JSON.stringify(maskJsonValue(JSON.parse(raw)), null, 2);
+  } catch {
+    return raw;
+  }
+}
+
+function maskJsonValue(value: unknown, force = false): unknown {
+  if (typeof value === "string") {
+    return force ? maskValue(value) : value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => maskJsonValue(item, force));
+  }
+  if (value && typeof value === "object") {
+    const masked: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      const sensitive = force || SENSITIVE_RAW_KEY.test(key);
+      masked[key] = maskJsonValue(item, sensitive);
+    }
+    return masked;
+  }
+  return value;
 }
 
 function parseEnvText(text: string): Record<string, string> {
@@ -564,6 +596,7 @@ function McpFormDialog({ server, agents, selectedAgentIds, onClose, onSubmit }: 
   const [targetAgentIds, setTargetAgentIds] = useState<string[]>(selectedAgentIds);
   const [conflictPolicy, setConflictPolicy] = useState<ConflictPolicy>("backupOverwrite");
   const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
   const [inputMode, setInputMode] = useState<"form" | "json">("form");
   const [jsonInput, setJsonInput] = useState("");
   const jsonRef = useRef<HTMLTextAreaElement>(null);
@@ -642,31 +675,37 @@ function McpFormDialog({ server, agents, selectedAgentIds, onClose, onSubmit }: 
 
   async function handleSubmit() {
     if (!name.trim()) return;
+    setFormError(null);
     setSubmitting(true);
     try {
       let config: McpServerConfig;
       if (inputMode === "json") {
-        const parsed = JSON.parse(jsonInput);
-        const { serverName: parsedName, obj } = unwrapMcpServers(parsed);
-        // 如果用户没有手动改名称，使用 JSON 中解析出的名称
-        if (!name.trim() || name.trim() === "unnamed") {
-          setName(parsedName);
+        try {
+          const parsed = JSON.parse(jsonInput);
+          const { serverName: parsedName, obj } = unwrapMcpServers(parsed);
+          // 如果用户没有手动改名称，使用 JSON 中解析出的名称
+          if (!name.trim() || name.trim() === "unnamed") {
+            setName(parsedName);
+          }
+          const cmd = obj.command as string | undefined;
+          const urlStr = obj.url as string | undefined;
+          const argsArr = obj.args as string[] | undefined;
+          const envObj = obj.env as Record<string, string> | undefined;
+          const headersObj = obj.headers as Record<string, string> | undefined;
+          const transportStr = obj.transport as string | undefined;
+          config = {
+            name: name.trim() || parsedName,
+            transport: urlStr ? (transportStr === "sse" ? "sse" : "http") : "stdio",
+            command: cmd,
+            args: argsArr ?? [],
+            env: envObj ?? {},
+            url: urlStr,
+            headers: headersObj ?? {},
+          };
+        } catch {
+          setFormError("JSON 解析失败，请检查格式。");
+          return;
         }
-        const cmd = obj.command as string | undefined;
-        const urlStr = obj.url as string | undefined;
-        const argsArr = obj.args as string[] | undefined;
-        const envObj = obj.env as Record<string, string> | undefined;
-        const headersObj = obj.headers as Record<string, string> | undefined;
-        const transportStr = obj.transport as string | undefined;
-        config = {
-          name: name.trim() || parsedName,
-          transport: urlStr ? (transportStr === "sse" ? "sse" : "http") : "stdio",
-          command: cmd,
-          args: argsArr ?? [],
-          env: envObj ?? {},
-          url: urlStr,
-          headers: headersObj ?? {},
-        };
       } else {
         config = {
           name: name.trim(),
@@ -683,8 +722,7 @@ function McpFormDialog({ server, agents, selectedAgentIds, onClose, onSubmit }: 
   }
 
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0, 0, 0, 0.28)", padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ maxHeight: "88vh", width: "100%", maxWidth: 640, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.06)" }}>
+    <Dialog maxWidth={640} large onClose={onClose}>
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", gap: 12, borderBottom: "1px solid var(--border)", padding: "20px 24px" }}>
           <div style={{ width: 40, height: 40, background: "var(--accent-light)", borderRadius: "var(--radius-sm)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)", flexShrink: 0 }}>
@@ -784,39 +822,14 @@ function McpFormDialog({ server, agents, selectedAgentIds, onClose, onSubmit }: 
         </div>
 
         {/* Footer */}
+        {formError && (
+          <div style={{ fontSize: 12.5, color: "var(--danger)", padding: "0 24px 12px" }}>{formError}</div>
+        )}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, borderTop: "1px solid var(--border)", background: "var(--surface-raised)", padding: "16px 24px" }}>
           <button className="btn btn-primary" onClick={handleSubmit} disabled={submitting || !name.trim()}>{submitting ? "提交中..." : isEdit ? "更新" : "添加"}</button>
         </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }
 
-// ── 确认对话框 ──────────────────────────────────────────────────────
-
-function ConfirmDialog({
-  title, message, confirmLabel, busy,
-  onClose, onConfirm,
-}: {
-  title: string;
-  message: string;
-  confirmLabel: string;
-  busy: boolean;
-  onClose: () => void;
-  onConfirm: () => void;
-}) {
-  return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0, 0, 0, 0.36)", padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 420, borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(0,0,0,0.14)" }}>
-        <div style={{ padding: "20px 24px" }}>
-          <h3 style={{ fontSize: 15, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>{title}</h3>
-          <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6 }}>{message}</p>
-        </div>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "14px 24px", borderTop: "1px solid var(--border)" }}>
-          <button className="btn btn-secondary" onClick={onClose} disabled={busy} type="button">取消</button>
-          <button className="btn btn-danger" onClick={onConfirm} disabled={busy} type="button">{confirmLabel}</button>
-        </div>
-      </div>
-    </div>
-  );
-}
+// ── 确认对话框使用共享组件 src/components/ui/ConfirmDialog ──────────────────

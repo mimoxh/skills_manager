@@ -2,12 +2,9 @@ import { useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import type { AgentProfile, AgentSkillCopy, ConflictPolicy } from "../../types";
 import { UserTagEditor } from "./UserTagEditor";
-
-const policyOptions: Array<{ value: ConflictPolicy; label: string; helper: string }> = [
-  { value: "backupOverwrite", label: "备份覆盖", helper: "保留备份后更新目标目录" },
-  { value: "skip", label: "跳过冲突", helper: "目标已存在时不做修改" },
-  { value: "rename", label: "另存副本", helper: "生成带时间戳的新副本" },
-];
+import { matchesTags } from "../../lib/utils";
+import { Dialog } from "../ui/Dialog";
+import { policyOptions } from "../../lib/policyOptions";
 
 interface SkillInstallDialogProps {
   agents: AgentProfile[];
@@ -107,8 +104,7 @@ export function SkillInstallDialog({
   }
 
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0, 0, 0, 0.28)", padding: 20 }}>
-      <div onClick={(event) => event.stopPropagation()} style={{ maxHeight: "88vh", width: "100%", maxWidth: 980, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: "var(--radius-lg)", border: "1px solid var(--border)", background: "var(--surface-raised)", boxShadow: "0 18px 55px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.06)" }}>
+    <Dialog maxWidth={980} large onClose={onClose}>
         <div style={{ display: "flex", alignItems: "flex-start", gap: 12, borderBottom: "1px solid var(--border)", padding: "20px 24px" }}>
           <div style={{ width: 40, height: 40, background: "var(--accent-light)", borderRadius: "var(--radius-sm)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)", flexShrink: 0 }}>
             <svg className="icon" viewBox="0 0 24 24"><polygon points="12 2 2 7 12 12 22 7 12 2" /><polyline points="2 17 12 22 22 17" /><polyline points="2 12 12 17 22 12" /></svg>
@@ -322,16 +318,10 @@ export function SkillInstallDialog({
             </button>
           </div>
         </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }
 
 function matchesAgentTagFilters(agent: AgentProfile, selectedTags: string[]): boolean {
-  if (!selectedTags.length) return true;
-  if (selectedTags.includes("__untagged__")) {
-    return !(agent.userTags ?? []).length;
-  }
-  const tags = new Set((agent.userTags ?? []).map((tag) => tag.toLowerCase()));
-  return selectedTags.every((tag) => tags.has(tag.toLowerCase()));
+  return matchesTags(agent.userTags, selectedTags);
 }

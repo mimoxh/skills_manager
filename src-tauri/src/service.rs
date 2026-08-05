@@ -1,44 +1,48 @@
 use crate::{
     adapter::{AgentAdapter, adapter_for, built_in_adapters},
     catalog::{
-        CLAWHUB_API_CACHE_FILE, parse_clawhub_api_catalog, scan_catalog_repository,
-        scan_clawhub_api_cache, sort_catalog_skills,
+        CLAWHUB_API_CACHE_FILE, scan_catalog_repository, scan_clawhub_api_cache,
+        sort_catalog_skills,
     },
-    catalog_index::{CatalogIndex, RefreshStatePatch},
+    catalog_index::CatalogIndex,
+    catalog_refresh::{built_in_catalog_sources, refresh_key},
     cherry_studio::CherryStudioAdapter,
     error::{AppError, AppResult},
     hash::{copy_dir_all, hash_dir},
     manifest::{read_skill, scan_repository, scan_skill_md_only, synthesize_manifest_from_skill_md},
     mcp_service::McpService,
     models::{
-        AgentProfile, AgentSkillCopy, AgentType, CatalogFilters, CatalogInstallStatus,
-        CatalogRefreshResult, CatalogRefreshStatus, CatalogSafetyMode, CatalogSearchResult,
-        CatalogSkill, CatalogSort, CatalogSource, CatalogSourceKind, ConflictPolicy, GroupedSkill,
-        ImportSkillFile, ImportSkillResult, InitialData, InstallResult,
+        AgentProfile, AgentType, CatalogFilters, CatalogInstallStatus, CatalogRefreshResult,
+        CatalogRefreshStatus, CatalogSafetyMode, CatalogSearchResult, CatalogSkill, CatalogSort,
+        CatalogSource, CatalogSourceKind, ConflictPolicy, GroupedSkill, ImportSkillFile,
+        ImportSkillResult, InitialData, InstallResult,
     },
-    store::AppStore,
+    skill_scan::{
+        group_agent_skills, read_agent_skill_readme, register_claude_cowork_skill,
+        scan_agent_skill_copies,
+    },
+    store::{AppStore, InstallRecordInput},
+    util::{
+        catalog_matches_filters, catalog_matches_query, catalog_skill_is_installed,
+        command_no_window, normalize_title, page_catalog_skills, safe_label, safe_relative_path,
+    },
 };
-use chrono::{DateTime, Utc};
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 use std::{
-    cmp::Ordering,
     collections::{HashMap, HashSet},
     fs,
-    io::{Cursor, Read},
-    path::{Component, Path, PathBuf},
-    process::Command,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::{Duration, SystemTime},
 };
-use zip::ZipArchive;
 
 #[derive(Clone)]
 pub struct AppService {
-    store: Arc<AppStore>,
-    mcp_service: Arc<McpService>,
-    catalog_index: Arc<CatalogIndex>,
-    catalog_refresh_cancel: Arc<Mutex<HashSet<String>>>,
+    pub(crate) store: Arc<AppStore>,
+    pub(crate) mcp_service: Arc<McpService>,
+    pub(crate) catalog_index: Arc<CatalogIndex>,
+    pub(crate) catalog_refresh_cancel: Arc<Mutex<HashSet<String>>>,
+    /// 已安装集合缓存（installed_titles, installed_slugs）。
+    /// search_catalog_skills 只需算一次，变更点（安装/同步/导入/卸载/回滚/agent 增删）时失效。
+    installed_cache: Arc<Mutex<Option<(HashSet<String>, HashSet<String>)>>>,
 }
 
 impl AppService {
@@ -47,9 +51,10 @@ impl AppService {
         let catalog_index = Arc::new(CatalogIndex::new(&store.data_dir())?);
         Ok(Self {
             store: Arc::clone(&store),
-            mcp_service: Arc::new(McpService::new(store)),
+            mcp_service: Arc::new(McpService::new(&store)),
             catalog_index,
             catalog_refresh_cancel: Arc::new(Mutex::new(HashSet::new())),
+            installed_cache: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -58,12 +63,13 @@ impl AppService {
         let store = Arc::new(AppStore::in_memory()?);
         Ok(Self {
             store: Arc::clone(&store),
-            mcp_service: Arc::new(McpService::new(store)),
+            mcp_service: Arc::new(McpService::new(&store)),
             catalog_index: Arc::new(CatalogIndex::new(&std::env::temp_dir().join(format!(
                 "skill-sync-manager-test-index-{}",
                 chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
             )))?),
             catalog_refresh_cancel: Arc::new(Mutex::new(HashSet::new())),
+            installed_cache: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -97,6 +103,54 @@ impl AppService {
 
     pub fn import_root(&self) -> PathBuf {
         self.store.import_root()
+    }
+
+    /// 解析安装冲突，返回 (目标路径, action, 备份路径)。
+    /// - 目标不存在：直接安装，action = "installed"。
+    /// - Prompt：返回 Err（需用户先决策）。
+    /// - Skip：返回 None（调用方跳过该 agent）。
+    /// - Rename：目标改名（`{名}-{时间戳}`），action = "renamed"。
+    /// - BackupOverwrite：备份到 data_dir/backups 后清空目标（Cowork 除外，避免破坏 manifest），action = "updated"。
+    /// 三条安装路径（安装/同步/导入）共用，消除三份冲突处理逻辑重复。
+    fn resolve_install_conflict(
+        &self,
+        agent: &AgentProfile,
+        skills_path: &Path,
+        target_dir_name: &str,
+        skill_label: &str,
+        conflict_policy: &ConflictPolicy,
+    ) -> AppResult<Option<(PathBuf, String, Option<String>)>> {
+        let target = skills_path.join(target_dir_name);
+        if !target.exists() {
+            return Ok(Some((target, "installed".to_string(), None)));
+        }
+        match conflict_policy {
+            ConflictPolicy::Prompt => Err(AppError::Message(
+                "目标已存在。请先选择备份覆盖、跳过冲突或另存副本策略。".to_string(),
+            )),
+            ConflictPolicy::Skip => Ok(None),
+            ConflictPolicy::Rename => {
+                let suffix = chrono::Utc::now().format("%Y%m%d%H%M%S%3f").to_string();
+                let renamed = skills_path.join(format!("{}-{}", target_dir_name, suffix));
+                Ok(Some((renamed, "renamed".to_string(), None)))
+            }
+            ConflictPolicy::BackupOverwrite => {
+                let backup = self
+                    .backup_root()
+                    .join(safe_label(&agent.id))
+                    .join(safe_label(skill_label))
+                    .join(chrono::Utc::now().format("%Y%m%d%H%M%S%3f").to_string());
+                copy_dir_all(&target, &backup)?;
+                if agent.agent_type != AgentType::ClaudeCowork {
+                    fs::remove_dir_all(&target)?;
+                }
+                Ok(Some((
+                    target,
+                    "updated".to_string(),
+                    Some(backup.to_string_lossy().to_string()),
+                )))
+            }
+        }
     }
 
     pub fn detect_agents(&self) -> AppResult<Vec<AgentProfile>> {
@@ -143,6 +197,11 @@ impl AppService {
             agents,
             no_full_coverage_titles,
             no_full_coverage_mcp_titles,
+            default_catalog_source_id: built_in_catalog_sources()
+                .into_iter()
+                .next()
+                .map(|source| source.id)
+                .unwrap_or_else(|| "clawhub".to_string()),
         })
     }
 
@@ -186,11 +245,14 @@ impl AppService {
         let adapter = adapter_for(&profile);
         adapter.validate(&profile)?;
         self.store.save_agent(&profile)?;
+        self.invalidate_installed_cache();
         Ok(profile)
     }
 
     pub fn remove_agent(&self, agent_id: &str) -> AppResult<()> {
-        self.store.remove_agent(agent_id)
+        self.store.remove_agent(agent_id)?;
+        self.invalidate_installed_cache();
+        Ok(())
     }
 
     pub fn list_catalog_sources(&self) -> AppResult<Vec<CatalogSource>> {
@@ -205,7 +267,7 @@ impl AppService {
                 source.last_refreshed_at = fs::metadata(&cache_path)
                     .ok()
                     .and_then(|metadata| metadata.modified().ok())
-                    .map(|time| DateTime::<Utc>::from(time).to_rfc3339());
+                    .map(crate::util::system_time_to_rfc3339);
             }
         }
         Ok(sources)
@@ -241,9 +303,13 @@ impl AppService {
         let cache_path = self.catalog_cache_path(&source);
         fs::create_dir_all(self.catalog_cache_root())?;
 
-        let skill_count = if source.id == "clawhub" {
-            self.refresh_clawhub_index(CatalogSafetyMode::All)?
-        } else if cache_path.join(".git").is_dir() {
+        if source.id == "clawhub" {
+            // ClawHub 内置源经 startCatalogRefresh 后台刷新，避免在此同步阻塞主线程
+            return Err(AppError::Message(
+                "ClawHub 内置源请使用 startCatalogRefresh 后台刷新。".to_string(),
+            ));
+        }
+        let skill_count = if cache_path.join(".git").is_dir() {
             let output = command_no_window("git")
                 .arg("-C")
                 .arg(&cache_path)
@@ -293,7 +359,7 @@ impl AppService {
         safety_mode: CatalogSafetyMode,
     ) -> AppResult<CatalogRefreshStatus> {
         if source_id != "clawhub" {
-            let _ = self.refresh_catalog_source(source_id)?;
+            self.refresh_catalog_source(source_id)?;
             return self.get_catalog_refresh_status(source_id, safety_mode);
         }
         let key = refresh_key(source_id, safety_mode);
@@ -304,7 +370,7 @@ impl AppService {
                 .map_err(|_| AppError::Message("Refresh cancel lock poisoned".to_string()))?;
             cancel.remove(&key);
         }
-        let _ = self.catalog_index.begin_refresh("clawhub", safety_mode)?;
+        self.catalog_index.begin_refresh("clawhub", safety_mode)?;
         let service = self.clone();
         let source_id = source_id.to_string();
         std::thread::spawn(move || {
@@ -345,16 +411,20 @@ impl AppService {
         self.mark_catalog_refresh_cancelled(source_id, safety_mode)
     }
 
-    pub fn search_catalog_skills(
-        &self,
-        query: Option<&str>,
-        sort: CatalogSort,
-        filters: CatalogFilters,
-        page: Option<usize>,
-        page_size: Option<usize>,
-    ) -> AppResult<CatalogSearchResult> {
-        let sources = self.list_catalog_sources()?;
-        let installed = self.scan_agent_skills().unwrap_or_default();
+    /// 计算已安装集合（titles + slugs）。带缓存：search_catalog_skills 反复调用时避免全量重扫，
+    /// 安装/同步/导入/卸载/回滚/agent 增删等变更点调用 invalidate_installed_cache 失效。
+    fn installed_sets(&self) -> AppResult<(HashSet<String>, HashSet<String>)> {
+        let cache_hit = {
+            let cache = self
+                .installed_cache
+                .lock()
+                .map_err(|_| AppError::Message("Installed cache lock poisoned".to_string()))?;
+            cache.clone()
+        };
+        if let Some(sets) = cache_hit {
+            return Ok(sets);
+        }
+        let installed = self.scan_agent_skills()?;
         let installed_titles = installed
             .iter()
             .map(|skill| normalize_title(&skill.title))
@@ -369,6 +439,30 @@ impl AppService {
                     .map(normalize_title)
             })
             .collect::<HashSet<_>>();
+        let sets = (installed_titles, installed_slugs);
+        if let Ok(mut cache) = self.installed_cache.lock() {
+            *cache = Some(sets.clone());
+        }
+        Ok(sets)
+    }
+
+    /// 失效已安装集合缓存，在安装/同步/导入/卸载/回滚/agent 增删等变更后调用。
+    fn invalidate_installed_cache(&self) {
+        if let Ok(mut cache) = self.installed_cache.lock() {
+            *cache = None;
+        }
+    }
+
+    pub fn search_catalog_skills(
+        &self,
+        query: Option<&str>,
+        sort: CatalogSort,
+        filters: CatalogFilters,
+        page: Option<usize>,
+        page_size: Option<usize>,
+    ) -> AppResult<CatalogSearchResult> {
+        let sources = self.list_catalog_sources()?;
+        let (installed_titles, installed_slugs) = self.installed_sets()?;
         let q = query.unwrap_or("").trim().to_ascii_lowercase();
         let mut skills = Vec::new();
 
@@ -389,17 +483,20 @@ impl AppService {
                     .unwrap_or_default()
                     > 0
                 {
-                    let result = self.catalog_index.query(
-                        &source,
-                        &q,
-                        sort,
-                        &filters,
-                        &installed_titles,
-                        &installed_slugs,
-                        page.unwrap_or(1),
-                        page_size.unwrap_or(100),
-                    )?;
-                    return Ok(result);
+                    // 取 ClawHub 全部匹配项，与其它源合并后统一在内存中过滤/排序/分页，
+                    // 避免提前 return 导致 claude/codex/自定义 git 源永不参与搜索
+                    self.catalog_index
+                        .query(
+                            &source,
+                            &q,
+                            sort.clone(),
+                            &filters,
+                            &installed_titles,
+                            &installed_slugs,
+                            1,
+                            usize::MAX,
+                        )?
+                        .items
                 } else if cache_path.join(CLAWHUB_API_CACHE_FILE).exists()
                     && filters.safety_mode == CatalogSafetyMode::All
                 {
@@ -430,6 +527,29 @@ impl AppService {
         ))
     }
 
+    /// 按完整 id 跨启用源直查 catalog skill（clawhub 走 SQL 索引，其余走仓库扫描），
+    /// 避免通过"最近更新前 500"的搜索窗口查找导致老技能无法安装。
+    fn find_catalog_skill_by_id(&self, catalog_skill_id: &str) -> AppResult<Option<CatalogSkill>> {
+        let sources = self.list_catalog_sources()?;
+        for source in sources.into_iter().filter(|source| source.enabled) {
+            let cache_path = self.catalog_cache_path(&source);
+            if source.id == "clawhub" {
+                if let Some(found) = self.catalog_index.find_by_id(&source.id, catalog_skill_id)? {
+                    return Ok(Some(found));
+                }
+            } else if cache_path.exists() {
+                let scanned = scan_catalog_repository(&cache_path, &source)?;
+                if let Some(found) = scanned
+                    .into_iter()
+                    .find(|skill| skill.id == catalog_skill_id)
+                {
+                    return Ok(Some(found));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     pub fn install_catalog_skill(
         &self,
         catalog_skill_id: &str,
@@ -440,16 +560,7 @@ impl AppService {
             return Err(AppError::Message("请至少选择一个目标 Agent。".to_string()));
         }
         let skill = self
-            .search_catalog_skills(
-                None,
-                CatalogSort::UpdatedDesc,
-                CatalogFilters::default(),
-                Some(1),
-                Some(usize::MAX),
-            )?
-            .items
-            .into_iter()
-            .find(|skill| skill.id == catalog_skill_id)
+            .find_catalog_skill_by_id(catalog_skill_id)?
             .ok_or_else(|| {
                 AppError::Message(format!("找不到 catalog skill: {}", catalog_skill_id))
             })?;
@@ -465,89 +576,104 @@ impl AppService {
             .and_then(|value| value.to_str())
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| AppError::Message("来源 skill 路径无效".to_string()))?;
-        let source_fingerprint = hash_dir(source_path).unwrap_or_default();
+        let source_fingerprint = hash_dir(source_path)?;
         let agents = self.list_agents()?;
         let agent_map: HashMap<_, _> = agents
             .into_iter()
             .map(|agent| (agent.id.clone(), agent))
             .collect();
         let mut results = Vec::new();
+        let mut install_records: Vec<InstallRecordInput> = Vec::new();
+
+        // 先校验全部目标 agent 存在，再执行安装，避免循环中途失败留下半完成状态
+        for agent_id in &target_agent_ids {
+            if !agent_map.contains_key(agent_id) {
+                return Err(AppError::Message(format!("找不到 Agent: {}", agent_id)));
+            }
+        }
 
         for agent_id in target_agent_ids {
             let agent = agent_map
                 .get(&agent_id)
                 .ok_or_else(|| AppError::Message(format!("找不到 Agent: {}", agent_id)))?;
-            fs::create_dir_all(&agent.skills_path)?;
-            let mut target = Path::new(&agent.skills_path).join(source_dir_name);
-            let mut action = if target.exists() {
-                "updated"
-            } else {
-                "installed"
-            }
-            .to_string();
-            let mut backup_path = None;
-
-            if target.exists() {
-                match conflict_policy {
-                    ConflictPolicy::Prompt => {
-                        return Err(AppError::Message(
-                            "目标已存在。请先选择备份覆盖、跳过冲突或另存副本策略。".to_string(),
-                        ));
-                    }
-                    ConflictPolicy::Skip => {
-                        results.push(InstallResult {
-                            agent_id: agent.id.clone(),
-                            skill_id: skill.name.clone(),
-                            action: "skipped".to_string(),
-                            target_path: target.to_string_lossy().to_string(),
-                            backup_path: None,
-                            message: format!("已跳过 {}", skill.name),
-                        });
-                        continue;
-                    }
-                    ConflictPolicy::Rename => {
-                        let suffix = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
-                        target = Path::new(&agent.skills_path)
-                            .join(format!("{}-{}", source_dir_name, suffix));
-                        action = "renamed".to_string();
-                    }
-                    ConflictPolicy::BackupOverwrite => {
-                        let backup = self
-                            .backup_root()
-                            .join(safe_label(&agent.id))
-                            .join(safe_label(&skill.name))
-                            .join(chrono::Utc::now().format("%Y%m%d%H%M%S").to_string());
-                        copy_dir_all(&target, &backup)?;
-                        backup_path = Some(backup.to_string_lossy().to_string());
+            let skills_path = Path::new(&agent.skills_path);
+            fs::create_dir_all(skills_path)?;
+            // 逐 agent 失败隔离：单个 agent 安装失败记录为 error 结果，不中断整批
+            let outcome = (|| -> AppResult<InstallResult> {
+                let Some((target, action, backup_path)) = self.resolve_install_conflict(
+                    agent,
+                    skills_path,
+                    source_dir_name,
+                    &skill.name,
+                    &conflict_policy,
+                )? else {
+                    return Ok(InstallResult {
+                        agent_id: agent.id.clone(),
+                        skill_id: skill.name.clone(),
+                        action: "skipped".to_string(),
+                        target_path: skills_path.join(source_dir_name).to_string_lossy().to_string(),
+                        backup_path: None,
+                        message: format!("已跳过 {}", skill.name),
+                    });
+                };
+                if agent.agent_type == AgentType::CherryStudio {
+                    let cs = CherryStudioAdapter::new().ok_or_else(|| {
+                        AppError::Message(
+                            "未找到 Cherry Studio 安装目录（%APPDATA%\\CherryStudio 缺失），无法安装。"
+                                .to_string(),
+                        )
+                    })?;
+                    // 复制到 Cherry Studio Skills 目录并在 agents.db 中注册，避免"文件在但技能不可见"
+                    cs.install_skill(source_path, source_dir_name)?;
+                } else {
+                    copy_dir_all(source_path, &target)?;
+                    if agent.agent_type == AgentType::ClaudeCowork {
+                        let target_dir_name = target
+                            .file_name()
+                            .and_then(|value| value.to_str())
+                            .unwrap_or(source_dir_name);
+                        register_claude_cowork_skill(agent, target_dir_name, &target)?;
                     }
                 }
+                // 批量记录：先收集，循环结束后统一一次 save（M-B16）
+                install_records.push(InstallRecordInput {
+                    agent_id: agent.id.clone(),
+                    skill_id: skill.name.clone(),
+                    fingerprint: source_fingerprint.clone(),
+                    target_path: target.to_string_lossy().to_string(),
+                    action: action.clone(),
+                    backup_path: backup_path.clone(),
+                });
+                let install_msg = match action.as_str() {
+                    "updated" => format!("已更新 {} 到 {}", skill.name, agent.name),
+                    "renamed" => format!("已另存副本 {} 到 {}", skill.name, agent.name),
+                    _ => format!("已安装 {} 到 {}", skill.name, agent.name),
+                };
+                Ok(InstallResult {
+                    agent_id: agent.id.clone(),
+                    skill_id: skill.name.clone(),
+                    action,
+                    target_path: target.to_string_lossy().to_string(),
+                    backup_path,
+                    message: install_msg,
+                })
+            })();
+            match outcome {
+                Ok(result) => results.push(result),
+                Err(error) => results.push(InstallResult {
+                    agent_id: agent.id.clone(),
+                    skill_id: skill.name.clone(),
+                    action: "error".to_string(),
+                    target_path: skills_path.join(source_dir_name).to_string_lossy().to_string(),
+                    backup_path: None,
+                    message: format!("安装 {} 到 {} 失败: {}", skill.name, agent.name, error),
+                }),
             }
-
-            copy_dir_all(source_path, &target)?;
-            if agent.agent_type == AgentType::ClaudeCowork {
-                let target_dir_name = target
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or(source_dir_name);
-                register_claude_cowork_skill(agent, target_dir_name, &target)?;
-            }
-            self.store.record_install(
-                &agent.id,
-                &skill.name,
-                &source_fingerprint,
-                &target.to_string_lossy(),
-                &action,
-                backup_path.as_deref(),
-            )?;
-            results.push(InstallResult {
-                agent_id: agent.id.clone(),
-                skill_id: skill.name.clone(),
-                action,
-                target_path: target.to_string_lossy().to_string(),
-                backup_path,
-                message: format!("已安装 {} 到 {}", skill.name, agent.name),
-            });
         }
+        if !install_records.is_empty() {
+            self.store.record_installs(&install_records)?;
+        }
+        self.invalidate_installed_cache();
         Ok(results)
     }
 
@@ -603,6 +729,14 @@ impl AppService {
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| AppError::Message("来源 skill 路径无效".to_string()))?;
         let mut results = Vec::new();
+        let mut install_records: Vec<InstallRecordInput> = Vec::new();
+
+        // 先校验全部目标 agent 存在，再执行安装，避免循环中途失败留下半完成状态
+        for agent_id in &target_agent_ids {
+            if !agent_map.contains_key(agent_id) {
+                return Err(AppError::Message(format!("找不到 Agent: {}", agent_id)));
+            }
+        }
 
         for agent_id in target_agent_ids {
             if agent_id == source.agent_id {
@@ -619,82 +753,80 @@ impl AppService {
             let agent = agent_map
                 .get(&agent_id)
                 .ok_or_else(|| AppError::Message(format!("找不到 Agent: {}", agent_id)))?;
-            fs::create_dir_all(&agent.skills_path)?;
-            let mut target = Path::new(&agent.skills_path).join(source_dir_name);
-            let mut action = if target.exists() {
-                "updated"
-            } else {
-                "installed"
-            }
-            .to_string();
-            let mut backup_path = None;
+            let skills_path = Path::new(&agent.skills_path);
+            fs::create_dir_all(skills_path)?;
+            // 逐 agent 失败隔离：单个 agent 同步失败记录为 error 结果，不中断整批
+            let outcome = (|| -> AppResult<InstallResult> {
+                let Some((target, action, backup_path)) = self.resolve_install_conflict(
+                    agent,
+                    skills_path,
+                    source_dir_name,
+                    title,
+                    &conflict_policy,
+                )? else {
+                    return Ok(InstallResult {
+                        agent_id: agent.id.clone(),
+                        skill_id: title.to_string(),
+                        action: "skipped".to_string(),
+                        target_path: skills_path.join(source_dir_name).to_string_lossy().to_string(),
+                        backup_path: None,
+                        message: format!("已跳过 {}", title),
+                    });
+                };
 
-            if target.exists() {
-                match conflict_policy {
-                    ConflictPolicy::Prompt => {
-                        return Err(AppError::Message(
-                            "目标已存在。请先选择备份覆盖、跳过冲突或另存副本策略。".to_string(),
-                        ));
-                    }
-                    ConflictPolicy::Skip => {
-                        results.push(InstallResult {
-                            agent_id: agent.id.clone(),
-                            skill_id: title.to_string(),
-                            action: "skipped".to_string(),
-                            target_path: target.to_string_lossy().to_string(),
-                            backup_path: None,
-                            message: format!("已跳过 {}", title),
-                        });
-                        continue;
-                    }
-                    ConflictPolicy::Rename => {
-                        let suffix = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
-                        target = Path::new(&agent.skills_path)
-                            .join(format!("{}-{}", source_dir_name, suffix));
-                        action = "renamed".to_string();
-                    }
-                    ConflictPolicy::BackupOverwrite => {
-                        let backup = self
-                            .backup_root()
-                            .join(safe_label(&agent.id))
-                            .join(safe_label(title))
-                            .join(chrono::Utc::now().format("%Y%m%d%H%M%S").to_string());
-                        copy_dir_all(&target, &backup)?;
-                        if agent.agent_type != AgentType::ClaudeCowork {
-                            fs::remove_dir_all(&target)?;
-                        }
-                        backup_path = Some(backup.to_string_lossy().to_string());
-                    }
-                }
-            }
-
-            if agent.agent_type == AgentType::CherryStudio {
-                if let Some(cs) = CherryStudioAdapter::new() {
+                if agent.agent_type == AgentType::CherryStudio {
+                    let cs = CherryStudioAdapter::new().ok_or_else(|| {
+                        AppError::Message(
+                            "未找到 Cherry Studio 安装目录（%APPDATA%\\CherryStudio 缺失），无法安装。"
+                                .to_string(),
+                        )
+                    })?;
                     cs.install_skill(source_path, source_dir_name)?;
+                } else if agent.agent_type == AgentType::ClaudeCowork {
+                    copy_dir_all(source_path, &target)?;
+                    register_claude_cowork_skill(agent, source_dir_name, &target)?;
+                } else {
+                    copy_dir_all(source_path, &target)?;
                 }
-            } else if agent.agent_type == AgentType::ClaudeCowork {
-                copy_dir_all(source_path, &target)?;
-                register_claude_cowork_skill(agent, source_dir_name, &target)?;
-            } else {
-                copy_dir_all(source_path, &target)?;
+                // 批量记录：先收集，循环结束后统一一次 save（M-B16）
+                install_records.push(InstallRecordInput {
+                    agent_id: agent.id.clone(),
+                    skill_id: title.to_string(),
+                    fingerprint: source_fingerprint.clone(),
+                    target_path: target.to_string_lossy().to_string(),
+                    action: action.clone(),
+                    backup_path: backup_path.clone(),
+                });
+                let sync_msg = match action.as_str() {
+                    "updated" => format!("已更新 {} 到 {}", title, agent.name),
+                    "renamed" => format!("已另存副本 {} 到 {}", title, agent.name),
+                    _ => format!("{} 已同步到 {}", title, agent.name),
+                };
+                Ok(InstallResult {
+                    agent_id: agent.id.clone(),
+                    skill_id: title.to_string(),
+                    action,
+                    target_path: target.to_string_lossy().to_string(),
+                    backup_path,
+                    message: sync_msg,
+                })
+            })();
+            match outcome {
+                Ok(result) => results.push(result),
+                Err(error) => results.push(InstallResult {
+                    agent_id: agent.id.clone(),
+                    skill_id: title.to_string(),
+                    action: "error".to_string(),
+                    target_path: skills_path.join(source_dir_name).to_string_lossy().to_string(),
+                    backup_path: None,
+                    message: format!("同步 {} 到 {} 失败: {}", title, agent.name, error),
+                }),
             }
-            self.store.record_install(
-                &agent.id,
-                title,
-                &source_fingerprint,
-                &target.to_string_lossy(),
-                &action,
-                backup_path.as_deref(),
-            )?;
-            results.push(InstallResult {
-                agent_id: agent.id.clone(),
-                skill_id: title.to_string(),
-                action,
-                target_path: target.to_string_lossy().to_string(),
-                backup_path,
-                message: format!("{} 已同步到 {}", title, agent.name),
-            });
         }
+        if !install_records.is_empty() {
+            self.store.record_installs(&install_records)?;
+        }
+        self.invalidate_installed_cache();
         Ok(results)
     }
 
@@ -709,8 +841,14 @@ impl AppService {
             .into_iter()
             .find(|copy| normalize_title(&copy.title) == normalize_title(skill_id))
             .map(|copy| PathBuf::from(copy.skill_path));
-        let target_path =
-            matched_path.unwrap_or_else(|| Path::new(&agent.skills_path).join(skill_id));
+        let target_path = match matched_path {
+            Some(path) => path,
+            None => {
+                // 回退路径：skill_id 可能来自用户输入，先用 safe_relative_path 校验，防止 .. / 绝对路径逃逸出 skills_path
+                let safe = safe_relative_path(skill_id)?;
+                Path::new(&agent.skills_path).join(safe)
+            }
+        };
         let target_name = target_path
             .file_name()
             .and_then(|value| value.to_str())
@@ -718,16 +856,22 @@ impl AppService {
             .unwrap_or(skill_id);
 
         if agent.agent_type == AgentType::CherryStudio {
-            if let Some(cs) = CherryStudioAdapter::new() {
-                cs.uninstall_skill(target_name)?;
-            }
+            let cs = CherryStudioAdapter::new().ok_or_else(|| {
+                AppError::Message(
+                    "未找到 Cherry Studio 安装目录（%APPDATA%\\CherryStudio 缺失），无法卸载。"
+                        .to_string(),
+                )
+            })?;
+            cs.uninstall_skill(target_name)?;
         } else {
             let adapter = adapter_for(&agent);
-            adapter.uninstall(target_name, &agent, &self.backup_root())?;
+            adapter.uninstall(target_name, &agent)?;
         }
 
         self.store
-            .record_uninstall(agent_id, skill_id, &target_path.to_string_lossy(), None)
+            .record_uninstall(agent_id, skill_id, &target_path.to_string_lossy(), None)?;
+        self.invalidate_installed_cache();
+        Ok(())
     }
 
     pub fn uninstall_skill_from_agents(
@@ -753,6 +897,7 @@ impl AppService {
             ));
         }
         copy_dir_all(Path::new(&backup), target_path)?;
+        self.invalidate_installed_cache();
         Ok(())
     }
 
@@ -887,58 +1032,49 @@ impl AppService {
                 let agent = agent_map
                     .get(agent_id)
                     .ok_or_else(|| AppError::Message(format!("找不到 Agent: {}", agent_id)))?;
-                fs::create_dir_all(&agent.skills_path)?;
-                let mut target = Path::new(&agent.skills_path).join(skill_dir_name);
+                let skills_path = Path::new(&agent.skills_path);
+                fs::create_dir_all(skills_path)?;
+                // 逐 agent 失败隔离：单个 agent 导入失败计入 skipped 并继续，不中断整批
+                let outcome = (|| -> AppResult<()> {
+                    let Some((target, _action, _backup_path)) = self.resolve_install_conflict(
+                        agent,
+                        skills_path,
+                        skill_dir_name,
+                        &skill.manifest.id,
+                        &conflict_policy,
+                    )? else {
+                        skipped += 1;
+                        return Ok(());
+                    };
 
-                if target.exists() {
-                    match conflict_policy {
-                        ConflictPolicy::Prompt => {
-                            return Err(AppError::Message(
-                                "目标已存在。请先选择备份覆盖、跳过冲突或另存副本策略。"
+                    if agent.agent_type == AgentType::CherryStudio {
+                        let cs = CherryStudioAdapter::new().ok_or_else(|| {
+                            AppError::Message(
+                                "未找到 Cherry Studio 安装目录（%APPDATA%\\CherryStudio 缺失），无法导入。"
                                     .to_string(),
-                            ));
-                        }
-                        ConflictPolicy::Skip => {
-                            skipped += 1;
-                            continue;
-                        }
-                        ConflictPolicy::Rename => {
-                            let suffix = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
-                            target = Path::new(&agent.skills_path)
-                                .join(format!("{}-{}", skill_dir_name, suffix));
-                        }
-                        ConflictPolicy::BackupOverwrite => {
-                            let backup = self
-                                .backup_root()
-                                .join(safe_label(&agent.id))
-                                .join(safe_label(&skill.manifest.id))
-                                .join(chrono::Utc::now().format("%Y%m%d%H%M%S").to_string());
-                            copy_dir_all(&target, &backup)?;
-                            if agent.agent_type != AgentType::ClaudeCowork {
-                                fs::remove_dir_all(&target)?;
-                            }
-                        }
-                    }
-                }
-
-                if agent.agent_type == AgentType::CherryStudio {
-                    if let Some(cs) = CherryStudioAdapter::new() {
+                            )
+                        })?;
                         cs.install_skill(source, skill_dir_name)?;
+                    } else if agent.agent_type == AgentType::ClaudeCowork {
+                        copy_dir_all(source, &target)?;
+                        let target_dir_name = target
+                            .file_name()
+                            .and_then(|value| value.to_str())
+                            .unwrap_or(skill_dir_name);
+                        register_claude_cowork_skill(agent, target_dir_name, &target)?;
+                    } else {
+                        copy_dir_all(source, &target)?;
                     }
-                } else if agent.agent_type == AgentType::ClaudeCowork {
-                    copy_dir_all(source, &target)?;
-                    let target_dir_name = target
-                        .file_name()
-                        .and_then(|value| value.to_str())
-                        .unwrap_or(skill_dir_name);
-                    register_claude_cowork_skill(agent, target_dir_name, &target)?;
-                } else {
-                    copy_dir_all(source, &target)?;
+                    imported += 1;
+                    Ok(())
+                })();
+                if outcome.is_err() {
+                    skipped += 1;
                 }
-                imported += 1;
             }
         }
 
+        self.invalidate_installed_cache();
         Ok(ImportSkillResult {
             imported,
             skipped,
@@ -969,7 +1105,7 @@ impl AppService {
             .ok_or_else(|| AppError::Message("导入过程中 manifest 不见了。".to_string()))
     }
 
-    fn import_workspace(&self, label: &str) -> AppResult<PathBuf> {
+    pub(crate) fn import_workspace(&self, label: &str) -> AppResult<PathBuf> {
         let workspace = self.import_root().join(format!(
             "{}-{}",
             chrono::Utc::now().timestamp_millis(),
@@ -990,1117 +1126,12 @@ impl AppService {
         }
         Ok(workspace)
     }
-
-    fn refresh_clawhub_index(&self, safety_mode: CatalogSafetyMode) -> AppResult<usize> {
-        let generation = self.catalog_index.begin_refresh("clawhub", safety_mode)?;
-        let status = self.catalog_index.refresh_status("clawhub", safety_mode)?;
-        let mut cursor = status.next_cursor.clone();
-        let mut fetched_count = status.fetched_count;
-        let source = built_in_catalog_sources()
-            .into_iter()
-            .find(|source| source.id == "clawhub")
-            .ok_or_else(|| AppError::Message("找不到 ClawHub 内置源。".to_string()))?;
-        let agent = ureq::AgentBuilder::new()
-            .timeout(Duration::from_secs(45))
-            .build();
-
-        loop {
-            if self.is_catalog_refresh_cancelled("clawhub", safety_mode)? {
-                self.save_catalog_refresh_cancelled(
-                    "clawhub",
-                    safety_mode,
-                    cursor.as_deref(),
-                    fetched_count,
-                    generation,
-                )?;
-                return Ok(fetched_count);
-            }
-
-            let value = self.fetch_clawhub_index_page(&agent, cursor.as_deref(), safety_mode)?;
-            if self.is_catalog_refresh_cancelled("clawhub", safety_mode)? {
-                self.save_catalog_refresh_cancelled(
-                    "clawhub",
-                    safety_mode,
-                    cursor.as_deref(),
-                    fetched_count,
-                    generation,
-                )?;
-                return Ok(fetched_count);
-            }
-            let page_items = value
-                .get("items")
-                .and_then(|value| value.as_array())
-                .cloned()
-                .unwrap_or_default();
-            let page_json = serde_json::json!({ "items": page_items });
-            let skills = parse_clawhub_api_catalog(&page_json.to_string(), &source)?;
-            self.catalog_index
-                .upsert_skills("clawhub", safety_mode, generation, &skills)?;
-            fetched_count += skills.len();
-
-            let next_cursor = value
-                .get("nextCursor")
-                .and_then(|value| value.as_str())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string);
-            self.catalog_index.save_refresh_state(RefreshStatePatch {
-                source_id: "clawhub",
-                safety_mode,
-                cursor: next_cursor.as_deref(),
-                fetched_count,
-                generation,
-                is_running: true,
-                is_complete: false,
-                last_error: None,
-            })?;
-
-            let Some(next_cursor) = next_cursor else {
-                self.catalog_index.finish_refresh(
-                    "clawhub",
-                    safety_mode,
-                    generation,
-                    fetched_count,
-                )?;
-                return Ok(fetched_count);
-            };
-            cursor = Some(next_cursor);
-        }
-    }
-
-    fn fetch_clawhub_index_page(
-        &self,
-        agent: &ureq::Agent,
-        cursor: Option<&str>,
-        safety_mode: CatalogSafetyMode,
-    ) -> AppResult<serde_json::Value> {
-        loop {
-            let mut request = agent
-                .get("https://clawhub.ai/api/v1/skills")
-                .query("limit", "200")
-                .query("sort", "createdAt")
-                .query("dir", "desc");
-            if let Some(cursor_value) = cursor {
-                request = request.query("cursor", cursor_value);
-            }
-            if safety_mode == CatalogSafetyMode::NonSuspicious {
-                request = request.query("nonSuspiciousOnly", "true");
-            }
-            match request.call() {
-                Ok(response) => {
-                    let text = response.into_string().map_err(|error| {
-                        AppError::Message(format!("读取 ClawHub API 响应失败: {}", error))
-                    })?;
-                    return Ok(serde_json::from_str::<serde_json::Value>(&text)?);
-                }
-                Err(ureq::Error::Status(429, response)) => {
-                    let wait = retry_after_delay(&response).min(Duration::from_secs(60));
-                    if wait_for_retry_or_cancel(wait, Duration::from_millis(250), || {
-                        self.is_catalog_refresh_cancelled("clawhub", safety_mode)
-                    })? {
-                        self.mark_catalog_refresh_cancelled("clawhub", safety_mode)?;
-                        return Ok(serde_json::json!({ "items": [] }));
-                    }
-                }
-                Err(error) => return Err(clawhub_http_error(error)),
-            }
-        }
-    }
-
-    fn mark_clawhub_refresh_error(
-        &self,
-        source_id: &str,
-        safety_mode: CatalogSafetyMode,
-        error: &str,
-    ) -> AppResult<()> {
-        let status = self.catalog_index.refresh_status(source_id, safety_mode)?;
-        self.catalog_index.save_refresh_state(RefreshStatePatch {
-            source_id,
-            safety_mode,
-            cursor: status.next_cursor.as_deref(),
-            fetched_count: status.fetched_count,
-            generation: status.generation,
-            is_running: false,
-            is_complete: false,
-            last_error: Some(error),
-        })
-    }
-
-    fn mark_catalog_refresh_cancelled(
-        &self,
-        source_id: &str,
-        safety_mode: CatalogSafetyMode,
-    ) -> AppResult<CatalogRefreshStatus> {
-        let status = self.catalog_index.refresh_status(source_id, safety_mode)?;
-        self.save_catalog_refresh_cancelled(
-            source_id,
-            safety_mode,
-            status.next_cursor.as_deref(),
-            status.fetched_count,
-            status.generation,
-        )?;
-        self.catalog_index.refresh_status(source_id, safety_mode)
-    }
-
-    fn save_catalog_refresh_cancelled(
-        &self,
-        source_id: &str,
-        safety_mode: CatalogSafetyMode,
-        cursor: Option<&str>,
-        fetched_count: usize,
-        generation: i64,
-    ) -> AppResult<()> {
-        self.catalog_index.save_refresh_state(RefreshStatePatch {
-            source_id,
-            safety_mode,
-            cursor,
-            fetched_count,
-            generation,
-            is_running: false,
-            is_complete: false,
-            last_error: Some("用户已取消刷新"),
-        })
-    }
-
-    fn is_catalog_refresh_cancelled(
-        &self,
-        source_id: &str,
-        safety_mode: CatalogSafetyMode,
-    ) -> AppResult<bool> {
-        let cancel = self
-            .catalog_refresh_cancel
-            .lock()
-            .map_err(|_| AppError::Message("Refresh cancel lock poisoned".to_string()))?;
-        Ok(cancel.contains(&refresh_key(source_id, safety_mode)))
-    }
-
-    fn materialize_clawhub_skill(&self, skill: &CatalogSkill) -> AppResult<PathBuf> {
-        let slug = skill
-            .source_path
-            .strip_prefix("clawhub://")
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| AppError::Message("ClawHub skill 来源无效。".to_string()))?;
-        let cache_path = self
-            .catalog_cache_root()
-            .join("clawhub")
-            .join("downloaded")
-            .join(safe_label(slug));
-        if cache_path.join("SKILL.md").exists()
-            || cache_path.join("skill.json").exists()
-            || cache_path.join("skill.yaml").exists()
-            || cache_path.join("skill.yml").exists()
-        {
-            return Ok(cache_path);
-        }
-
-        let mut reader = ureq::AgentBuilder::new()
-            .timeout(Duration::from_secs(60))
-            .build()
-            .get("https://clawhub.ai/api/v1/download")
-            .query("slug", slug)
-            .call()
-            .map_err(clawhub_http_error)?
-            .into_reader();
-        let mut bytes = Vec::new();
-        reader
-            .read_to_end(&mut bytes)
-            .map_err(|error| AppError::Message(format!("下载 ClawHub skill 失败: {}", error)))?;
-        let extracted = self.unpack_zip_bytes(&bytes, slug)?;
-        let source = CatalogSource {
-            id: "clawhub".to_string(),
-            name: "ClawHub".to_string(),
-            url: "https://clawhub.ai/api/v1/skills".to_string(),
-            kind: CatalogSourceKind::BuiltIn,
-            icon: "clawhub".to_string(),
-            enabled: true,
-            last_refreshed_at: None,
-            cache_path: None,
-        };
-        let mut extracted_skills = scan_catalog_repository(&extracted, &source)?;
-        let Some(extracted_skill) = extracted_skills.pop() else {
-            return Err(AppError::Message(format!(
-                "ClawHub skill {} 的下载包中没有找到 SKILL.md。",
-                slug
-            )));
-        };
-        copy_dir_all(Path::new(&extracted_skill.source_path), &cache_path)?;
-        Ok(cache_path)
-    }
-
-    fn unpack_zip_bytes(&self, bytes: &[u8], label: &str) -> AppResult<PathBuf> {
-        let workspace = self.import_workspace(label)?;
-        let extracted = workspace.join("expanded");
-        fs::create_dir_all(&extracted)?;
-        let mut archive = ZipArchive::new(Cursor::new(bytes))?;
-
-        let mut extracted_count = 0u32;
-        let mut skipped_count = 0u32;
-
-        for index in 0..archive.len() {
-            let mut file = archive.by_index(index)?;
-            if file.is_dir() {
-                continue;
-            }
-
-            // Try enclosed_name first (safest), fall back to sanitized raw name
-            let file_path = match file.enclosed_name().map(PathBuf::from) {
-                Some(path) => path,
-                None => {
-                    // Fall back to raw name with manual sanitization
-                    let raw_name = file.name().replace('\\', "/");
-                    let sanitized = sanitize_zip_path(&raw_name);
-                    match sanitized {
-                        Some(path) => path,
-                        None => {
-                            skipped_count += 1;
-                            continue;
-                        }
-                    }
-                }
-            };
-
-            // Skip empty paths
-            if file_path.as_os_str().is_empty() {
-                skipped_count += 1;
-                continue;
-            }
-
-            let destination = extracted.join(&file_path);
-            if let Some(parent) = destination.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            let mut contents = Vec::new();
-            file.read_to_end(&mut contents)?;
-            fs::write(destination, contents)?;
-            extracted_count += 1;
-        }
-
-        if extracted_count == 0 {
-            let detail = if skipped_count > 0 {
-                format!("（{} 个文件因路径不安全被跳过）", skipped_count)
-            } else {
-                String::new()
-            };
-            return Err(AppError::Message(format!(
-                "zip 文件中没有可提取的文件{}。",
-                detail
-            )));
-        }
-
-        Ok(extracted)
-    }
-}
-
-pub fn safe_relative_path(relative_path: &str) -> AppResult<PathBuf> {
-    let path = Path::new(relative_path);
-    if path.is_absolute() {
-        return Err(AppError::Message(format!(
-            "路径必须是相对路径: {}",
-            relative_path
-        )));
-    }
-
-    let mut safe = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Normal(value) => safe.push(value),
-            _ => return Err(AppError::Message(format!("路径不安全: {}", relative_path))),
-        }
-    }
-
-    if safe.as_os_str().is_empty() {
-        return Err(AppError::Message("路径不能为空".to_string()));
-    }
-    Ok(safe)
-}
-
-fn safe_label(label: &str) -> String {
-    let value = label
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
-        .collect::<String>();
-    if value.is_empty() {
-        "import".to_string()
-    } else {
-        value
-    }
-}
-
-fn clawhub_http_error(error: ureq::Error) -> AppError {
-    match error {
-        ureq::Error::Status(code, response) => AppError::Message(format!(
-            "ClawHub API 请求失败: HTTP {} {}",
-            code,
-            response.status_text()
-        )),
-        ureq::Error::Transport(error) => {
-            AppError::Message(format!("ClawHub API 请求失败: {}", error))
-        }
-    }
-}
-
-fn retry_after_delay(response: &ureq::Response) -> Duration {
-    response
-        .header("Retry-After")
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .map(Duration::from_secs)
-        .unwrap_or_else(|| Duration::from_secs(5))
-}
-
-fn wait_for_retry_or_cancel<F>(
-    wait: Duration,
-    interval: Duration,
-    mut is_cancelled: F,
-) -> AppResult<bool>
-where
-    F: FnMut() -> AppResult<bool>,
-{
-    let interval = interval.max(Duration::from_millis(1));
-    let deadline = std::time::Instant::now() + wait;
-
-    while std::time::Instant::now() < deadline {
-        if is_cancelled()? {
-            return Ok(true);
-        }
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        std::thread::sleep(remaining.min(interval));
-    }
-
-    is_cancelled()
-}
-
-fn refresh_key(source_id: &str, safety_mode: CatalogSafetyMode) -> String {
-    format!("{}::{}", source_id, safety_mode.as_str())
-}
-
-pub(crate) fn built_in_catalog_sources() -> Vec<CatalogSource> {
-    vec![
-        CatalogSource {
-            id: "clawhub".to_string(),
-            name: "ClawHub".to_string(),
-            url: "https://clawhub.ai/api/v1/skills".to_string(),
-            kind: CatalogSourceKind::BuiltIn,
-            icon: "clawhub".to_string(),
-            enabled: true,
-            last_refreshed_at: None,
-            cache_path: None,
-        },
-        CatalogSource {
-            id: "claude".to_string(),
-            name: "Claude".to_string(),
-            url: "https://github.com/anthropics/skills".to_string(),
-            kind: CatalogSourceKind::BuiltIn,
-            icon: "claude".to_string(),
-            enabled: true,
-            last_refreshed_at: None,
-            cache_path: None,
-        },
-        CatalogSource {
-            id: "codex".to_string(),
-            name: "Codex".to_string(),
-            url: "https://github.com/openai/skills".to_string(),
-            kind: CatalogSourceKind::BuiltIn,
-            icon: "codex".to_string(),
-            enabled: true,
-            last_refreshed_at: None,
-            cache_path: None,
-        },
-    ]
-}
-
-#[cfg(test)]
-pub(crate) fn built_in_catalog_sources_for_test() -> Vec<CatalogSource> {
-    built_in_catalog_sources()
-}
-
-fn catalog_matches_query(skill: &CatalogSkill, query: &str) -> bool {
-    if query.is_empty() {
-        return true;
-    }
-    let fields = [
-        skill.name.as_str(),
-        skill.description.as_deref().unwrap_or(""),
-        skill.source_name.as_str(),
-        skill.relative_path.as_str(),
-    ];
-    fields
-        .iter()
-        .any(|field| field.to_ascii_lowercase().contains(query))
-        || skill
-            .tags
-            .iter()
-            .any(|tag| tag.to_ascii_lowercase().contains(query))
-}
-
-fn page_catalog_skills(
-    skills: Vec<CatalogSkill>,
-    page: Option<usize>,
-    page_size: Option<usize>,
-) -> CatalogSearchResult {
-    let total = skills.len();
-    let page = page.unwrap_or(1).max(1);
-    let page_size = match page_size {
-        Some(usize::MAX) => usize::MAX,
-        Some(value) => value.clamp(1, 500),
-        None => 100,
-    };
-    let start = page.saturating_sub(1).saturating_mul(page_size);
-    let items = skills
-        .into_iter()
-        .skip(start)
-        .take(page_size)
-        .collect::<Vec<_>>();
-    let has_more = start.saturating_add(items.len()) < total;
-
-    CatalogSearchResult {
-        items,
-        total,
-        page,
-        page_size,
-        has_more,
-    }
-}
-
-fn catalog_matches_filters(skill: &CatalogSkill, filters: &CatalogFilters) -> bool {
-    if !filters.source_ids.is_empty() && !filters.source_ids.contains(&skill.source_id) {
-        return false;
-    }
-    if !filters.agent_types.is_empty()
-        && !filters.agent_types.iter().any(|agent| {
-            skill
-                .supported_agents
-                .iter()
-                .any(|supported| supported.eq_ignore_ascii_case(agent))
-        })
-    {
-        return false;
-    }
-    if !filters.install_statuses.is_empty()
-        && !filters.install_statuses.contains(&skill.install_status)
-    {
-        return false;
-    }
-    if let Some(has_data) = filters.has_download_data {
-        let skill_has_data = skill.download_count.is_some() || skill.install_count.is_some();
-        if skill_has_data != has_data {
-            return false;
-        }
-    }
-    if !filters.content_capabilities.is_empty() {
-        for capability in &filters.content_capabilities {
-            let matches = match capability.as_str() {
-                "scripts" => skill.has_scripts,
-                "references" => skill.has_references,
-                "assets" => skill.has_assets,
-                "skillMdOnly" => {
-                    skill.has_skill_md
-                        && !skill.has_scripts
-                        && !skill.has_references
-                        && !skill.has_assets
-                }
-                _ => true,
-            };
-            if !matches {
-                return false;
-            }
-        }
-    }
-    if let Some(days) = filters.time_window_days {
-        let Some(updated_at) = &skill.updated_at else {
-            return false;
-        };
-        let Ok(parsed) = DateTime::parse_from_rfc3339(updated_at) else {
-            return false;
-        };
-        let cutoff = Utc::now() - chrono::Duration::days(days);
-        if parsed.with_timezone(&Utc) < cutoff {
-            return false;
-        }
-    }
-    true
-}
-
-fn catalog_skill_is_installed(
-    skill: &CatalogSkill,
-    installed_titles: &HashSet<String>,
-    installed_slugs: &HashSet<String>,
-) -> bool {
-    if skill.source_id == "clawhub" {
-        return clawhub_skill_slug(skill)
-            .map(|slug| installed_slugs.contains(&normalize_title(&slug)))
-            .unwrap_or_else(|| installed_titles.contains(&normalize_title(&skill.name)));
-    }
-    installed_titles.contains(&normalize_title(&skill.name))
-}
-
-fn clawhub_skill_slug(skill: &CatalogSkill) -> Option<String> {
-    skill
-        .source_path
-        .strip_prefix("clawhub://")
-        .filter(|value| !value.trim().is_empty())
-        .map(ToString::to_string)
-        .or_else(|| (!skill.relative_path.trim().is_empty()).then(|| skill.relative_path.clone()))
-}
-
-#[cfg(test)]
-fn collect_clawhub_api_pages<F>(mut fetch_page: F) -> AppResult<Vec<serde_json::Value>>
-where
-    F: FnMut(Option<&str>) -> AppResult<serde_json::Value>,
-{
-    const MAX_CLAWHUB_PAGES: usize = 1_000;
-    const MAX_EMPTY_PAGES: usize = 3;
-
-    let mut cursor: Option<String> = None;
-    let mut seen_cursors = HashSet::new();
-    let mut empty_pages = 0usize;
-    let mut items = Vec::new();
-
-    for _ in 0..MAX_CLAWHUB_PAGES {
-        let value = fetch_page(cursor.as_deref())?;
-        let page_items = value
-            .get("items")
-            .and_then(|value| value.as_array())
-            .cloned()
-            .unwrap_or_default();
-
-        if page_items.is_empty() {
-            empty_pages += 1;
-            if empty_pages >= MAX_EMPTY_PAGES {
-                break;
-            }
-        } else {
-            empty_pages = 0;
-            items.extend(page_items);
-        }
-
-        let next_cursor = value
-            .get("nextCursor")
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string);
-
-        let Some(next_cursor) = next_cursor else {
-            break;
-        };
-        if !seen_cursors.insert(next_cursor.clone()) {
-            return Err(AppError::Message(
-                "ClawHub API 返回了重复的分页 cursor，已停止刷新以避免无限循环。".to_string(),
-            ));
-        }
-        cursor = Some(next_cursor);
-    }
-
-    Ok(items)
-}
-
-/// Sanitize a raw zip entry path for safe extraction.
-/// Returns None if the path is unsafe (absolute, contains traversal, or empty).
-fn sanitize_zip_path(raw: &str) -> Option<PathBuf> {
-    let path = Path::new(raw);
-    let mut safe = PathBuf::new();
-    let mut depth = 0i32;
-
-    for component in path.components() {
-        match component {
-            Component::Normal(name) => {
-                let s = name.to_string_lossy();
-                // Reject null bytes
-                if s.contains('\0') {
-                    return None;
-                }
-                safe.push(name);
-                depth += 1;
-            }
-            Component::ParentDir => {
-                // Allow ../ only if we have depth to spare
-                depth -= 1;
-                if depth < 0 {
-                    return None;
-                }
-                safe.pop();
-            }
-            Component::CurDir => {
-                // Skip ./ components
-            }
-            _ => {
-                // Reject absolute paths, drive letters, etc.
-                return None;
-            }
-        }
-    }
-
-    if safe.as_os_str().is_empty() {
-        return None;
-    }
-    Some(safe)
-}
-
-fn scan_agent_skill_copies(agent: &AgentProfile) -> AppResult<Vec<AgentSkillCopy>> {
-    let root = Path::new(&agent.skills_path);
-    if !root.exists() {
-        return Ok(Vec::new());
-    }
-    let registered_skill_ids = if agent.agent_type == AgentType::ClaudeCowork {
-        Some(read_claude_cowork_registered_skill_ids(agent)?)
-    } else {
-        None
-    };
-    let mut copies = Vec::new();
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        let path = entry.path();
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let dir_name = entry.file_name();
-        if dir_name.to_string_lossy().starts_with('.') {
-            continue;
-        }
-        let dir_id = dir_name.to_string_lossy().to_string();
-        let is_registered = registered_skill_ids
-            .as_ref()
-            .map(|ids| ids.contains(&dir_id))
-            .unwrap_or(true);
-        let metadata = fs::metadata(&path).ok();
-        let (title, version, description, readme) = read_agent_skill_info(&path, false);
-        copies.push(AgentSkillCopy {
-            agent_id: agent.id.clone(),
-            agent_name: agent.name.clone(),
-            skill_path: path.to_string_lossy().to_string(),
-            title,
-            version,
-            fingerprint: String::new(),
-            updated_at: metadata
-                .and_then(|metadata| metadata.modified().ok())
-                .map(system_time_to_rfc3339),
-            description,
-            readme,
-            is_registered,
-        });
-    }
-    Ok(copies)
-}
-
-fn claude_cowork_manifest_path(agent: &AgentProfile) -> AppResult<PathBuf> {
-    if agent.agent_type != AgentType::ClaudeCowork {
-        return Err(AppError::Message(
-            "Agent 不是 Claude Desktop Cowork".to_string(),
-        ));
-    }
-    if let Some(path) = agent
-        .adapter_config
-        .as_ref()
-        .and_then(|value| value.get("manifestPath"))
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return Ok(PathBuf::from(path));
-    }
-    Path::new(&agent.skills_path)
-        .parent()
-        .map(|parent| parent.join("manifest.json"))
-        .ok_or_else(|| AppError::Message("无法确定 Cowork manifest 路径".to_string()))
-}
-
-fn read_claude_cowork_manifest(agent: &AgentProfile) -> AppResult<serde_json::Value> {
-    let manifest_path = claude_cowork_manifest_path(agent)?;
-    if !manifest_path.exists() {
-        return Ok(serde_json::json!({ "skills": [] }));
-    }
-    let value = serde_json::from_str::<serde_json::Value>(&fs::read_to_string(manifest_path)?)?;
-    Ok(if value.is_object() {
-        value
-    } else {
-        serde_json::json!({ "skills": [] })
-    })
-}
-
-fn read_claude_cowork_registered_skill_ids(agent: &AgentProfile) -> AppResult<HashSet<String>> {
-    let manifest = read_claude_cowork_manifest(agent)?;
-    Ok(manifest
-        .get("skills")
-        .and_then(|value| value.as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(|skill| skill.get("skillId").and_then(|value| value.as_str()))
-        .map(ToString::to_string)
-        .collect())
-}
-
-fn register_claude_cowork_skill(
-    agent: &AgentProfile,
-    skill_id: &str,
-    skill_path: &Path,
-) -> AppResult<()> {
-    let manifest_path = claude_cowork_manifest_path(agent)?;
-    let mut manifest = read_claude_cowork_manifest(agent)?;
-    if !manifest.is_object() {
-        manifest = serde_json::json!({});
-    }
-    let object = manifest
-        .as_object_mut()
-        .ok_or_else(|| AppError::Message("Cowork manifest 必须是 JSON object".to_string()))?;
-    object.insert(
-        "lastUpdated".to_string(),
-        serde_json::Value::Number(chrono::Utc::now().timestamp_millis().into()),
-    );
-
-    let (name, _version, description, _readme) = read_agent_skill_info(skill_path, false);
-    let skills_value = object
-        .entry("skills".to_string())
-        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
-    if !skills_value.is_array() {
-        *skills_value = serde_json::Value::Array(Vec::new());
-    }
-    let skills = skills_value
-        .as_array_mut()
-        .ok_or_else(|| AppError::Message("Cowork manifest skills 必须是数组".to_string()))?;
-    let now = chrono::Utc::now().to_rfc3339();
-    let existing_index = skills.iter().position(|entry| {
-        entry
-            .get("skillId")
-            .and_then(|value| value.as_str())
-            .map(|value| value == skill_id)
-            .unwrap_or(false)
-    });
-    let entry_index = if let Some(index) = existing_index {
-        index
-    } else {
-        skills.push(serde_json::json!({}));
-        skills.len() - 1
-    };
-    let entry = &mut skills[entry_index];
-    let entry_object = entry
-        .as_object_mut()
-        .ok_or_else(|| AppError::Message("Cowork manifest skill 条目必须是 object".to_string()))?;
-    entry_object.insert(
-        "skillId".to_string(),
-        serde_json::Value::String(skill_id.to_string()),
-    );
-    entry_object.insert("name".to_string(), serde_json::Value::String(name));
-    if let Some(description) = description {
-        entry_object.insert(
-            "description".to_string(),
-            serde_json::Value::String(description),
-        );
-    }
-    entry_object.insert(
-        "creatorType".to_string(),
-        serde_json::Value::String("user".to_string()),
-    );
-    entry_object.insert("syncManaged".to_string(), serde_json::Value::Bool(false));
-    entry_object.insert("updatedAt".to_string(), serde_json::Value::String(now));
-    entry_object.insert("enabled".to_string(), serde_json::Value::Bool(true));
-
-    if let Some(parent) = manifest_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(manifest_path, serde_json::to_string_pretty(&manifest)?)?;
-    Ok(())
-}
-
-fn group_agent_skills(agents: &[AgentProfile], copies: Vec<AgentSkillCopy>) -> Vec<GroupedSkill> {
-    let mut grouped: HashMap<String, Vec<AgentSkillCopy>> = HashMap::new();
-    for copy in copies {
-        grouped
-            .entry(normalize_title(&copy.title))
-            .or_default()
-            .push(copy);
-    }
-
-    let mut values = grouped
-        .into_values()
-        .map(|mut copies| {
-            copies.sort_by(compare_skill_copy);
-            let best_copy = copies[0].clone();
-            let installed_set = copies
-                .iter()
-                .map(|copy| copy.agent_id.clone())
-                .collect::<HashSet<_>>();
-            let missing_agent_ids = agents
-                .iter()
-                .filter(|agent| !installed_set.contains(&agent.id))
-                .map(|agent| agent.id.clone())
-                .collect::<Vec<_>>();
-            let mut installed_agent_ids = copies
-                .iter()
-                .map(|copy| copy.agent_id.clone())
-                .collect::<HashSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
-            installed_agent_ids.sort();
-            GroupedSkill {
-                title: best_copy.title.clone(),
-                description: best_copy.description.clone(),
-                readme: best_copy.readme.clone(),
-                user_tags: Vec::new(),
-                best_copy,
-                copies,
-                installed_agent_ids,
-                missing_agent_ids,
-            }
-        })
-        .collect::<Vec<_>>();
-    values.sort_by(|a, b| a.title.cmp(&b.title));
-    values
-}
-
-/// Check if a description contains meaningful text (not just symbols/punctuation).
-fn is_valid_description(desc: &str) -> bool {
-    desc.chars().any(|c| {
-        c.is_alphanumeric() || c.is_ascii_alphabetic() || ('\u{4e00}'..='\u{9fff}').contains(&c)
-    })
-}
-
-fn read_agent_skill_info(
-    skill_path: &Path,
-    include_readme: bool,
-) -> (String, Option<String>, Option<String>, Option<String>) {
-    for name in ["skill.json", "skill.yaml", "skill.yml"] {
-        let manifest_path = skill_path.join(name);
-        if !manifest_path.exists() {
-            continue;
-        }
-        if let Ok(text) = fs::read_to_string(&manifest_path) {
-            let parsed = match manifest_path.extension().and_then(|value| value.to_str()) {
-                Some("json") => serde_json::from_str::<serde_json::Value>(&text).ok(),
-                _ => serde_yaml::from_str::<serde_json::Value>(&text).ok(),
-            };
-            if let Some(value) = parsed {
-                let title = value
-                    .get("name")
-                    .and_then(|value| value.as_str())
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty());
-                let version = value
-                    .get("version")
-                    .and_then(|value| value.as_str())
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(ToString::to_string);
-                let description = value
-                    .get("description")
-                    .and_then(|value| value.as_str())
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty() && is_valid_description(value))
-                    .map(ToString::to_string);
-                if let Some(title) = title {
-                    let readme = include_readme
-                        .then(|| read_agent_skill_readme(skill_path))
-                        .flatten();
-                    let description = description.or_else(|| {
-                        fs::read_to_string(skill_path.join("SKILL.md"))
-                            .ok()
-                            .and_then(|text| read_markdown_frontmatter(&text))
-                            .and_then(|(_title, _version, description)| description)
-                    });
-                    return (title.to_string(), version, description, readme);
-                }
-            }
-        }
-    }
-
-    let skill_md = skill_path.join("SKILL.md");
-    if let Ok(text) = fs::read_to_string(&skill_md) {
-        let readme = include_readme
-            .then(|| extract_markdown_body(&text))
-            .flatten();
-        if let Some((title, version, description)) = read_markdown_frontmatter(&text) {
-            return (title, version, description, readme);
-        }
-        if let Some(title) = read_markdown_heading(&text) {
-            return (title, None, None, readme);
-        }
-    }
-
-    (
-        skill_path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("Untitled Skill")
-            .to_string(),
-        None,
-        None,
-        None,
-    )
-}
-
-fn read_agent_skill_readme(skill_path: &Path) -> Option<String> {
-    fs::read_to_string(skill_path.join("SKILL.md"))
-        .ok()
-        .and_then(|text| extract_markdown_body(&text))
-}
-
-fn extract_markdown_body(text: &str) -> Option<String> {
-    let trimmed = text.trim();
-    if !trimmed.starts_with("---") {
-        return Some(trimmed.to_string());
-    }
-    let after_first = &trimmed[3..];
-    let Some(end_idx) = after_first.find("\n---") else {
-        return Some(trimmed.to_string());
-    };
-    let body = after_first[end_idx + 4..].trim();
-    if body.is_empty() {
-        None
-    } else {
-        Some(body.to_string())
-    }
-}
-
-fn read_markdown_frontmatter(text: &str) -> Option<(String, Option<String>, Option<String>)> {
-    let mut lines = text.lines();
-    if lines.next()?.trim() != "---" {
-        return None;
-    }
-    let mut title = None;
-    let mut version = None;
-    let mut description = None;
-    let mut collecting_block: Option<String> = None;
-    let mut block_lines: Vec<String> = Vec::new();
-    for line in lines {
-        let trimmed = line.trim();
-        if trimmed == "---" {
-            break;
-        }
-        // If collecting a block scalar, gather indented continuation lines
-        if let Some(ref key) = collecting_block {
-            if line.starts_with(' ') || line.starts_with('\t') {
-                block_lines.push(trimmed.to_string());
-                continue;
-            } else {
-                // Block scalar ended; store collected value
-                let block_value = block_lines.join("\n");
-                if !block_value.is_empty() {
-                    match key.as_str() {
-                        "title" | "name" => title = Some(block_value.clone()),
-                        "version" => version = Some(block_value.clone()),
-                        "description" => description = Some(block_value.clone()),
-                        _ => {}
-                    }
-                }
-                collecting_block = None;
-                block_lines.clear();
-            }
-        }
-        let Some((key, value)) = trimmed.split_once(':') else {
-            continue;
-        };
-        let key = key.trim();
-        let value = value.trim();
-        // Detect YAML block scalar indicators (| or >)
-        if value == "|"
-            || value == ">"
-            || value == "|-"
-            || value == ">-"
-            || value == "|+"
-            || value == ">+"
-        {
-            collecting_block = Some(key.to_string());
-            block_lines.clear();
-            continue;
-        }
-        let value = value.trim_matches('"').trim_matches('\'');
-        if value.is_empty() {
-            continue;
-        }
-        match key {
-            "title" | "name" => title = Some(value.to_string()),
-            "version" => version = Some(value.to_string()),
-            "description" => {
-                if is_valid_description(value) {
-                    description = Some(value.to_string());
-                }
-            }
-            _ => {}
-        }
-    }
-    // Handle block scalar that extends to the end of frontmatter
-    if let Some(ref key) = collecting_block {
-        let block_value = block_lines.join("\n");
-        if !block_value.is_empty() {
-            match key.as_str() {
-                "title" | "name" => title = Some(block_value),
-                "version" => version = Some(block_value),
-                "description" => {
-                    if is_valid_description(&block_value) {
-                        description = Some(block_value);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    title.map(|title| (title, version, description))
-}
-
-fn read_markdown_heading(text: &str) -> Option<String> {
-    text.lines()
-        .map(str::trim)
-        .find_map(|line| line.strip_prefix("# "))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-}
-
-fn compare_skill_copy(a: &AgentSkillCopy, b: &AgentSkillCopy) -> Ordering {
-    compare_versions(b.version.as_deref(), a.version.as_deref())
-        .then_with(|| b.updated_at.cmp(&a.updated_at))
-        .then_with(|| a.agent_name.cmp(&b.agent_name))
-        .then_with(|| a.skill_path.cmp(&b.skill_path))
-}
-
-fn compare_versions(a: Option<&str>, b: Option<&str>) -> Ordering {
-    match (parse_version(a), parse_version(b)) {
-        (Some(a), Some(b)) => a.cmp(&b),
-        (Some(_), None) => Ordering::Greater,
-        (None, Some(_)) => Ordering::Less,
-        (None, None) => Ordering::Equal,
-    }
-}
-
-fn parse_version(version: Option<&str>) -> Option<Vec<u64>> {
-    let version = version?.trim().trim_start_matches('v');
-    if version.is_empty() {
-        return None;
-    }
-    let mut parts = Vec::new();
-    for part in version.split('.') {
-        let digits = part
-            .chars()
-            .take_while(|ch| ch.is_ascii_digit())
-            .collect::<String>();
-        if digits.is_empty() {
-            return None;
-        }
-        parts.push(digits.parse().ok()?);
-    }
-    Some(parts)
-}
-
-fn normalize_title(title: &str) -> String {
-    title.trim().to_lowercase()
-}
-
-fn command_no_window(program: &str) -> Command {
-    let mut command = Command::new(program);
-    #[cfg(windows)]
-    {
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    command
-}
-
-fn system_time_to_rfc3339(time: SystemTime) -> String {
-    DateTime::<Utc>::from(time).to_rfc3339()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog_index::RefreshStatePatch;
     use crate::models::SkillManifest;
     use std::io::Write;
 
@@ -2145,30 +1176,6 @@ mod tests {
         files
     }
 
-    fn catalog_test_skill(index: usize) -> CatalogSkill {
-        CatalogSkill {
-            id: format!("test::{index:03}"),
-            name: format!("Skill {index:03}"),
-            source_id: "test".to_string(),
-            source_name: "Test".to_string(),
-            source_icon: "test".to_string(),
-            source_path: format!("test://skill-{index:03}"),
-            relative_path: format!("skill-{index:03}"),
-            description: None,
-            tags: Vec::new(),
-            supported_agents: Vec::new(),
-            published_at: None,
-            updated_at: None,
-            download_count: None,
-            install_count: None,
-            has_skill_md: true,
-            has_scripts: false,
-            has_references: false,
-            has_assets: false,
-            install_status: CatalogInstallStatus::NotInstalled,
-        }
-    }
-
     #[test]
     fn cancel_catalog_refresh_immediately_marks_state_not_running() {
         let service = AppService::in_memory().unwrap();
@@ -2205,21 +1212,6 @@ mod tests {
             .get_catalog_refresh_status("clawhub", CatalogSafetyMode::All)
             .unwrap();
         assert_eq!(persisted, status);
-    }
-
-    #[test]
-    fn retry_wait_stops_when_cancelled() {
-        let mut checks = 0usize;
-
-        let cancelled =
-            wait_for_retry_or_cancel(Duration::from_secs(60), Duration::from_millis(1), || {
-                checks += 1;
-                Ok(checks >= 2)
-            })
-            .unwrap();
-
-        assert!(cancelled);
-        assert_eq!(checks, 2);
     }
 
     fn collect_files_recursive(base: &Path, dir: &Path, out: &mut Vec<ImportSkillFile>) {
@@ -2392,46 +1384,6 @@ mod tests {
     }
 
     #[test]
-    fn collects_clawhub_pages_beyond_twenty_until_cursor_ends() {
-        let mut calls = 0usize;
-        let items = collect_clawhub_api_pages(|cursor| {
-            if calls == 0 {
-                assert!(cursor.is_none());
-            } else {
-                assert_eq!(cursor, Some(format!("cursor-{calls}").as_str()));
-            }
-            calls += 1;
-            let next_cursor = if calls < 25 {
-                serde_json::Value::String(format!("cursor-{calls}"))
-            } else {
-                serde_json::Value::Null
-            };
-            Ok(serde_json::json!({
-                "items": [{ "slug": format!("skill-{calls}") }],
-                "nextCursor": next_cursor
-            }))
-        })
-        .unwrap();
-
-        assert_eq!(calls, 25);
-        assert_eq!(items.len(), 25);
-    }
-
-    #[test]
-    fn paginates_catalog_search_results_without_dropping_total_count() {
-        let skills = (0..250).map(catalog_test_skill).collect::<Vec<_>>();
-        let result = page_catalog_skills(skills, Some(2), Some(100));
-
-        assert_eq!(result.total, 250);
-        assert_eq!(result.page, 2);
-        assert_eq!(result.page_size, 100);
-        assert!(result.has_more);
-        assert_eq!(result.items.len(), 100);
-        assert_eq!(result.items[0].id, "test::100");
-        assert_eq!(result.items[99].id, "test::199");
-    }
-
-    #[test]
     fn reports_empty_upload() {
         let agent_dir = tempfile::tempdir().unwrap();
         let service = test_service_with_agent(agent_dir.path());
@@ -2480,167 +1432,6 @@ mod tests {
             .unwrap();
         assert_eq!(result.imported, 1);
         assert!(agent_dir.path().join("demo").join("skill.json").exists());
-    }
-
-    #[test]
-    fn reads_agent_skill_title_by_manifest_frontmatter_heading_then_dir() {
-        let root = tempfile::tempdir().unwrap();
-        write_agent_skill(
-            root.path(),
-            "manifest",
-            Some("Manifest Title"),
-            Some("2.0.0"),
-            "# Ignored",
-        );
-        fs::create_dir_all(root.path().join("frontmatter")).unwrap();
-        fs::write(
-            root.path().join("frontmatter").join("SKILL.md"),
-            "---\ntitle: Frontmatter Title\nversion: 1.2.3\n---\n# Ignored",
-        )
-        .unwrap();
-        fs::create_dir_all(root.path().join("heading")).unwrap();
-        fs::write(
-            root.path().join("heading").join("SKILL.md"),
-            "# Heading Title",
-        )
-        .unwrap();
-        fs::create_dir_all(root.path().join("directory")).unwrap();
-
-        assert_eq!(
-            read_agent_skill_info(&root.path().join("manifest"), true),
-            (
-                "Manifest Title".to_string(),
-                Some("2.0.0".to_string()),
-                None,
-                Some("# Ignored".to_string())
-            )
-        );
-        assert_eq!(
-            read_agent_skill_info(&root.path().join("frontmatter"), true),
-            (
-                "Frontmatter Title".to_string(),
-                Some("1.2.3".to_string()),
-                None,
-                Some("# Ignored".to_string())
-            )
-        );
-        assert_eq!(
-            read_agent_skill_info(&root.path().join("heading"), true),
-            (
-                "Heading Title".to_string(),
-                None,
-                None,
-                Some("# Heading Title".to_string())
-            )
-        );
-        assert_eq!(
-            read_agent_skill_info(&root.path().join("directory"), true),
-            ("directory".to_string(), None, None, None)
-        );
-    }
-
-    #[test]
-    fn reads_yaml_block_scalar_description() {
-        let root = tempfile::tempdir().unwrap();
-
-        // Test block scalar with |
-        fs::create_dir_all(root.path().join("block-pipe")).unwrap();
-        fs::write(
-            root.path().join("block-pipe").join("SKILL.md"),
-            "---\nname: humanizer\nversion: 2.1.1\ndescription: |\n  去除文本中的 AI 写作痕迹。\n  适用于润色、审阅。\n---\n# Body",
-        )
-        .unwrap();
-
-        let (title, version, description, readme) =
-            read_agent_skill_info(&root.path().join("block-pipe"), true);
-        assert_eq!(title, "humanizer");
-        assert_eq!(version, Some("2.1.1".to_string()));
-        assert_eq!(
-            description,
-            Some("去除文本中的 AI 写作痕迹。\n适用于润色、审阅。".to_string())
-        );
-        assert_eq!(readme, Some("# Body".to_string()));
-
-        // Test block scalar with >
-        fs::create_dir_all(root.path().join("block-gt")).unwrap();
-        fs::write(
-            root.path().join("block-gt").join("SKILL.md"),
-            "---\nname: test-skill\ndescription: >\n  This is a\n  folded description.\nversion: 1.0.0\n---\n# Content",
-        )
-        .unwrap();
-
-        let (title, version, description, _) =
-            read_agent_skill_info(&root.path().join("block-gt"), true);
-        assert_eq!(title, "test-skill");
-        assert_eq!(version, Some("1.0.0".to_string()));
-        assert_eq!(
-            description,
-            Some("This is a\nfolded description.".to_string())
-        );
-
-        // Test block scalar extending to end of frontmatter
-        fs::create_dir_all(root.path().join("block-eof")).unwrap();
-        fs::write(
-            root.path().join("block-eof").join("SKILL.md"),
-            "---\nname: end-skill\ndescription: |\n  Line one.\n  Line two.\n---",
-        )
-        .unwrap();
-
-        let (title, _, description, _) =
-            read_agent_skill_info(&root.path().join("block-eof"), true);
-        assert_eq!(title, "end-skill");
-        assert_eq!(description, Some("Line one.\nLine two.".to_string()));
-    }
-
-    #[test]
-    fn groups_agent_skills_and_picks_highest_version() {
-        let agent_a = AgentProfile {
-            id: "a".into(),
-            name: "Agent A".into(),
-            agent_type: crate::models::AgentType::Custom,
-            skills_path: "a".into(),
-            adapter_config: None,
-            user_tags: Vec::new(),
-        };
-        let agent_b = AgentProfile {
-            id: "b".into(),
-            name: "Agent B".into(),
-            agent_type: crate::models::AgentType::Custom,
-            skills_path: "b".into(),
-            adapter_config: None,
-            user_tags: Vec::new(),
-        };
-        let copies = vec![
-            AgentSkillCopy {
-                agent_id: "a".into(),
-                agent_name: "Agent A".into(),
-                skill_path: "a/demo".into(),
-                title: "Demo".into(),
-                version: Some("1.0.0".into()),
-                fingerprint: "a".into(),
-                updated_at: Some("2026-05-01T00:00:00Z".into()),
-                description: None,
-                readme: None,
-                is_registered: true,
-            },
-            AgentSkillCopy {
-                agent_id: "b".into(),
-                agent_name: "Agent B".into(),
-                skill_path: "b/demo".into(),
-                title: "demo".into(),
-                version: Some("2.0.0".into()),
-                fingerprint: "b".into(),
-                updated_at: Some("2026-05-02T00:00:00Z".into()),
-                description: None,
-                readme: None,
-                is_registered: true,
-            },
-        ];
-
-        let groups = group_agent_skills(&[agent_a, agent_b], copies);
-        assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].best_copy.agent_id, "b");
-        assert!(groups[0].missing_agent_ids.is_empty());
     }
 
     #[test]
@@ -2732,6 +1523,64 @@ mod tests {
             fs::read_to_string(target_root.path().join("demo").join("SKILL.md")).unwrap(),
             "# Demo Skill\nnew"
         );
+    }
+
+    #[test]
+    fn syncs_grouped_skill_isolates_per_agent_failure() {
+        let service = AppService::in_memory().unwrap();
+        let source_root = tempfile::tempdir().unwrap();
+        write_agent_skill(
+            source_root.path(),
+            "demo",
+            Some("Demo Skill"),
+            Some("1.0.0"),
+            "# Demo Skill",
+        );
+        service
+            .add_agent(AgentProfile {
+                id: "source".into(),
+                name: "Source".into(),
+                agent_type: crate::models::AgentType::Custom,
+                skills_path: source_root.path().to_string_lossy().to_string(),
+                adapter_config: None,
+                user_tags: Vec::new(),
+            })
+            .unwrap();
+        let ok_root = tempfile::tempdir().unwrap();
+        // bad-agent 的 skills 目录里预置一个同名"demo"文件：BackupOverwrite 时 remove_dir_all 失败 → 单 agent 隔离
+        let bad_root = tempfile::tempdir().unwrap();
+        fs::write(bad_root.path().join("demo"), "occupied").unwrap();
+        for (id, path) in [
+            ("ok-agent", ok_root.path().to_string_lossy().to_string()),
+            ("bad-agent", bad_root.path().to_string_lossy().to_string()),
+        ] {
+            service
+                .add_agent(AgentProfile {
+                    id: id.into(),
+                    name: id.into(),
+                    agent_type: crate::models::AgentType::Custom,
+                    skills_path: path,
+                    adapter_config: None,
+                    user_tags: Vec::new(),
+                })
+                .unwrap();
+        }
+
+        let results = service
+            .sync_grouped_skill(
+                "Demo Skill",
+                Some("source"),
+                vec!["ok-agent".into(), "bad-agent".into()],
+                ConflictPolicy::BackupOverwrite,
+            )
+            .unwrap();
+
+        // 两个 agent 都返回结果：ok-agent 成功安装，bad-agent 隔离为 error
+        assert_eq!(results.len(), 2);
+        let ok = results.iter().find(|r| r.agent_id == "ok-agent").unwrap();
+        assert_eq!(ok.action, "installed");
+        let bad = results.iter().find(|r| r.agent_id == "bad-agent").unwrap();
+        assert_eq!(bad.action, "error");
     }
 
     #[test]
@@ -2892,32 +1741,5 @@ mod tests {
             .unwrap();
 
         assert!(!agent_dir.path().join("powerpoint-pptx").exists());
-    }
-
-    #[test]
-    fn skips_hidden_directories_when_scanning_agent_skills() {
-        let root = tempfile::tempdir().unwrap();
-        write_agent_skill(
-            root.path(),
-            "real-skill",
-            Some("Real Skill"),
-            Some("1.0.0"),
-            "# Real",
-        );
-        fs::create_dir_all(root.path().join(".system")).unwrap();
-        fs::write(root.path().join(".system").join("config.json"), "{}").unwrap();
-        fs::create_dir_all(root.path().join(".hidden")).unwrap();
-
-        let agent = AgentProfile {
-            id: "test".into(),
-            name: "Test".into(),
-            agent_type: crate::models::AgentType::Custom,
-            skills_path: root.path().to_string_lossy().to_string(),
-            adapter_config: None,
-            user_tags: Vec::new(),
-        };
-        let copies = scan_agent_skill_copies(&agent).unwrap();
-        assert_eq!(copies.len(), 1);
-        assert_eq!(copies[0].title, "Real Skill");
     }
 }

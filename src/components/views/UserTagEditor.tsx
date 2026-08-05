@@ -77,7 +77,7 @@ export function UserTagEditor({ availableTags = [], busy, onChange, tags }: User
       <div className="skill-tag-editor-input">
         <input
           disabled={busy}
-          maxLength={64}
+          maxLength={32}
           onChange={(event) => {
             setTagInput(event.target.value);
             if (tagError) setTagError(null);

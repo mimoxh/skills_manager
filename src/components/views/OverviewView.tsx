@@ -18,13 +18,13 @@ export function OverviewView({ skills, agents, noFullCoverageTitles, onNavigate,
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 24 }}>
         <div className="card" onClick={() => onNavigate("skills")} style={{ cursor: "pointer" }}>
           <div className="card-header">
-            <div className="card-desc">Skills</div>
+            <div className="card-desc">技能</div>
             <div className="card-title" style={{ fontSize: 28, marginTop: 4 }}>{skills.length}</div>
           </div>
         </div>
         <div className="card" onClick={() => onNavigate("agents")} style={{ cursor: "pointer" }}>
           <div className="card-header">
-            <div className="card-desc">Agents</div>
+            <div className="card-desc">Agent</div>
             <div className="card-title" style={{ fontSize: 28, marginTop: 4 }}>{agents.length}</div>
           </div>
         </div>

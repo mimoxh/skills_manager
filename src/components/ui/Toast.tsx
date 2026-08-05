@@ -31,11 +31,13 @@ const COLORS: Record<ToastType, { bg: string; border: string; icon: string }> = 
   },
 };
 
-export function Toast({ message, onDismiss }: { message: ToastMessage | null; onDismiss: () => void }) {
+export function Toast({ message, onDismiss }: { message: (ToastMessage & { id: number }) | null; onDismiss: () => void }) {
   const [visible, setVisible] = useState(false);
   const [current, setCurrent] = useState<ToastMessage | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const exitTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
+  // 仅当 message.id 变化时重启 4s 自动消失计时，避免父组件每次重渲染都重置计时器
   useEffect(() => {
     if (message) {
       setCurrent(message);
@@ -43,13 +45,17 @@ export function Toast({ message, onDismiss }: { message: ToastMessage | null; on
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => {
         setVisible(false);
-        setTimeout(onDismiss, 200); // Wait for exit animation
+        if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
+        exitTimerRef.current = setTimeout(onDismiss, 200); // Wait for exit animation
       }, 4000);
     }
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
+      if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
     };
-  }, [message, onDismiss]);
+    // 依赖 message?.id 而非 message，避免每次渲染重建计时（项目无 eslint，注释保留语义说明）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [message?.id]);
 
   if (!current) return null;
 
@@ -102,7 +108,8 @@ export function Toast({ message, onDismiss }: { message: ToastMessage | null; on
         <button
           onClick={() => {
             setVisible(false);
-            setTimeout(onDismiss, 200);
+            if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
+            exitTimerRef.current = setTimeout(onDismiss, 200);
           }}
           style={{
             flexShrink: 0,

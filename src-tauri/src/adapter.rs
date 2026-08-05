@@ -10,12 +10,7 @@ use std::{
 pub trait AgentAdapter {
     fn detect(&self) -> Vec<AgentProfile>;
     fn validate(&self, profile: &AgentProfile) -> AppResult<()>;
-    fn uninstall(
-        &self,
-        skill_id: &str,
-        profile: &AgentProfile,
-        backup_root: &Path,
-    ) -> AppResult<Option<PathBuf>>;
+    fn uninstall(&self, skill_id: &str, profile: &AgentProfile) -> AppResult<Option<PathBuf>>;
 }
 
 #[derive(Clone)]
@@ -199,7 +194,6 @@ impl AgentAdapter for DirectoryAdapter {
         &self,
         skill_id: &str,
         profile: &AgentProfile,
-        _backup_root: &Path,
     ) -> AppResult<Option<PathBuf>> {
         let target = Path::new(&profile.skills_path).join(skill_id);
         if !target.exists() {

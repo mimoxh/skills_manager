@@ -21,19 +21,24 @@ where
 }
 
 #[tauri::command]
-pub fn get_initial_data(service: State<AppService>) -> AppResult<InitialData> {
-    service.get_initial_data()
+pub async fn get_initial_data(service: State<'_, AppService>) -> AppResult<InitialData> {
+    let service = service.inner().clone();
+    run_blocking(move || service.get_initial_data()).await
 }
 
 #[tauri::command]
-pub fn import_skill_upload(
+pub async fn import_skill_upload(
     file_name: String,
     files: Vec<ImportSkillFile>,
     target_agent_ids: Vec<String>,
     conflict_policy: ConflictPolicy,
-    service: State<AppService>,
+    service: State<'_, AppService>,
 ) -> AppResult<ImportSkillResult> {
-    service.import_uploaded_files(&file_name, &files, &target_agent_ids, conflict_policy)
+    let service = service.inner().clone();
+    run_blocking(move || {
+        service.import_uploaded_files(&file_name, &files, &target_agent_ids, conflict_policy)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -57,8 +62,9 @@ pub fn remove_agent(agent_id: String, service: State<AppService>) -> AppResult<(
 }
 
 #[tauri::command]
-pub fn scan_agent_skills(service: State<AppService>) -> AppResult<Vec<GroupedSkill>> {
-    service.scan_agent_skills()
+pub async fn scan_agent_skills(service: State<'_, AppService>) -> AppResult<Vec<GroupedSkill>> {
+    let service = service.inner().clone();
+    run_blocking(move || service.scan_agent_skills()).await
 }
 
 #[tauri::command]
@@ -70,19 +76,23 @@ pub fn read_agent_skill_readme(
 }
 
 #[tauri::command]
-pub fn sync_grouped_skill(
+pub async fn sync_grouped_skill(
     title: String,
     source_agent_id: Option<String>,
     target_agent_ids: Vec<String>,
     conflict_policy: ConflictPolicy,
-    service: State<AppService>,
+    service: State<'_, AppService>,
 ) -> AppResult<Vec<InstallResult>> {
-    service.sync_grouped_skill(
-        &title,
-        source_agent_id.as_deref(),
-        target_agent_ids,
-        conflict_policy,
-    )
+    let service = service.inner().clone();
+    run_blocking(move || {
+        service.sync_grouped_skill(
+            &title,
+            source_agent_id.as_deref(),
+            target_agent_ids,
+            conflict_policy,
+        )
+    })
+    .await
 }
 
 #[tauri::command]
@@ -171,12 +181,13 @@ pub async fn refresh_catalog_source(
 }
 
 #[tauri::command]
-pub fn start_catalog_refresh(
+pub async fn start_catalog_refresh(
     source_id: String,
     safety_mode: CatalogSafetyMode,
-    service: State<AppService>,
+    service: State<'_, AppService>,
 ) -> AppResult<CatalogRefreshStatus> {
-    service.start_catalog_refresh(&source_id, safety_mode)
+    let service = service.inner().clone();
+    run_blocking(move || service.start_catalog_refresh(&source_id, safety_mode)).await
 }
 
 #[tauri::command]
@@ -214,19 +225,25 @@ pub async fn search_catalog_skills(
 }
 
 #[tauri::command]
-pub fn install_catalog_skill(
+pub async fn install_catalog_skill(
     catalog_skill_id: String,
     target_agent_ids: Vec<String>,
     conflict_policy: ConflictPolicy,
-    service: State<AppService>,
+    service: State<'_, AppService>,
 ) -> AppResult<Vec<InstallResult>> {
-    service.install_catalog_skill(&catalog_skill_id, target_agent_ids, conflict_policy)
+    let service = service.inner().clone();
+    run_blocking(move || {
+        service.install_catalog_skill(&catalog_skill_id, target_agent_ids, conflict_policy)
+    })
+    .await
 }
 
 // ── MCP Commands ──────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn scan_mcp_servers(service: State<AppService>) -> AppResult<Vec<GroupedMcpServer>> {
+pub fn scan_mcp_servers(
+    service: State<AppService>,
+) -> AppResult<(Vec<GroupedMcpServer>, Vec<String>)> {
     let agents = service.list_agents()?;
     service.mcp().scan_mcp_servers(&agents)
 }

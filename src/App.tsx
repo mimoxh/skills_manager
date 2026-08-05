@@ -9,14 +9,14 @@ import { McpView } from "./components/views/McpView";
 import { SettingsView } from "./components/views/SettingsView";
 import { useAppState } from "./hooks/useAppState";
 import { useTheme } from "./hooks/useTheme";
-import type { ImportSkillFile } from "./types";
+import { fileToUpload } from "./lib/utils";
+import type { SkillsFilter } from "./types";
 
 const SkillsView = lazy(() => import("./components/views/SkillsView").then((m) => ({ default: m.SkillsView })));
 const OverviewView = lazy(() => import("./components/views/OverviewView").then((m) => ({ default: m.OverviewView })));
 const AgentsView = lazy(() => import("./components/views/AgentsView").then((m) => ({ default: m.AgentsView })));
 
 export type View = "overview" | "skills" | "catalog" | "agents" | "mcp" | "settings";
-export type SkillsFilter = "all" | "covered" | "partial" | "needed";
 
 function ViewLoading() {
   return (
@@ -43,13 +43,6 @@ export default function App() {
     }
   }, []);
 
-  async function fileToUpload(file: File, relativePath?: string): Promise<ImportSkillFile> {
-    return {
-      relativePath: relativePath || file.webkitRelativePath || file.name,
-      bytes: Array.from(new Uint8Array(await file.arrayBuffer())),
-    };
-  }
-
   async function handleUploadChange(event: ChangeEvent<HTMLInputElement>) {
     const files = [...(event.target.files ?? [])];
     try {
@@ -75,7 +68,7 @@ export default function App() {
         return (
           <Suspense fallback={<ViewLoading />}>
             <SkillsView
-              skills={state.filteredSkills}
+              skills={state.skills}
               agents={state.agents}
               busy={state.busy}
               noFullCoverageTitles={state.noFullCoverageTitles}
@@ -96,7 +89,7 @@ export default function App() {
         return (
           <Suspense fallback={<ViewLoading />}>
             <AgentsView
-              agents={state.filteredAgents}
+              agents={state.agents}
               skills={state.skills}
               customAgent={state.customAgent}
               busy={state.busy}
@@ -129,10 +122,12 @@ export default function App() {
             query={state.catalogQuery}
             sort={state.catalogSort}
             filters={state.catalogFilters}
+            defaultSourceId={state.defaultCatalogSourceId}
             onQuery={state.setCatalogQuery}
             onSort={state.setCatalogSort}
             onFilters={state.setCatalogFilters}
             onSearch={state.searchCatalog}
+            onEnsureCatalogLoaded={state.ensureCatalogLoaded}
             onPage={state.changeCatalogPage}
             onRefreshSource={state.refreshCatalogSource}
             onRefreshStatus={state.refreshCatalogStatus}
@@ -236,10 +231,7 @@ export default function App() {
         />
       )}
 
-      <Toast
-        message={state.toastText ? { text: state.toastText, type: state.toastType } : null}
-        onDismiss={state.dismissToast}
-      />
+      <Toast message={state.toast} onDismiss={state.dismissToast} />
     </TooltipProvider>
   );
 }

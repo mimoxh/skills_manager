@@ -85,9 +85,18 @@ pub fn validate_manifest(manifest: &SkillManifest) -> AppResult<()> {
     Ok(())
 }
 
-/// Read YAML frontmatter from a SKILL.md file.
-/// Returns (name, description, tags) extracted from the frontmatter.
-pub fn read_skill_md_frontmatter(text: &str) -> Option<(Option<String>, Option<String>, Vec<String>)> {
+/// 解析后的 SKILL.md frontmatter 结构化结果。
+#[derive(Debug, Clone, Default)]
+pub struct SkillFrontmatter {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub version: Option<String>,
+    pub tags: Vec<String>,
+}
+
+/// 解析 SKILL.md 的 YAML frontmatter：一次定位 + 一次 serde_yaml 解析，
+/// 同时取 name（含 title 兜底）/description/version（含 metadata.version 兜底）/tags。
+pub fn parse_skill_frontmatter(text: &str) -> Option<SkillFrontmatter> {
     let trimmed = text.trim_start();
     if !trimmed.starts_with("---") {
         return None;
@@ -98,6 +107,7 @@ pub fn read_skill_md_frontmatter(text: &str) -> Option<(Option<String>, Option<S
     let value = serde_yaml::from_str::<Value>(frontmatter).ok()?;
     let name = value
         .get("name")
+        .or_else(|| value.get("title"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|v| !v.is_empty())
@@ -108,6 +118,21 @@ pub fn read_skill_md_frontmatter(text: &str) -> Option<(Option<String>, Option<S
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .map(ToString::to_string);
+    let version = value
+        .get("version")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| {
+            value
+                .get("metadata")
+                .and_then(|metadata| metadata.get("version"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(ToString::to_string)
+        });
     let tags = value
         .get("tags")
         .and_then(Value::as_array)
@@ -119,38 +144,25 @@ pub fn read_skill_md_frontmatter(text: &str) -> Option<(Option<String>, Option<S
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    Some((name, description, tags))
+    Some(SkillFrontmatter {
+        name,
+        description,
+        version,
+        tags,
+    })
+}
+
+/// Read YAML frontmatter from a SKILL.md file.
+/// Returns (name, description, tags) extracted from the frontmatter.
+pub fn read_skill_md_frontmatter(text: &str) -> Option<(Option<String>, Option<String>, Vec<String>)> {
+    let fm = parse_skill_frontmatter(text)?;
+    Some((fm.name, fm.description, fm.tags))
 }
 
 /// Extract the first markdown heading (# ...) from text.
 pub fn read_markdown_heading(text: &str) -> Option<String> {
     text.lines()
         .find_map(|line| line.strip_prefix("# "))
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(ToString::to_string)
-}
-
-/// Extract version from SKILL.md frontmatter, supporting both top-level `version`
-/// and nested `metadata.version`.
-fn extract_version_from_frontmatter(text: &str) -> Option<String> {
-    let trimmed = text.trim_start();
-    if !trimmed.starts_with("---") {
-        return None;
-    }
-    let after_first = &trimmed[3..];
-    let end_idx = after_first.find("\n---")?;
-    let frontmatter = &after_first[..end_idx];
-    let value = serde_yaml::from_str::<Value>(frontmatter).ok()?;
-    // Try top-level version first
-    if let Some(v) = value.get("version").and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()) {
-        return Some(v.to_string());
-    }
-    // Fall back to metadata.version
-    value
-        .get("metadata")
-        .and_then(|m| m.get("version"))
-        .and_then(Value::as_str)
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .map(ToString::to_string)
@@ -217,15 +229,18 @@ pub fn synthesize_manifest_from_skill_md(skill_md_path: &Path) -> AppResult<Skil
         .unwrap_or("unknown")
         .to_string();
 
-    let (fm_name, fm_description, _tags) = read_skill_md_frontmatter(&text)
-        .unwrap_or((None, None, Vec::new()));
+    let fm = parse_skill_frontmatter(&text);
     let heading = read_markdown_heading(&text);
-    let version = extract_version_from_frontmatter(&text)
-        .unwrap_or_else(|| "1.0.0".to_string());
-
-    let name = fm_name
+    let name = fm
+        .as_ref()
+        .and_then(|fm| fm.name.clone())
         .or(heading)
         .unwrap_or_else(|| dir_name.clone());
+    let version = fm
+        .as_ref()
+        .and_then(|fm| fm.version.clone())
+        .unwrap_or_else(|| "1.0.0".to_string());
+    let description = fm.as_ref().and_then(|fm| fm.description.clone());
 
     // Collect all non-manifest files in the directory as skill files
     let files = collect_skill_files(source);
@@ -234,7 +249,7 @@ pub fn synthesize_manifest_from_skill_md(skill_md_path: &Path) -> AppResult<Skil
         id: dir_name,
         name,
         version,
-        description: fm_description,
+        description,
         tags: Vec::new(),
         supported_agents: vec!["*".to_string()],
         entry: None,
