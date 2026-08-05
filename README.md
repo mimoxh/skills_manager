@@ -18,7 +18,7 @@ Skills Manager 是一个本地 Windows 桌面工具，用于管理多个 AI 客�
 - **无标签筛选**：Skills 和 Agents 列表支持筛选"无标签"项目，便于快速定位未分类的技能和 Agent。
 - **视图独立滚动**：Skills、MCP、Agents 视图列表独立滚动，页面整体不跟随滚动，多列表场景下操作更流畅。
 - **主题切换**：支持浅色、深色、跟随系统三种主题模式，并在本机记住界面偏好。
-- **精简界面**：移除标题栏图标和标题文字，移除底部状态栏，左侧栏主题切换改为图标模式，界面更简洁、内容区域更大。
+- **精简界面**：移除标题栏图标和标题文字，移除底部状态栏，主题切换移入设置页，界面更简洁、内容区域更大。
 
 ## 技术栈
 
@@ -92,7 +92,7 @@ dist-native\Skills Manager\Skills Manager.exe
 生成 GitHub Releases 可上传的版本 zip 包：
 
 ```powershell
-Compress-Archive -LiteralPath "dist-native\Skills Manager" -DestinationPath "SkillsManager-v0.3.1-windows-portable.zip" -Force
+Compress-Archive -LiteralPath "dist-native\Skills Manager" -DestinationPath "SkillsManager-v0.3.2-windows-portable.zip" -Force
 ```
 
-根目录中的 `SkillsManager.exe` 和 `SkillsManager-v0.3.1-windows-portable.zip` 是发布产物。zip 包适合上传到 GitHub Releases，单独的 exe 可用于本地快速验证。
+`release/` 目录中的 `SkillsManager-v0.3.2-windows-portable.zip` 是发布产物，适合上传到 GitHub Releases；根目录的 `SkillsManager.exe` 可用于本地快速验证。
