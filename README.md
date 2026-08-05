@@ -75,24 +75,4 @@ npm run test:rust
 npm run native:build -- --no-bundle
 ```
 
-然后把：
-
-```text
-src-tauri\target\release\skill-sync-manager.exe
-```
-
-复制为：
-
-```text
-dist-native\Skills Manager\Skills Manager.exe
-```
-
-并在同一目录写入便携版 `README.txt`。
-
-生成 GitHub Releases 可上传的版本 zip 包：
-
-```powershell
-Compress-Archive -LiteralPath "dist-native\Skills Manager" -DestinationPath "SkillsManager-v0.3.2-windows-portable.zip" -Force
-```
-
-`release/` 目录中的 `SkillsManager-v0.3.2-windows-portable.zip` 是发布产物，适合上传到 GitHub Releases；根目录的 `SkillsManager.exe` 可用于本地快速验证。
+便携版构建产物为 `src-tauri\target\release\skill-sync-manager.exe`。`release/` 目录中的 `SkillsManager-v0.3.2-windows-portable.zip` 是发布产物，适合上传到 GitHub Releases；根目录的 `SkillsManager.exe` 可用于本地快速验证。

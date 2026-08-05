@@ -75,24 +75,4 @@ The script runs:
 npm run native:build -- --no-bundle
 ```
 
-Then it copies:
-
-```text
-src-tauri\target\release\skill-sync-manager.exe
-```
-
-to:
-
-```text
-dist-native\Skills Manager\Skills Manager.exe
-```
-
-and writes a portable-package `README.txt` into the same directory.
-
-To create the versioned zip package for GitHub Releases:
-
-```powershell
-Compress-Archive -LiteralPath "dist-native\Skills Manager" -DestinationPath "SkillsManager-v0.3.2-windows-portable.zip" -Force
-```
-
-The `release/` folder's `SkillsManager-v0.3.2-windows-portable.zip` is the release artifact, suitable for uploading to GitHub Releases; the root-level `SkillsManager.exe` is useful for quick local verification.
+The portable build outputs `src-tauri\target\release\skill-sync-manager.exe`. The `release/` folder's `SkillsManager-v0.3.2-windows-portable.zip` is the release artifact, suitable for uploading to GitHub Releases; the root-level `SkillsManager.exe` is useful for quick local verification.
