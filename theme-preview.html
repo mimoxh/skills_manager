@@ -1,0 +1,1252 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light" data-palette="amber">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Skills Manager - 黄色主题调整设计预览</title>
+  <style>
+    /* ===== Base Fonts & Reset ===== */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI Variable", "PingFang SC", "Microsoft YaHei UI", -apple-system, system-ui, sans-serif;
+      background: var(--page-bg);
+      color: var(--text);
+      line-height: 1.5;
+      font-size: 14px;
+      -webkit-font-smoothing: antialiased;
+      transition: background 0.25s ease, color 0.25s ease;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ===== Theme Definitions ===== */
+
+    /* 0. 当前原版 (Current Parchment) */
+    [data-palette="original"][data-theme="light"] {
+      --page-bg: #f0ead6;
+      --surface: #faf6eb;
+      --surface-raised: #f5f0e3;
+      --surface-hover: #ebe5d2;
+      --border: #ddd5c0;
+      --border-hover: #c9bfa6;
+      --text: #3d3425;
+      --text-secondary: #7a6e5b;
+      --text-tertiary: #a89a82;
+      --accent: #c47d2e;
+      --accent-hover: #b06e22;
+      --accent-light: #faf0e0;
+      --accent-soft: #fdf6eb;
+      --accent-glow: rgba(196, 125, 46, 0.22);
+      --selection-bg: #8f4f13;
+      --selection-text: #fffaf2;
+      --success: #6b8c42;
+      --success-light: #f0f5e6;
+      --warning: #c47d2e;
+      --warning-light: #faf0e0;
+      --danger: #c0392b;
+      --danger-light: #fae8e6;
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 14px;
+      --shadow-sm: 0 1px 2px rgba(80, 60, 30, 0.06);
+      --shadow-md: 0 4px 12px rgba(80, 60, 30, 0.08);
+      --shadow-lg: 0 8px 24px rgba(80, 60, 30, 0.1);
+    }
+    [data-palette="original"][data-theme="dark"] {
+      --page-bg: #0f141d;
+      --surface: #171d27;
+      --surface-raised: #1e2633;
+      --surface-hover: #283242;
+      --border: #30394a;
+      --border-hover: #465368;
+      --text: #f1eadf;
+      --text-secondary: #c7bba9;
+      --text-tertiary: #938777;
+      --accent: #d28b3c;
+      --accent-hover: #e19b4d;
+      --accent-light: #342719;
+      --accent-soft: #241d16;
+      --accent-glow: rgba(210, 139, 60, 0.28);
+      --selection-bg: #d28b3c;
+      --selection-text: #120f0b;
+      --success: #95b96a;
+      --success-light: #1d2b1e;
+      --warning: #d28b3c;
+      --warning-light: #342719;
+      --danger: #ee6a5f;
+      --danger-light: #3a1f21;
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 14px;
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24);
+      --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.28);
+      --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.34);
+    }
+
+    /* 方案 A: 琥珀暖金 (Warm Amber & Cream - 推荐) */
+    /* 特点：清爽通透奶油底色，温润不发灰不发黄绿，琥珀橙金点缀，暗黑模式也是醇厚浓缩咖啡+琥珀金光 */
+    [data-palette="amber"][data-theme="light"] {
+      --page-bg: #faf7f2;
+      --surface: #ffffff;
+      --surface-raised: #f5efe6;
+      --surface-hover: #ebe2d5;
+      --border: #e6ded3;
+      --border-hover: #d4c8b8;
+      --text: #2c251e;
+      --text-secondary: #6e6255;
+      --text-tertiary: #9c8e7f;
+      --accent: #d97706;
+      --accent-hover: #b45309;
+      --accent-light: #fef3c7;
+      --accent-soft: #fffbeb;
+      --accent-glow: rgba(217, 119, 6, 0.22);
+      --selection-bg: #d97706;
+      --selection-text: #ffffff;
+      --success: #15803d;
+      --success-light: #f0fdf4;
+      --warning: #d97706;
+      --warning-light: #fef3c7;
+      --danger: #dc2626;
+      --danger-light: #fef2f2;
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 14px;
+      --shadow-sm: 0 1px 3px rgba(60, 45, 30, 0.05);
+      --shadow-md: 0 4px 14px rgba(60, 45, 30, 0.08);
+      --shadow-lg: 0 10px 28px rgba(60, 45, 30, 0.11);
+    }
+    [data-palette="amber"][data-theme="dark"] {
+      --page-bg: #141210;
+      --surface: #1d1916;
+      --surface-raised: #27221e;
+      --surface-hover: #342e29;
+      --border: #3b342e;
+      --border-hover: #524840;
+      --text: #f6f0ea;
+      --text-secondary: #c2b5a7;
+      --text-tertiary: #8a7e71;
+      --accent: #f59e0b;
+      --accent-hover: #fbbf24;
+      --accent-light: #3d2c12;
+      --accent-soft: #2b1f0d;
+      --accent-glow: rgba(245, 158, 11, 0.28);
+      --selection-bg: #f59e0b;
+      --selection-text: #141210;
+      --success: #4ade80;
+      --success-light: #152d1c;
+      --warning: #fbbf24;
+      --warning-light: #35260f;
+      --danger: #f87171;
+      --danger-light: #3b1c1c;
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 14px;
+      --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
+      --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.42);
+      --shadow-lg: 0 10px 32px rgba(0, 0, 0, 0.50);
+    }
+
+    /* 方案 B: 暖阳原木 (Solar Ochre & Sand) */
+    /* 特点：大地原木质感，微暖砂石纸感，质朴舒适 */
+    [data-palette="sand"][data-theme="light"] {
+      --page-bg: #f5efe3;
+      --surface: #fdfbf7;
+      --surface-raised: #ece4d2;
+      --surface-hover: #e0d6c0;
+      --border: #ddd1b8;
+      --border-hover: #c9b99b;
+      --text: #362d22;
+      --text-secondary: #756653;
+      --text-tertiary: #a1927e;
+      --accent: #c26e1a;
+      --accent-hover: #a85a0e;
+      --accent-light: #fbeee0;
+      --accent-soft: #fdf7f0;
+      --accent-glow: rgba(194, 110, 26, 0.22);
+      --selection-bg: #c26e1a;
+      --selection-text: #ffffff;
+      --success: #5f8638;
+      --success-light: #eff6e8;
+      --warning: #c26e1a;
+      --warning-light: #fbeee0;
+      --danger: #c53030;
+      --danger-light: #fde8e8;
+      --radius-sm: 7px;
+      --radius-md: 11px;
+      --radius-lg: 14px;
+      --shadow-sm: 0 1px 2px rgba(70, 50, 25, 0.06);
+      --shadow-md: 0 4px 12px rgba(70, 50, 25, 0.08);
+      --shadow-lg: 0 8px 24px rgba(70, 50, 25, 0.12);
+    }
+    [data-palette="sand"][data-theme="dark"] {
+      --page-bg: #151311;
+      --surface: #1e1a17;
+      --surface-raised: #29241f;
+      --surface-hover: #36302a;
+      --border: #3f3730;
+      --border-hover: #554b42;
+      --text: #f3ede4;
+      --text-secondary: #beafa0;
+      --text-tertiary: #877a6d;
+      --accent: #e6852e;
+      --accent-hover: #f59c49;
+      --accent-light: #3a2614;
+      --accent-soft: #281a0e;
+      --accent-glow: rgba(230, 133, 46, 0.26);
+      --selection-bg: #e6852e;
+      --selection-text: #151311;
+      --success: #7eb852;
+      --success-light: #1c2e17;
+      --warning: #e6852e;
+      --warning-light: #3a2614;
+      --danger: #eb6868;
+      --danger-light: #381a1a;
+      --radius-sm: 7px;
+      --radius-md: 11px;
+      --radius-lg: 14px;
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+      --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.35);
+      --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+
+    /* 方案 C: 北欧黄油 (Nordic Butter & Honey) */
+    /* 特点：明亮轻盈，蜂蜜亮黄点缀，年轻活泼现代 */
+    [data-palette="butter"][data-theme="light"] {
+      --page-bg: #faf8f2;
+      --surface: #ffffff;
+      --surface-raised: #f7f4ea;
+      --surface-hover: #efe9d7;
+      --border: #e8e2d0;
+      --border-hover: #d6ccb2;
+      --text: #23201a;
+      --text-secondary: #635d50;
+      --text-tertiary: #968e7e;
+      --accent: #ca8a04;
+      --accent-hover: #a16207;
+      --accent-light: #fef9c3;
+      --accent-soft: #fefce8;
+      --accent-glow: rgba(202, 138, 4, 0.24);
+      --selection-bg: #ca8a04;
+      --selection-text: #ffffff;
+      --success: #16a34a;
+      --success-light: #f0fdf4;
+      --warning: #ca8a04;
+      --warning-light: #fef9c3;
+      --danger: #e11d48;
+      --danger-light: #ffe4e6;
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 16px;
+      --shadow-sm: 0 1px 3px rgba(45, 38, 20, 0.04);
+      --shadow-md: 0 4px 14px rgba(45, 38, 20, 0.07);
+      --shadow-lg: 0 10px 28px rgba(45, 38, 20, 0.10);
+    }
+    [data-palette="butter"][data-theme="dark"] {
+      --page-bg: #121210;
+      --surface: #1b1b17;
+      --surface-raised: #252520;
+      --surface-hover: #31312a;
+      --border: #3c3c33;
+      --border-hover: #505045;
+      --text: #f7f7f2;
+      --text-secondary: #bfbfae;
+      --text-tertiary: #858576;
+      --accent: #facc15;
+      --accent-hover: #fde047;
+      --accent-light: #38310c;
+      --accent-soft: #272208;
+      --accent-glow: rgba(250, 204, 21, 0.30);
+      --selection-bg: #facc15;
+      --selection-text: #121210;
+      --success: #4ade80;
+      --success-light: #142e1b;
+      --warning: #facc15;
+      --warning-light: #38310c;
+      --danger: #fb7185;
+      --danger-light: #3a171d;
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 16px;
+      --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
+      --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.42);
+      --shadow-lg: 0 10px 32px rgba(0, 0, 0, 0.50);
+    }
+
+    /* 方案 D: 原版微调提亮 (Refined Parchment) */
+    /* 特点：保留原版羊皮纸复古感觉，但去除灰浊感，提升卡片对比度和暗色模式一致性 */
+    [data-palette="refined"][data-theme="light"] {
+      --page-bg: #f4eee2;
+      --surface: #fffdf8;
+      --surface-raised: #ece4d4;
+      --surface-hover: #e0d7c3;
+      --border: #dcd2bf;
+      --border-hover: #c7ba9f;
+      --text: #382e22;
+      --text-secondary: #736450;
+      --text-tertiary: #9f8f7b;
+      --accent: #c47625;
+      --accent-hover: #a96016;
+      --accent-light: #fcf1e2;
+      --accent-soft: #fdf8f0;
+      --accent-glow: rgba(196, 118, 37, 0.22);
+      --selection-bg: #c47625;
+      --selection-text: #ffffff;
+      --success: #638c3e;
+      --success-light: #f1f6ea;
+      --warning: #c47625;
+      --warning-light: #fcf1e2;
+      --danger: #c4382c;
+      --danger-light: #fcebe9;
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 14px;
+      --shadow-sm: 0 1px 2px rgba(80, 60, 30, 0.05);
+      --shadow-md: 0 4px 12px rgba(80, 60, 30, 0.07);
+      --shadow-lg: 0 8px 24px rgba(80, 60, 30, 0.09);
+    }
+    [data-palette="refined"][data-theme="dark"] {
+      --page-bg: #141312;
+      --surface: #1d1b19;
+      --surface-raised: #272421;
+      --surface-hover: #33302c;
+      --border: #3c3833;
+      --border-hover: #514c45;
+      --text: #f4eee6;
+      --text-secondary: #beaf9f;
+      --text-tertiary: #877a6d;
+      --accent: #db842f;
+      --accent-hover: #ea994a;
+      --accent-light: #3b2715;
+      --accent-soft: #291b0f;
+      --accent-glow: rgba(219, 132, 47, 0.28);
+      --selection-bg: #db842f;
+      --selection-text: #141312;
+      --success: #8bb35e;
+      --success-light: #1d2c18;
+      --warning: #db842f;
+      --warning-light: #3b2715;
+      --danger: #ea6459;
+      --danger-light: #3a1a1c;
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 14px;
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+      --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.35);
+      --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+
+    /* ===== Top Control Floating Banner ===== */
+    .top-controller {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      box-shadow: var(--shadow-md);
+      backdrop-filter: blur(10px);
+    }
+    .controller-title-wrap {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .controller-badge {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 9999px;
+      background: var(--accent-light);
+      color: var(--accent);
+      border: 1px solid var(--accent);
+    }
+    .controller-options {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .palette-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 14px;
+      border-radius: var(--radius-sm);
+      border: 1.5px solid var(--border);
+      background: var(--surface-raised);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .palette-btn:hover {
+      border-color: var(--border-hover);
+      background: var(--surface-hover);
+    }
+    .palette-btn.active {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 600;
+      box-shadow: 0 2px 8px var(--accent-glow);
+    }
+    .color-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .mode-switch-group {
+      display: flex;
+      align-items: center;
+      background: var(--surface-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 2px;
+    }
+    .mode-switch-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      border-radius: 4px;
+      font-size: 12.5px;
+      cursor: pointer;
+      color: var(--text-secondary);
+      border: none;
+      background: transparent;
+      transition: all 0.15s;
+    }
+    .mode-switch-btn.active {
+      background: var(--accent);
+      color: #ffffff;
+      font-weight: 600;
+    }
+
+    /* ===== Main Container Layout ===== */
+    .preview-container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 32px;
+    }
+
+    /* ===== Plan Summary Card ===== */
+    .summary-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 20px 24px;
+      box-shadow: var(--shadow-sm);
+    }
+    .summary-title {
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .summary-desc {
+      color: var(--text-secondary);
+      font-size: 13.5px;
+      line-height: 1.6;
+    }
+    .comparison-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      margin-top: 18px;
+    }
+    .comparison-item {
+      border: 1px solid var(--border);
+      background: var(--surface-raised);
+      padding: 16px;
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      transition: all 0.15s ease;
+      position: relative;
+    }
+    .comparison-item:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-md);
+    }
+    .comparison-item.selected {
+      border-color: var(--accent);
+      border-width: 2px;
+      background: var(--accent-soft);
+    }
+    .comparison-badge {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      font-size: 10.5px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+    }
+    .swatch-bar {
+      display: flex;
+      height: 24px;
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 10px 0;
+      border: 1px solid var(--border);
+    }
+    .swatch-slice { flex: 1; height: 100%; }
+
+    /* ===== App Mockup Preview ===== */
+    .mockup-wrapper {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-lg);
+      overflow: hidden;
+      display: flex;
+      height: 720px;
+    }
+
+    /* Mock Sidebar */
+    .mock-sidebar {
+      width: 230px;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+    .mock-sidebar-header {
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .mock-logo-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius-sm);
+      background: var(--accent);
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 16px;
+      box-shadow: 0 2px 8px var(--accent-glow);
+    }
+    .mock-logo-text { font-weight: 700; font-size: 14.5px; color: var(--text); }
+    .mock-logo-badge { font-size: 11px; color: var(--text-tertiary); }
+
+    .mock-nav {
+      padding: 12px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .mock-nav-section {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-tertiary);
+      padding: 8px 10px 4px;
+    }
+    .mock-nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 12px;
+      border-radius: var(--radius-sm);
+      color: var(--text-secondary);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.12s ease;
+      border: 1px solid transparent;
+    }
+    .mock-nav-item:hover {
+      background: var(--surface-hover);
+      color: var(--text);
+    }
+    .mock-nav-item.active {
+      background: var(--accent-light);
+      color: var(--accent);
+      font-weight: 600;
+      border-color: rgba(217, 119, 6, 0.2);
+    }
+
+    .mock-sidebar-footer {
+      padding: 16px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      font-size: 12px;
+      color: var(--text-tertiary);
+    }
+    .mock-status-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .mock-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--success);
+    }
+
+    /* Mock Main Content */
+    .mock-main {
+      flex: 1;
+      background: var(--page-bg);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+    }
+    .mock-header {
+      padding: 20px 28px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .mock-header-title {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .mock-header-sub {
+      font-size: 12.5px;
+      color: var(--text-secondary);
+      margin-top: 2px;
+    }
+    .mock-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      border: 1px solid transparent;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: #ffffff;
+      box-shadow: 0 2px 6px var(--accent-glow);
+    }
+    .btn-primary:hover {
+      background: var(--accent-hover);
+    }
+    .btn-secondary {
+      background: var(--surface);
+      border-color: var(--border);
+      color: var(--text);
+    }
+    .btn-secondary:hover {
+      background: var(--surface-hover);
+      border-color: var(--border-hover);
+    }
+
+    .mock-content {
+      padding: 24px 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* Stats Grid */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+    }
+    .stat-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 16px;
+      box-shadow: var(--shadow-sm);
+    }
+    .stat-num {
+      font-size: 26px;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1.2;
+    }
+    .stat-label {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-top: 4px;
+    }
+
+    /* Search & Filter Bar */
+    .filter-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 8px 14px;
+      box-shadow: var(--shadow-sm);
+    }
+    .search-input {
+      flex: 1;
+      border: none;
+      background: transparent;
+      color: var(--text);
+      font-size: 13px;
+      outline: none;
+    }
+    .search-input::placeholder { color: var(--text-tertiary); }
+    .tag-filter {
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface-raised);
+      color: var(--text-secondary);
+      cursor: pointer;
+    }
+    .tag-filter.active {
+      background: var(--accent-light);
+      border-color: var(--accent);
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    /* Cards Grid */
+    .skills-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 16px;
+    }
+    .skill-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 18px;
+      box-shadow: var(--shadow-sm);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      transition: all 0.15s ease;
+    }
+    .skill-card:hover {
+      border-color: var(--accent);
+      box-shadow: var(--shadow-md);
+      transform: translateY(-1px);
+    }
+    .skill-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .skill-name {
+      font-weight: 700;
+      font-size: 15px;
+      color: var(--text);
+    }
+    .skill-desc {
+      font-size: 12.5px;
+      color: var(--text-secondary);
+      line-height: 1.5;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11.5px;
+      font-weight: 500;
+    }
+    .badge-success { background: var(--success-light); color: var(--success); }
+    .badge-warning { background: var(--warning-light); color: var(--warning); }
+    .badge-danger { background: var(--danger-light); color: var(--danger); }
+    .badge-accent { background: var(--accent-light); color: var(--accent); font-weight: 600; }
+    .badge-neutral { background: var(--surface-raised); color: var(--text-secondary); border: 1px solid var(--border); }
+
+    .skill-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: auto;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--text-tertiary);
+    }
+
+    /* Color Tokens Table Section */
+    .tokens-section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+      box-shadow: var(--shadow-sm);
+    }
+    .tokens-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 14px;
+      margin-top: 16px;
+    }
+    .token-card {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface-raised);
+      padding: 12px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .token-chip {
+      width: 38px;
+      height: 38px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .token-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      overflow: hidden;
+    }
+    .token-name { font-size: 12px; font-weight: 600; color: var(--text); }
+    .token-val { font-size: 11px; font-family: monospace; color: var(--text-tertiary); }
+
+    /* Custom Switch Component */
+    .switch-demo {
+      width: 36px;
+      height: 20px;
+      background: var(--accent);
+      border-radius: 10px;
+      position: relative;
+      cursor: pointer;
+    }
+    .switch-demo::after {
+      content: "";
+      position: absolute;
+      width: 16px;
+      height: 16px;
+      background: white;
+      border-radius: 50%;
+      top: 2px;
+      right: 2px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 顶部悬浮控制栏 -->
+  <div class="top-controller">
+    <div class="controller-title-wrap">
+      <span style="font-size: 16px; font-weight: 700;">🎨 黄色主题调整提案预览</span>
+      <span class="controller-badge">Interactive Preview</span>
+    </div>
+
+    <div class="controller-options">
+      <!-- 方案切换 -->
+      <button class="palette-btn" onclick="setPalette('original')">
+        <span class="color-dot" style="background: #c47d2e;"></span>
+        当前原版 (Parchment)
+      </button>
+
+      <button class="palette-btn active" onclick="setPalette('amber')">
+        <span class="color-dot" style="background: #d97706;"></span>
+        ✨ 方案A：琥珀暖金 (推荐)
+      </button>
+
+      <button class="palette-btn" onclick="setPalette('sand')">
+        <span class="color-dot" style="background: #c26e1a;"></span>
+        方案B：暖阳原木 (Sand)
+      </button>
+
+      <button class="palette-btn" onclick="setPalette('butter')">
+        <span class="color-dot" style="background: #ca8a04;"></span>
+        方案C：北欧黄油 (Butter)
+      </button>
+
+      <button class="palette-btn" onclick="setPalette('refined')">
+        <span class="color-dot" style="background: #c47625;"></span>
+        方案D：原版微调提亮
+      </button>
+
+      <!-- 明暗模式切换 -->
+      <div class="mode-switch-group" style="margin-left: 8px;">
+        <button id="btnLight" class="mode-switch-btn active" onclick="setTheme('light')">☀️ 浅色</button>
+        <button id="btnDark" class="mode-switch-btn" onclick="setTheme('dark')">🌙 深色</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="preview-container">
+
+    <!-- 方案对比与设计思路 -->
+    <div class="summary-card">
+      <div class="summary-title">
+        <span>💡 调整方案说明与对比</span>
+      </div>
+      <div class="summary-desc">
+        当前原版的黄色主题（经典暖色）在浅色模式下背景色（<code>#f0ead6</code>）略显灰沉与偏泥黄色，暗色模式下则与冷蓝灰混杂。我们设计了以下4种优化方向供您预览和选择：
+      </div>
+
+      <div class="comparison-grid">
+        <!-- 方案A -->
+        <div class="comparison-item selected" id="card-amber" onclick="setPalette('amber')">
+          <span class="comparison-badge">推荐</span>
+          <div style="font-weight: 700; font-size: 14.5px; color: var(--text);">方案 A：琥珀暖金 (Warm Amber)</div>
+          <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">
+            柔和温润的象牙奶油白底色，去除灰绿泥感；搭配高通透度的琥珀橙金。深色模式采用醇厚浓缩咖啡暖黑底色。
+          </div>
+          <div class="swatch-bar">
+            <div class="swatch-slice" style="background: #faf7f2;" title="Page BG"></div>
+            <div class="swatch-slice" style="background: #ffffff;" title="Surface"></div>
+            <div class="swatch-slice" style="background: #e6ded3;" title="Border"></div>
+            <div class="swatch-slice" style="background: #d97706;" title="Accent"></div>
+            <div class="swatch-slice" style="background: #2c251e;" title="Text"></div>
+          </div>
+        </div>
+
+        <!-- 方案B -->
+        <div class="comparison-item" id="card-sand" onclick="setPalette('sand')">
+          <div style="font-weight: 700; font-size: 14.5px; color: var(--text);">方案 B：暖阳原木 (Solar Sand)</div>
+          <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">
+            砂石原木质感，微暖大地色，自然舒缓，对比度适中。
+          </div>
+          <div class="swatch-bar">
+            <div class="swatch-slice" style="background: #f5efe3;"></div>
+            <div class="swatch-slice" style="background: #fdfbf7;"></div>
+            <div class="swatch-slice" style="background: #ddd1b8;"></div>
+            <div class="swatch-slice" style="background: #c26e1a;"></div>
+            <div class="swatch-slice" style="background: #362d22;"></div>
+          </div>
+        </div>
+
+        <!-- 方案C -->
+        <div class="comparison-item" id="card-butter" onclick="setPalette('butter')">
+          <div style="font-weight: 700; font-size: 14.5px; color: var(--text);">方案 C：北欧黄油 (Butter & Honey)</div>
+          <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">
+            更轻盈清透的奶油黄底色 + 蜂蜜亮黄，明亮通透，现代感强。
+          </div>
+          <div class="swatch-bar">
+            <div class="swatch-slice" style="background: #faf8f2;"></div>
+            <div class="swatch-slice" style="background: #ffffff;"></div>
+            <div class="swatch-slice" style="background: #e8e2d0;"></div>
+            <div class="swatch-slice" style="background: #ca8a04;"></div>
+            <div class="swatch-slice" style="background: #23201a;"></div>
+          </div>
+        </div>
+
+        <!-- 方案D -->
+        <div class="comparison-item" id="card-refined" onclick="setPalette('refined')">
+          <div style="font-weight: 700; font-size: 14.5px; color: var(--text);">方案 D：原版微调提亮 (Refined Parchment)</div>
+          <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">
+            保留原版复古羊皮纸特色，但提高亮度、剔除发灰发绿的浊度。
+          </div>
+          <div class="swatch-bar">
+            <div class="swatch-slice" style="background: #f4eee2;"></div>
+            <div class="swatch-slice" style="background: #fffdf8;"></div>
+            <div class="swatch-slice" style="background: #dcd2bf;"></div>
+            <div class="swatch-slice" style="background: #c47625;"></div>
+            <div class="swatch-slice" style="background: #382e22;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 真实应用界面模拟 Mockup -->
+    <div>
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+        <h2 style="font-size: 16px; font-weight: 700; color: var(--text);">🖥️ Skills Manager 界面效果实时预览</h2>
+        <span style="font-size: 12px; color: var(--text-tertiary);">点击上方方案按钮可即时切换查看全部组件状态</span>
+      </div>
+
+      <div class="mockup-wrapper">
+        <!-- 侧边栏 Sidebar -->
+        <aside class="mock-sidebar">
+          <div class="mock-sidebar-header">
+            <div class="mock-logo-icon">S</div>
+            <div>
+              <div class="mock-logo-text">Skills Manager</div>
+              <div class="mock-logo-badge">v1.2.0 · 本地管理</div>
+            </div>
+          </div>
+
+          <nav class="mock-nav">
+            <div class="mock-nav-section">导航</div>
+            <div class="mock-nav-item">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+              <span>概览</span>
+            </div>
+            <div class="mock-nav-item active">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+              <span>技能 (Skills)</span>
+            </div>
+            <div class="mock-nav-item">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="5"></circle><path d="M20 21a8 8 0 1 0-16 0"></path></svg>
+              <span>智能体 (Agents)</span>
+            </div>
+            <div class="mock-nav-item">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+              <span>MCP 服务</span>
+            </div>
+            <div class="mock-nav-item">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+              <span>设置</span>
+            </div>
+          </nav>
+
+          <div class="mock-sidebar-footer">
+            <div class="mock-status-pill">
+              <span class="mock-dot"></span>
+              <span>核心服务正常运行</span>
+            </div>
+          </div>
+        </aside>
+
+        <!-- 主内容区 Main Content -->
+        <main class="mock-main">
+          <!-- 头部 Header -->
+          <div class="mock-header">
+            <div>
+              <div class="mock-header-title">技能管理</div>
+              <div class="mock-header-sub">已发现 28 个技能 · 24 个已启用</div>
+            </div>
+            <div class="mock-header-actions">
+              <button class="btn btn-secondary">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                导入技能
+              </button>
+              <button class="btn btn-primary">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                新建技能
+              </button>
+            </div>
+          </div>
+
+          <div class="mock-content">
+            <!-- 统计卡片 -->
+            <div class="stats-row">
+              <div class="stat-box">
+                <div class="stat-num">28</div>
+                <div class="stat-label">全部技能</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-num" style="color: var(--accent);">24</div>
+                <div class="stat-label">已启用技能</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-num">6</div>
+                <div class="stat-label">关联智能体</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-num">3</div>
+                <div class="stat-label">MCP 连接</div>
+              </div>
+            </div>
+
+            <!-- 搜索与筛选 -->
+            <div class="filter-bar">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-tertiary);"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              <input class="search-input" placeholder="搜索技能名称、描述或标签..." value="code-review" />
+              <div class="tag-filter active">全部</div>
+              <div class="tag-filter">开发工具</div>
+              <div class="tag-filter">自动化</div>
+              <div class="tag-filter">文档分析</div>
+            </div>
+
+            <!-- 技能卡片列表 -->
+            <div class="skills-grid">
+              <!-- Card 1 -->
+              <div class="skill-card">
+                <div class="skill-top">
+                  <div>
+                    <div class="skill-name">code-review-pro</div>
+                    <div style="margin-top: 4px; display: flex; gap: 6px;">
+                      <span class="badge badge-accent">官方推荐</span>
+                      <span class="badge badge-success">运行中</span>
+                    </div>
+                  </div>
+                  <div class="switch-demo"></div>
+                </div>
+                <div class="skill-desc">
+                  自动化代码审查工具，针对安全性、性能瓶颈及代码风格进行静态分析与智能优化建议。
+                </div>
+                <div class="skill-footer">
+                  <span>版本: 2.4.0 · 3天前更新</span>
+                  <span class="badge badge-neutral">JavaScript / TS</span>
+                </div>
+              </div>
+
+              <!-- Card 2 -->
+              <div class="skill-card">
+                <div class="skill-top">
+                  <div>
+                    <div class="skill-name">git-conventional-commits</div>
+                    <div style="margin-top: 4px; display: flex; gap: 6px;">
+                      <span class="badge badge-neutral">Git 协作</span>
+                      <span class="badge badge-success">运行中</span>
+                    </div>
+                  </div>
+                  <div class="switch-demo"></div>
+                </div>
+                <div class="skill-desc">
+                  根据提交变更自动生成符合规范的中文 Conventional Commits 提交消息并执行校验。
+                </div>
+                <div class="skill-footer">
+                  <span>版本: 1.1.2 · 1周前更新</span>
+                  <span class="badge badge-neutral">Git / CLI</span>
+                </div>
+              </div>
+
+              <!-- Card 3 -->
+              <div class="skill-card">
+                <div class="skill-top">
+                  <div>
+                    <div class="skill-name">mcp-postgres-explorer</div>
+                    <div style="margin-top: 4px; display: flex; gap: 6px;">
+                      <span class="badge badge-warning">配置待更新</span>
+                    </div>
+                  </div>
+                  <div class="switch-demo" style="background: var(--border);"></div>
+                </div>
+                <div class="skill-desc">
+                  PostgreSQL 数据库结构与实时查询能力扩展，支持只读模式与安全查询沙箱。
+                </div>
+                <div class="skill-footer">
+                  <span>版本: 0.9.5 · 本地草稿</span>
+                  <span class="badge badge-neutral">Database</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <!-- 当前选定方案的色值表 Token List -->
+    <div class="tokens-section">
+      <div style="display: flex; align-items: center; justify-content: space-between;">
+        <h3 style="font-size: 15px; font-weight: 700; color: var(--text);">📋 当前方案 CSS 变量一览</h3>
+        <span id="current-palette-label" style="font-size: 12.5px; font-weight: 600; color: var(--accent);">方案 A：琥珀暖金 (Amber)</span>
+      </div>
+
+      <div class="tokens-grid" id="tokens-container">
+        <!-- JS 将动态生成 -->
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    const tokens = [
+      { name: "--page-bg", label: "页面背景" },
+      { name: "--surface", label: "卡片主表面" },
+      { name: "--surface-raised", label: "次级表面 / 胶囊" },
+      { name: "--surface-hover", label: "悬停背景" },
+      { name: "--border", label: "常规边框" },
+      { name: "--border-hover", label: "悬停边框" },
+      { name: "--text", label: "主文本" },
+      { name: "--text-secondary", label: "次要文本" },
+      { name: "--text-tertiary", label: "弱化文本" },
+      { name: "--accent", label: "强调色 (Accent)" },
+      { name: "--accent-light", label: "强调色浅底" },
+      { name: "--success", label: "成功色" },
+      { name: "--warning", label: "警告色" },
+      { name: "--danger", label: "危险色" }
+    ];
+
+    const paletteLabels = {
+      original: "当前原版 (Parchment)",
+      amber: "方案 A：琥珀暖金 (Warm Amber - 推荐)",
+      sand: "方案 B：暖阳原木 (Solar Sand)",
+      butter: "方案 C：北欧黄油 (Butter & Honey)",
+      refined: "方案 D：原版微调提亮 (Refined Parchment)"
+    };
+
+    function setPalette(paletteName) {
+      document.documentElement.setAttribute('data-palette', paletteName);
+      
+      // 更新顶部按钮高亮
+      document.querySelectorAll('.palette-btn').forEach(btn => {
+        btn.classList.remove('active');
+        if (btn.getAttribute('onclick').includes(paletteName)) {
+          btn.classList.add('active');
+        }
+      });
+
+      // 更新方案卡片高亮
+      document.querySelectorAll('.comparison-item').forEach(card => {
+        card.classList.remove('selected');
+      });
+      const targetCard = document.getElementById('card-' + paletteName);
+      if (targetCard) targetCard.classList.add('selected');
+
+      document.getElementById('current-palette-label').innerText = paletteLabels[paletteName] || paletteName;
+      updateTokensList();
+    }
+
+    function setTheme(themeMode) {
+      document.documentElement.setAttribute('data-theme', themeMode);
+      document.getElementById('btnLight').classList.toggle('active', themeMode === 'light');
+      document.getElementById('btnDark').classList.toggle('active', themeMode === 'dark');
+      updateTokensList();
+    }
+
+    function updateTokensList() {
+      const container = document.getElementById('tokens-container');
+      const computed = getComputedStyle(document.documentElement);
+      
+      let html = '';
+      tokens.forEach(t => {
+        const val = computed.getPropertyValue(t.name).trim();
+        html += `
+          <div class="token-card">
+            <div class="token-chip" style="background: ${val};"></div>
+            <div class="token-info">
+              <span class="token-name">${t.label}</span>
+              <span class="token-val">${t.name}</span>
+              <span class="token-val" style="color: var(--accent); font-weight: 600;">${val}</span>
+            </div>
+          </div>
+        `;
+      });
+      container.innerHTML = html;
+    }
+
+    // 初始化
+    window.addEventListener('DOMContentLoaded', () => {
+      setPalette('amber');
+      setTheme('light');
+    });
+  </script>
+</body>
+</html>
