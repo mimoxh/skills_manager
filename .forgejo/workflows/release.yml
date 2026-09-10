@@ -1,0 +1,92 @@
+name: Release
+
+# 合并到 main 且 RELEASE_NOTES.md 发生变化时触发。
+# Agent 负责在合并前写好 RELEASE_NOTES.md；本 workflow 只创建/更新 Release 正文。
+# Windows zip 不在 NAS 上编译，由本地 scripts/upload-release-asset.ps1 挂载到同一 Release。
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'RELEASE_NOTES.md'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure jq
+        run: command -v jq >/dev/null || (sudo apt-get update && sudo apt-get install -y jq)
+
+      - name: Read version
+        id: meta
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          if [ ! -f RELEASE_NOTES.md ]; then
+            echo "RELEASE_NOTES.md not found" >&2
+            exit 1
+          fi
+
+      - name: Create tag if missing
+        env:
+          RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          API: ${{ github.api_url }}/repos/${{ github.repository }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          SHA="${{ github.sha }}"
+          status=$(curl -sS -o /tmp/ref.json -w '%{http_code}' \
+            -H "Authorization: token ${RELEASE_TOKEN}" \
+            "${API}/git/ref/tags/${TAG}")
+          if [ "$status" = "404" ]; then
+            curl -sS -X POST \
+              -H "Authorization: token ${RELEASE_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "{\"ref\":\"refs/tags/${TAG}\",\"sha\":\"${SHA}\"}" \
+              "${API}/git/refs"
+          elif [ "$status" != "200" ]; then
+            cat /tmp/ref.json >&2
+            exit 1
+          fi
+
+      - name: Create or update Release
+        env:
+          RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          API: ${{ github.api_url }}/repos/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.meta.outputs.tag }}"
+          NAME="Skills Manager ${TAG}"
+
+          status=$(curl -sS -o /tmp/release.json -w '%{http_code}' \
+            -H "Authorization: token ${RELEASE_TOKEN}" \
+            "${API}/releases/tags/${TAG}")
+
+          jq -n --arg body "$(cat RELEASE_NOTES.md)" '{body:$body}' > /tmp/patch.json
+
+          if [ "$status" = "200" ]; then
+            RELEASE_ID=$(jq -r .id /tmp/release.json)
+            curl -sS -X PATCH \
+              -H "Authorization: token ${RELEASE_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d @/tmp/patch.json \
+              "${API}/releases/${RELEASE_ID}" > /tmp/upd.json
+            jq -r '"updated release id=\(.id) tag=\(.tag_name) url=\(.html_url)"' /tmp/upd.json
+          else
+            jq -n \
+              --arg tag_name "$TAG" \
+              --arg name "$NAME" \
+              --arg body "$(cat RELEASE_NOTES.md)" \
+              '{tag_name:$tag_name,name:$name,body:$body,draft:false,prerelease:false,generate_release_notes:false}' \
+              > /tmp/create.json
+            curl -sS -X POST \
+              -H "Authorization: token ${RELEASE_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d @/tmp/create.json \
+              "${API}/releases" > /tmp/created.json
+            jq -r '"created release id=\(.id) tag=\(.tag_name) url=\(.html_url)"' /tmp/created.json
+          fi
