@@ -219,7 +219,19 @@ export function SkillInstallDialog({
                         {checked && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><polyline points="20 6 9 17 4 12" /></svg>}
                       </span>
                       <span style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
-                        <span style={{ display: "block", fontSize: 14, fontWeight: 500 }}>{agent.name}</span>
+                        <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 500 }}>
+                          {agent.name}
+                          {agent.type === "universal" && (
+                            <span className="badge" style={{ fontSize: 10, background: "rgba(124, 58, 237, 0.15)", color: "#7c3aed" }}>
+                              ★ 基准中枢
+                            </span>
+                          )}
+                          {agent.supportsUniversal && agent.type !== "universal" && (
+                            <span className="badge" style={{ fontSize: 10, background: "rgba(16, 185, 129, 0.1)", color: "#059669" }}>
+                              原生兼容中枢
+                            </span>
+                          )}
+                        </span>
                         <span style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{agent.skillsPath}</span>
                         {(agent.userTags ?? []).length > 0 && (
                           <span className="agent-tags">
@@ -243,7 +255,10 @@ export function SkillInstallDialog({
             </div>
 
             <div>
-              <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>冲突策略</p>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)" }}>冲突策略</p>
+                <span style={{ fontSize: 11, color: "var(--accent)" }}>优先使用符号链接 (Symlink)</span>
+              </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {policyOptions.map((option) => (
                   <button

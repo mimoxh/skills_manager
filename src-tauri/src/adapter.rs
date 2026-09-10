@@ -1,6 +1,7 @@
 use crate::{
     error::{AppError, AppResult},
     models::{AgentProfile, AgentType},
+    util::effective_supports_universal,
 };
 use std::{
     env, fs,
@@ -71,6 +72,7 @@ impl DirectoryAdapter {
                         "manifestPath": manifest_path.to_string_lossy()
                     })),
                     user_tags: Vec::new(),
+                    supports_universal: false,
                 });
             }
         }
@@ -116,6 +118,7 @@ impl AgentAdapter for DirectoryAdapter {
                     skills_path,
                     adapter_config: None,
                     user_tags: Vec::new(),
+                    supports_universal: false,
                 }];
             }
             return vec![];
@@ -133,6 +136,7 @@ impl AgentAdapter for DirectoryAdapter {
         }
 
         let candidates = match self.agent_type {
+            AgentType::Universal => vec![Self::home_path(&[".agents", "skills"])],
             AgentType::Codex => vec![Self::home_path(&[".codex", "skills"])],
             AgentType::Claude => vec![
                 env::var_os("APPDATA")
@@ -158,9 +162,11 @@ impl AgentAdapter for DirectoryAdapter {
             .filter(|path| path.exists())
             .map(|path| {
                 let type_name = self.agent_type.as_str();
+                let path_str = path.to_string_lossy();
                 AgentProfile {
-                    id: format!("{}:{}", type_name, path.to_string_lossy()),
+                    id: format!("{}:{}", type_name, path_str),
                     name: match self.agent_type {
+                        AgentType::Universal => "Universal (.agents/skills)".to_string(),
                         AgentType::Codex => "Codex".to_string(),
                         AgentType::Claude => "Claude".to_string(),
                         AgentType::ClaudeCode => "Claude Code".to_string(),
@@ -172,9 +178,14 @@ impl AgentAdapter for DirectoryAdapter {
                         AgentType::OpenCode => "OpenCode".to_string(),
                     },
                     agent_type: self.agent_type.clone(),
-                    skills_path: path.to_string_lossy().to_string(),
+                    skills_path: path_str.to_string(),
                     adapter_config: None,
                     user_tags: Vec::new(),
+                    supports_universal: effective_supports_universal(
+                        self.agent_type == AgentType::Universal,
+                        &path_str,
+                        false,
+                    ),
                 }
             })
             .collect()
@@ -196,10 +207,10 @@ impl AgentAdapter for DirectoryAdapter {
         profile: &AgentProfile,
     ) -> AppResult<Option<PathBuf>> {
         let target = Path::new(&profile.skills_path).join(skill_id);
-        if !target.exists() {
+        if !target.exists() && fs::symlink_metadata(&target).is_err() {
             return Ok(None);
         }
-        fs::remove_dir_all(&target)?;
+        crate::hash::remove_dir_or_symlink(&target)?;
         Ok(None)
     }
 }
@@ -210,6 +221,7 @@ pub fn adapter_for(profile: &AgentProfile) -> DirectoryAdapter {
 
 pub fn built_in_adapters() -> Vec<DirectoryAdapter> {
     vec![
+        DirectoryAdapter::new(AgentType::Universal),
         DirectoryAdapter::new(AgentType::Codex),
         DirectoryAdapter::new(AgentType::Claude),
         DirectoryAdapter::new(AgentType::ClaudeCode),

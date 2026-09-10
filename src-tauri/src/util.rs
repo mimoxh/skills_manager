@@ -11,6 +11,18 @@ use std::{
     time::SystemTime,
 };
 
+/// 判断 skills 路径是否指向 Universal 中枢 `~/.agents/skills`（兼容 Windows 反斜杠）。
+pub fn is_universal_skills_path(path: &str) -> bool {
+    let normalized = path.trim().replace('\\', "/");
+    let trimmed = normalized.trim_end_matches('/');
+    trimmed.ends_with("/.agents/skills") || trimmed == ".agents/skills"
+}
+
+/// Agent 是否原生扫描 Universal 中枢（路径本身为中枢，或用户显式标记）。
+pub fn effective_supports_universal(agent_type_is_universal: bool, skills_path: &str, flagged: bool) -> bool {
+    agent_type_is_universal || is_universal_skills_path(skills_path) || flagged
+}
+
 /// 校验相对路径不含目录穿越与绝对路径，防止文件操作逃逸出预期目录。
 pub fn safe_relative_path(relative_path: &str) -> AppResult<PathBuf> {
     let path = Path::new(relative_path);

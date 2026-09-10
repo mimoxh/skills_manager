@@ -531,6 +531,7 @@ mod tests {
             skills_path: "/tmp/test".into(),
             adapter_config: None,
             user_tags: Vec::new(),
+            supports_universal: false,
         };
         store.save_agent(&profile).unwrap();
         let agents = store.list_agents().unwrap();
@@ -548,6 +549,7 @@ mod tests {
             skills_path: "/tmp/test".into(),
             adapter_config: None,
             user_tags: Vec::new(),
+            supports_universal: false,
         };
         store.save_agent(&profile).unwrap();
         store
@@ -666,6 +668,7 @@ mod tests {
             skills_path: "/tmp/test".into(),
             adapter_config: None,
             user_tags: Vec::new(),
+            supports_universal: false,
         };
         store.save_agent(&profile).unwrap();
 

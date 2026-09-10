@@ -17,7 +17,7 @@ Skills Manager 是一个本地 Windows 桌面工具，用于管理多个 AI 客�
 - **MCP 管理**：为 Codex、Claude Code、OpenCode 和 Trae 扫描、新增、更新、启用或禁用、同步、删除 MCP server。支持的传输类型为 `stdio`、`http` 和 `sse`。支持自定义 MCP 配置文件路径。
 - **无标签筛选**：Skills 和 Agents 列表支持筛选"无标签"项目，便于快速定位未分类的技能和 Agent。
 - **视图独立滚动**：Skills、MCP、Agents 视图列表独立滚动，页面整体不跟随滚动，多列表场景下操作更流畅。
-- **主题切换**：支持浅色、深色、跟随系统三种主题模式，并在本机记住界面偏好。
+- **双风格与主题切换**：支持「清爽极简（现代蓝白）」与「经典暖色（琥珀暖金）」两种风格，兼容浅色、深色与跟随系统模式，并在本机持久化偏好。
 - **精简界面**：移除标题栏图标和标题文字，移除底部状态栏，主题切换移入设置页，界面更简洁、内容区域更大。
 
 ## 技术栈
@@ -75,4 +75,4 @@ npm run test:rust
 npm run native:build -- --no-bundle
 ```
 
-便携版构建产物为 `src-tauri\target\release\skill-sync-manager.exe`。`release/` 目录中的 `SkillsManager-v0.3.2-windows-portable.zip` 是发布产物，适合上传到 GitHub Releases；根目录的 `SkillsManager.exe` 可用于本地快速验证。
+便携版构建产物为 `src-tauri\target\release\skill-sync-manager.exe`。`release/` 目录中的 `SkillsManager-v0.4.1-windows-portable.zip` 是发布产物，适合上传到 GitHub Releases；根目录的 `SkillsManager.exe` 可用于本地快速验证。

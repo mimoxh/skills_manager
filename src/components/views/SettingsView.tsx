@@ -24,8 +24,8 @@ const paletteOptions: Array<{
   {
     value: "parchment",
     label: "经典暖色",
-    desc: "米黄羊皮纸 + 琥珀橙，复古档案风格",
-    swatch: ["#faf6eb", "#f5f0e3", "#c47d2e"],
+    desc: "象牙奶油 + 琥珀暖金，温润通透质感",
+    swatch: ["#ffffff", "#f5efe6", "#d97706"],
   },
 ];
 

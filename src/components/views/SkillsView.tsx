@@ -319,9 +319,29 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
               </div>
               <div className="skill-info">
                 <div className="skill-name">{skill.title}</div>
-                <div className="skill-meta">来源 {skill.bestCopy.agentName} · {skill.copies.length} 个副本</div>
+                <div className="skill-meta">
+                  来源 {skill.bestCopy.agentName} · {skill.copies.length} 个副本
+                  {skill.sourceUrl && (
+                    <span style={{ marginLeft: 8, color: "var(--text-tertiary)" }}>
+                      · Git: {skill.sourceUrl.replace(/^https?:\/\/github\.com\//, "").replace(/\.git$/, "")}
+                    </span>
+                  )}
+                </div>
                 {skill.description && <div className="skill-desc">{skill.description}</div>}
                 <div className="skill-tags">
+                  {skill.isUniversal && (
+                    <span className="badge" style={{ background: "rgba(124, 58, 237, 0.12)", color: "#7c3aed", borderColor: "rgba(124, 58, 237, 0.25)" }}>
+                      Universal 中枢
+                    </span>
+                  )}
+                  {skill.bestCopy.isSymlink && (
+                    <span className="badge" style={{ background: "rgba(59, 130, 246, 0.12)", color: "#2563eb", borderColor: "rgba(59, 130, 246, 0.25)" }}>
+                      软链副本
+                    </span>
+                  )}
+                  {!skill.bestCopy.isSymlink && !skill.isUniversal && skill.copies.length > 0 && (
+                    <span className="badge badge-muted">实体副本</span>
+                  )}
                   <span className="badge badge-version">{skill.bestCopy.version ? `v${skill.bestCopy.version}` : "未声明版本"}</span>
                   {(skill.userTags ?? []).map((tag) => (
                     <span className="badge badge-user-tag" key={tag}>{tag}</span>
@@ -336,7 +356,13 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
                 </div>
               </div>
               <span className={`badge ${skill.missingAgentIds.length > 0 && !noFullCoverageTitles.has(skill.title) ? "badge-syncable" : "badge-synced"}`}>
-                {skill.missingAgentIds.length > 0 && !noFullCoverageTitles.has(skill.title) ? "需同步" : noFullCoverageTitles.has(skill.title) ? "已部分覆盖" : "已覆盖"}
+                {skill.missingAgentIds.length > 0 && !noFullCoverageTitles.has(skill.title)
+                  ? "需定向同步"
+                  : skill.isUniversal
+                  ? "通用覆盖"
+                  : noFullCoverageTitles.has(skill.title)
+                  ? "已部分覆盖"
+                  : "已覆盖"}
               </span>
               <button
                 className="btn-icon"
@@ -396,6 +422,10 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
           metadata={[
             { label: "来源路径", value: selectedSourceCopy(selectedSkill, selectedSourceAgentId).skillPath },
             { label: "来源 Agent", value: selectedSourceCopy(selectedSkill, selectedSourceAgentId).agentName },
+            { label: "中枢状态", value: selectedSkill.isUniversal ? "已托管在 Universal 中枢" : "未在 Universal 中枢" },
+            { label: "来源形态", value: selectedSourceCopy(selectedSkill, selectedSourceAgentId).isSymlink ? "软链/Junction" : "实体目录" },
+            ...(selectedSkill.sourceUrl ? [{ label: "Git 仓库", value: selectedSkill.sourceUrl }] : []),
+            ...(selectedSkill.installedAt ? [{ label: "安装时间", value: selectedSkill.installedAt }] : []),
             { label: "副本数量", value: selectedSkill.copies.length },
           ]}
           primaryLabel={selectedAgents.length === 0 ? "全部删除" : selectedAgents.length < selectedSkill.installedAgentIds.length ? "同步并清理" : "同步"}
@@ -441,7 +471,7 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
 }
 
 function preferredSourceCopy(skill: GroupedSkill): AgentSkillCopy {
-  return skill.copies.find((copy) => copy.agentId.startsWith("codex:")) || skill.bestCopy;
+  return skill.copies.find((copy) => copy.agentId.startsWith("universal:")) || skill.copies.find((copy) => copy.agentId.startsWith("codex:")) || skill.bestCopy;
 }
 
 function selectedSourceCopy(skill: GroupedSkill, agentId: string | null): AgentSkillCopy {

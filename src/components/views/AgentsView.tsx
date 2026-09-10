@@ -7,6 +7,7 @@ import { UserTagEditor } from "./UserTagEditor";
 
 const agentTypeOptions: Array<{ value: AgentType; label: string }> = [
   { value: "custom", label: "自定义" },
+  { value: "universal", label: "Universal 通用中枢" },
   { value: "opencode", label: "OpenCode" },
   { value: "codex", label: "Codex" },
   { value: "claudeCode", label: "Claude Code" },
@@ -203,7 +204,20 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
                     <svg className="icon" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
                   </div>
                   <div className="agent-info">
-                    <div className="agent-name">{agent.name}<span className="badge" style={{ marginLeft: 6, fontSize: 10 }}>{agentTypeLabel(agent.type)}</span></div>
+                    <div className="agent-name">
+                      {agent.name}
+                      <span className="badge" style={{ marginLeft: 6, fontSize: 10 }}>{agentTypeLabel(agent.type)}</span>
+                      {agent.type === "universal" && (
+                        <span className="badge" style={{ marginLeft: 6, fontSize: 10, background: "rgba(124, 58, 237, 0.15)", color: "#7c3aed", borderColor: "rgba(124, 58, 237, 0.3)" }}>
+                          ★ 基准中枢
+                        </span>
+                      )}
+                      {agent.supportsUniversal && agent.type !== "universal" && (
+                        <span className="badge" style={{ marginLeft: 6, fontSize: 10, background: "rgba(16, 185, 129, 0.1)", color: "#059669" }}>
+                          原生兼容中枢
+                        </span>
+                      )}
+                    </div>
                     <div className="agent-path">{agent.skillsPath}</div>
                     <div className="agent-tags">
                       {(agent.userTags ?? []).map((tag) => (
@@ -211,6 +225,21 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
                       ))}
                       <span className="badge badge-success">{installedCount} 已有</span>
                       {missingCount > 0 && <span className="badge badge-warning">{missingCount} 缺失</span>}
+                      {agent.type !== "universal" && onSaveAgent && (
+                        <button
+                          className="badge badge-user-tag"
+                          type="button"
+                          title="该 harness 是否原生扫描 Universal 中枢（~/.agents/skills）"
+                          style={{ cursor: "pointer" }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void onSaveAgent({ ...agent, supportsUniversal: !agent.supportsUniversal });
+                          }}
+                          disabled={busy}
+                        >
+                          {agent.supportsUniversal ? "原生兼容：开" : "原生兼容：关"}
+                        </button>
+                      )}
                     </div>
                   </div>
                   <button className="btn-icon" onClick={(e) => { e.stopPropagation(); setDeleteAgent(agent); }} disabled={busy} title="删除" type="button">
@@ -684,18 +713,18 @@ function AddAgentPanel({ customAgent, busy, onCustomChange, onSaveCustom, pickFo
 // ── 辅助函数 ──────────────────────────────────────────────────────
 
 function agentTypeLabel(type: AgentType): string {
-  const map: Record<AgentType, string> = { codex: "Codex", claude: "Claude", claudeCode: "Claude Code", claudeCowork: "Claude Desktop Cowork", cursor: "Cursor", trae: "Trae", custom: "自定义", cherryStudio: "Cherry Studio", opencode: "OpenCode" };
+  const map: Record<AgentType, string> = { universal: "Universal 通用中枢", codex: "Codex", claude: "Claude", claudeCode: "Claude Code", claudeCowork: "Claude Desktop Cowork", cursor: "Cursor", trae: "Trae", custom: "自定义", cherryStudio: "Cherry Studio", opencode: "OpenCode" };
   return map[type] ?? type;
 }
 
 function agentPlaceholder(type: AgentType): string {
-  const map: Partial<Record<AgentType, string>> = { opencode: "OpenCode", codex: "Codex", claudeCode: "Claude Code", claudeCowork: "Claude Desktop Cowork", cursor: "Cursor", trae: "Trae" };
+  const map: Partial<Record<AgentType, string>> = { universal: "Universal (.agents/skills)", opencode: "OpenCode", codex: "Codex", claudeCode: "Claude Code", claudeCowork: "Claude Desktop Cowork", cursor: "Cursor", trae: "Trae" };
   return map[type] ?? "例如 My Agent";
 }
 
 function skillsPlaceholder(type: AgentType): string {
-  const map: Partial<Record<AgentType, string>> = { opencode: "~/.opencode/skills", codex: "~/.codex/skills", claudeCode: "~/.claude/skills", claudeCowork: "%LOCALAPPDATA%\\Claude-3p\\...\\skills", cursor: "~/.cursor/skills", trae: "~/.trae/skills" };
-  return map[type] ?? "C:\\Users\\you\\.agent\\skills";
+  const map: Partial<Record<AgentType, string>> = { universal: "~/.agents/skills", opencode: "~/.opencode/skills", codex: "~/.codex/skills", claudeCode: "~/.claude/skills", claudeCowork: "%LOCALAPPDATA%\\Claude-3p\\...\\skills", cursor: "~/.cursor/skills", trae: "~/.trae/skills" };
+  return map[type] ?? "C:\\Users\\you\\.agents\\skills";
 }
 
 function mcpPlaceholder(type: AgentType, format?: string): string {

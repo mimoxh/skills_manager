@@ -20,8 +20,11 @@ AGENTS.md
 CLAUDE.md
 RELEASE.md
 doc/
+
 .claude/
 .mimocode/
+.reasonix/
+
 .dev-logs/
 .npm-cache/
 .sisyphus/
@@ -31,3 +34,4 @@ Users16617Documentssunsetholmescodeprojectskills_manager.tmp-opencode/
 
 .temp/
 temp/
+

@@ -11,8 +11,135 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use serde::Deserialize;
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SkillLockFile {
+    #[serde(default)]
+    pub version: Option<u32>,
+    #[serde(default)]
+    pub skills: HashMap<String, SkillLockEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SkillLockEntry {
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(rename = "sourceType", default)]
+    pub source_type: Option<String>,
+    #[serde(rename = "sourceUrl", default)]
+    pub source_url: Option<String>,
+    #[serde(rename = "skillPath", default)]
+    pub skill_path: Option<String>,
+    #[serde(rename = "installedAt", default)]
+    pub installed_at: Option<String>,
+    #[serde(rename = "updatedAt", default)]
+    pub updated_at: Option<String>,
+}
+
+pub fn skill_lock_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".agents").join(".skill-lock.json"))
+}
+
+pub fn load_skill_lock_map() -> HashMap<String, SkillLockEntry> {
+    skill_lock_path()
+        .filter(|p| p.exists())
+        .and_then(|p| fs::read_to_string(p).ok())
+        .and_then(|content| serde_json::from_str::<SkillLockFile>(&content).ok())
+        .map(|f| f.skills)
+        .unwrap_or_default()
+}
+
+/// 将技能写入 `~/.agents/.skill-lock.json`（merge，保留未知字段）。
+/// 测试环境跳过，避免污染真实 home。
+pub fn write_skill_lock_entry(
+    dir_name: &str,
+    source: Option<&str>,
+    source_type: Option<&str>,
+    source_url: Option<&str>,
+    skill_path: &Path,
+) -> AppResult<()> {
+    #[cfg(test)]
+    {
+        let _ = (dir_name, source, source_type, source_url, skill_path);
+        return Ok(());
+    }
+    #[cfg(not(test))]
+    {
+    let Some(path) = skill_lock_path() else {
+        return Ok(());
+    };
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut root: serde_json::Value = if path.exists() {
+        fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_else(|| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+    if !root.is_object() {
+        root = serde_json::json!({});
+    }
+    if root.get("version").is_none() {
+        root["version"] = serde_json::json!(1);
+    }
+    if root.get("skills").map(|v| v.is_object()).unwrap_or(false) == false {
+        root["skills"] = serde_json::json!({});
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    let existing = root["skills"]
+        .get(dir_name)
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let installed_at = existing
+        .get("installedAt")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&now)
+        .to_string();
+    let mut entry = existing;
+    if entry.as_object().is_none() {
+        entry = serde_json::json!({});
+    }
+    entry["source"] = serde_json::Value::String(
+        source
+            .map(str::to_string)
+            .or_else(|| {
+                entry
+                    .get("source")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_default(),
+    );
+    entry["sourceType"] = serde_json::Value::String(
+        source_type.unwrap_or("local").to_string(),
+    );
+    if let Some(url) = source_url {
+        entry["sourceUrl"] = serde_json::Value::String(url.to_string());
+    } else if entry.get("sourceUrl").is_none() {
+        entry["sourceUrl"] = serde_json::Value::Null;
+    }
+    entry["skillPath"] = serde_json::Value::String(skill_path.to_string_lossy().to_string());
+    entry["installedAt"] = serde_json::Value::String(installed_at);
+    entry["updatedAt"] = serde_json::Value::String(now);
+    root["skills"][dir_name] = entry;
+    fs::write(&path, serde_json::to_string_pretty(&root)?)?;
+    Ok(())
+    }
+}
+
 /// 扫描单个 Agent 的 skills 目录，返回每个子目录对应的 AgentSkillCopy。
 pub(crate) fn scan_agent_skill_copies(agent: &AgentProfile) -> AppResult<Vec<AgentSkillCopy>> {
+    scan_agent_skill_copies_with_lock(agent, &load_skill_lock_map())
+}
+
+pub(crate) fn scan_agent_skill_copies_with_lock(
+    agent: &AgentProfile,
+    lock_map: &HashMap<String, SkillLockEntry>,
+) -> AppResult<Vec<AgentSkillCopy>> {
     let root = Path::new(&agent.skills_path);
     if !root.exists() {
         return Ok(Vec::new());
@@ -26,7 +153,11 @@ pub(crate) fn scan_agent_skill_copies(agent: &AgentProfile) -> AppResult<Vec<Age
     for entry in fs::read_dir(root)? {
         let entry = entry?;
         let path = entry.path();
-        if !entry.file_type()?.is_dir() {
+        let is_symlink = fs::symlink_metadata(&path)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+        let dir_type_ok = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        if !dir_type_ok && !is_symlink {
             continue;
         }
         let dir_name = entry.file_name();
@@ -40,18 +171,37 @@ pub(crate) fn scan_agent_skill_copies(agent: &AgentProfile) -> AppResult<Vec<Age
             .unwrap_or(true);
         let metadata = fs::metadata(&path).ok();
         let (title, version, description, readme) = read_agent_skill_info(&path, false);
+        let normalized = normalize_title(&title);
+        let (source_url, lock_installed_at, lock_updated_at) = if let Some(entry) = lock_map
+            .get(&dir_id)
+            .or_else(|| lock_map.get(&title))
+            .or_else(|| lock_map.get(&normalized))
+        {
+            (
+                entry.source_url.clone().or_else(|| entry.source.clone()),
+                entry.installed_at.clone(),
+                entry.updated_at.clone(),
+            )
+        } else {
+            (None, None, None)
+        };
+        let updated_at = metadata
+            .and_then(|metadata| metadata.modified().ok())
+            .map(system_time_to_rfc3339)
+            .or(lock_updated_at);
         copies.push(AgentSkillCopy {
             agent_id: agent.id.clone(),
             agent_name: agent.name.clone(),
             skill_path: path.to_string_lossy().to_string(),
             title,
             version,
-            updated_at: metadata
-                .and_then(|metadata| metadata.modified().ok())
-                .map(system_time_to_rfc3339),
+            updated_at,
             description,
             readme,
             is_registered,
+            source_url,
+            installed_at: lock_installed_at,
+            is_symlink,
         });
     }
     Ok(copies)
@@ -67,6 +217,25 @@ pub(crate) fn group_agent_skills(agents: &[AgentProfile], copies: Vec<AgentSkill
             .push(copy);
     }
 
+    let agents_by_id: HashMap<&str, &AgentProfile> = agents
+        .iter()
+        .map(|agent| (agent.id.as_str(), agent))
+        .collect();
+    let is_hub_copy = |copy: &AgentSkillCopy| -> bool {
+        agents_by_id
+            .get(copy.agent_id.as_str())
+            .map(|agent| {
+                agent.agent_type == AgentType::Universal
+                    || crate::util::is_universal_skills_path(&agent.skills_path)
+            })
+            .unwrap_or(false)
+            || copy.agent_id.starts_with("universal:")
+            || copy
+                .skill_path
+                .replace('\\', "/")
+                .contains("/.agents/skills/")
+    };
+
     let mut values = grouped
         .into_values()
         .map(|mut copies| {
@@ -76,11 +245,33 @@ pub(crate) fn group_agent_skills(agents: &[AgentProfile], copies: Vec<AgentSkill
                 .iter()
                 .map(|copy| copy.agent_id.clone())
                 .collect::<HashSet<_>>();
+
+            // 检查该技能是否已存在于 Universal Hub
+            let universal_copy = copies.iter().find(|c| is_hub_copy(c));
+            let is_universal = universal_copy.is_some();
+            let universal_agent_id = universal_copy.map(|c| c.agent_id.clone());
+            let source_url = universal_copy
+                .and_then(|c| c.source_url.clone())
+                .or_else(|| best_copy.source_url.clone());
+            let installed_at = universal_copy
+                .and_then(|c| c.installed_at.clone())
+                .or_else(|| best_copy.installed_at.clone());
+
+            // 智能免冗余覆盖计算：若已在 Universal Hub 中存在，所有原生支持通用目录的 Agent 均已覆盖，不计入缺失！
             let missing_agent_ids = agents
                 .iter()
-                .filter(|agent| !installed_set.contains(&agent.id))
+                .filter(|agent| {
+                    if installed_set.contains(&agent.id) {
+                        return false;
+                    }
+                    if is_universal && agent.supports_universal {
+                        return false;
+                    }
+                    true
+                })
                 .map(|agent| agent.id.clone())
                 .collect::<Vec<_>>();
+
             let mut installed_agent_ids = copies
                 .iter()
                 .map(|copy| copy.agent_id.clone())
@@ -88,6 +279,7 @@ pub(crate) fn group_agent_skills(agents: &[AgentProfile], copies: Vec<AgentSkill
                 .into_iter()
                 .collect::<Vec<_>>();
             installed_agent_ids.sort();
+
             GroupedSkill {
                 title: best_copy.title.clone(),
                 description: best_copy.description.clone(),
@@ -97,6 +289,10 @@ pub(crate) fn group_agent_skills(agents: &[AgentProfile], copies: Vec<AgentSkill
                 copies,
                 installed_agent_ids,
                 missing_agent_ids,
+                source_url,
+                installed_at,
+                is_universal,
+                universal_agent_id,
             }
         })
         .collect::<Vec<_>>();
@@ -228,6 +424,11 @@ fn read_markdown_heading(text: &str) -> Option<String> {
 
 pub(crate) fn compare_skill_copy(a: &AgentSkillCopy, b: &AgentSkillCopy) -> Ordering {
     compare_versions(b.version.as_deref(), a.version.as_deref())
+        .then_with(|| {
+            let a_is_uni = a.agent_id.starts_with("universal:") || a.skill_path.replace('\\', "/").contains("/.agents/skills/");
+            let b_is_uni = b.agent_id.starts_with("universal:") || b.skill_path.replace('\\', "/").contains("/.agents/skills/");
+            b_is_uni.cmp(&a_is_uni)
+        })
         .then_with(|| b.updated_at.cmp(&a.updated_at))
         .then_with(|| a.agent_name.cmp(&b.agent_name))
         .then_with(|| a.skill_path.cmp(&b.skill_path))
@@ -434,6 +635,7 @@ mod tests {
             skills_path: root.path().to_string_lossy().to_string(),
             adapter_config: None,
             user_tags: Vec::new(),
+            supports_universal: false,
         };
         let copies = scan_agent_skill_copies(&agent).unwrap();
         let by_dir: HashMap<_, _> = copies
@@ -490,6 +692,7 @@ description: |
                 skills_path: a1.to_string_lossy().to_string(),
                 adapter_config: None,
                 user_tags: Vec::new(),
+                supports_universal: false,
             },
             AgentProfile {
                 id: "agent2".to_string(),
@@ -498,6 +701,7 @@ description: |
                 skills_path: a2.to_string_lossy().to_string(),
                 adapter_config: None,
                 user_tags: Vec::new(),
+                supports_universal: false,
             },
         ];
         let mut copies = Vec::new();
@@ -526,6 +730,7 @@ description: |
             skills_path: root.path().to_string_lossy().to_string(),
             adapter_config: None,
             user_tags: Vec::new(),
+            supports_universal: false,
         };
         let copies = scan_agent_skill_copies(&agent).unwrap();
         assert_eq!(copies.len(), 1);
