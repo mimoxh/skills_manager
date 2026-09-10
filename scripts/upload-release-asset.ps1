@@ -1,14 +1,14 @@
-# 将本地 release/ 下的 portable zip 上传到 Forgejo Release 资产。
+# 将本地 release/ 下的 portable zip 上传到 GitHub Release 资产。
 # 用法（在项目根目录）:
 #   powershell -File scripts/upload-release-asset.ps1
 #   powershell -File scripts/upload-release-asset.ps1 -Tag v0.4.1
 #   powershell -File scripts/upload-release-asset.ps1 -ZipPath path\to\file.zip
 #
-# Token 解析顺序: $env:FORGEJO_TOKEN > git remote forgejo URL 内嵌凭据。
+# Token 解析顺序: $env:GITHUB_TOKEN > $env:GH_TOKEN > git remote github URL 内嵌凭据。
 param(
   [string]$Tag = "",
   [string]$ZipPath = "",
-  [string]$Owner = "mimox",
+  [string]$Owner = "mimoxh",
   [string]$Repo = "skills_manager"
 )
 
@@ -42,46 +42,40 @@ try {
     throw "zip 不存在: $ZipPath"
   }
 
-  $BaseUrl = $null
-  $Token = $env:FORGEJO_TOKEN
+  $Token = $env:GITHUB_TOKEN
+  if (-not $Token) { $Token = $env:GH_TOKEN }
 
-  $remote = git remote get-url forgejo 2>$null
+  $remote = git remote get-url github 2>$null
   if ($LASTEXITCODE -eq 0 -and $remote) {
-    if ($remote -match '^(?<scheme>https?://)(?<auth>[^@]+)@(?<host>.+)$') {
-      if (-not $Token) {
-        $auth = $Matches['auth']
-        if ($auth -match ':') {
-          $Token = ($auth -split ':', 2)[1]
-        } else {
-          $Token = $auth
-        }
+    if (-not $Token -and $remote -match '^(?<scheme>https?://)(?<auth>[^@]+)@(?<host>.+)$') {
+      $auth = $Matches['auth']
+      if ($auth -match ':') {
+        $Token = ($auth -split ':', 2)[1]
+      } else {
+        $Token = $auth
       }
-      $BaseUrl = "$($Matches['scheme'])$($Matches['host'])" -replace '\.git$', ''
-    } elseif ($remote -match '^(?<scheme>https?://)(?<host>.+)$') {
-      $BaseUrl = "$($Matches['scheme'])$($Matches['host'])" -replace '\.git$', ''
+    }
+    if ($remote -match 'github\.com[:/](?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?$') {
+      $Owner = $Matches['owner']
+      $Repo = $Matches['repo']
     }
   }
 
-  if (-not $BaseUrl) {
-    $BaseUrl = "http://192.168.124.220:3000"
-  }
   if (-not $Token) {
-    throw "缺少 token。设置 `$env:FORGEJO_TOKEN，或确保 git remote forgejo URL 含凭据。"
+    throw "缺少 token。设置 `$env:GITHUB_TOKEN 或 `$env:GH_TOKEN（需要 repo 写权限）。"
   }
 
-  # Host/path 可能是 host/owner/repo.git，去掉 .git 后再取 API
-  if ($BaseUrl -match '^(?<base>https?://[^/]+)(?<rest>.*)$') {
-    $Origin = $Matches['base']
-  } else {
-    $Origin = $BaseUrl
-  }
-  $Api = "$Origin/api/v1/repos/$Owner/$Repo"
+  $Api = "https://api.github.com/repos/$Owner/$Repo"
 
   Write-Host "Release tag : $Tag"
   Write-Host "API         : $Api"
   Write-Host "Asset       : $ZipPath"
 
-  $headers = @{ Authorization = "token $Token"; Accept = "application/json" }
+  $headers = @{
+    Authorization = "Bearer $Token"
+    Accept        = "application/vnd.github+json"
+    "User-Agent"  = "skills-manager-release-script"
+  }
 
   $release = Invoke-RestMethod -Uri "$Api/releases/tags/$Tag" -Headers $headers -Method Get
   $releaseId = $release.id
@@ -95,7 +89,7 @@ try {
   }
 
   $escapedName = [uri]::EscapeDataString($fileName)
-  $uploadUrl = "$Api/releases/$releaseId/assets?name=$escapedName"
+  $uploadUrl = "https://uploads.github.com/repos/$Owner/$Repo/releases/$releaseId/assets?name=$escapedName"
   Write-Host "上传中..."
   $resp = Invoke-RestMethod -Uri $uploadUrl -Headers $headers -Method Post -InFile $ZipPath -ContentType "application/octet-stream"
   Write-Host "已上传: $($resp.name) size=$($resp.size) url=$($resp.browser_download_url)"

@@ -1,0 +1,45 @@
+name: Release
+
+# 合并到 main 且 RELEASE_NOTES.md 发生变化时触发。
+# Agent 负责在合并前写好 RELEASE_NOTES.md；本 workflow 只创建/更新 Release 正文。
+# Windows zip 在本地用 scripts/upload-release-asset.ps1 挂到同一 Release。
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'RELEASE_NOTES.md'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version
+        id: meta
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          if [ ! -f RELEASE_NOTES.md ]; then
+            echo "RELEASE_NOTES.md not found" >&2
+            exit 1
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: Skills Manager ${{ steps.meta.outputs.tag }}
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
