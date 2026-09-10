@@ -75,4 +75,4 @@ npm run test:rust
 npm run native:build -- --no-bundle
 ```
 
-便携版构建产物为 `src-tauri\target\release\skill-sync-manager.exe`。`release/` 目录中的 `SkillsManager-v0.3.2-windows-portable.zip` 是发布产物，适合上传到 GitHub Releases；根目录的 `SkillsManager.exe` 可用于本地快速验证。
+便携版构建产物为 `src-tauri\target\release\skill-sync-manager.exe`。`release/` 目录中的 `SkillsManager-v0.4.1-windows-portable.zip` 是发布产物，适合上传到 GitHub Releases；根目录的 `SkillsManager.exe` 可用于本地快速验证。

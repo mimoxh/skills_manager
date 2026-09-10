@@ -75,4 +75,4 @@ The script runs:
 npm run native:build -- --no-bundle
 ```
 
-The portable build outputs `src-tauri\target\release\skill-sync-manager.exe`. The `release/` folder's `SkillsManager-v0.3.2-windows-portable.zip` is the release artifact, suitable for uploading to GitHub Releases; the root-level `SkillsManager.exe` is useful for quick local verification.
+The portable build outputs `src-tauri\target\release\skill-sync-manager.exe`. The `release/` folder's `SkillsManager-v0.4.1-windows-portable.zip` is the release artifact, suitable for uploading to GitHub Releases; the root-level `SkillsManager.exe` is useful for quick local verification.
