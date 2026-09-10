@@ -67,6 +67,7 @@ impl CherryStudioAdapter {
             skills_path: skills_dir.to_string_lossy().to_string(),
             adapter_config: None,
             user_tags: Vec::new(),
+            supports_universal: false,
         })
     }
 

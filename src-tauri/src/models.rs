@@ -42,6 +42,12 @@ pub struct AgentSkillCopy {
     pub readme: Option<String>,
     #[serde(default = "default_true")]
     pub is_registered: bool,
+    #[serde(default)]
+    pub source_url: Option<String>,
+    #[serde(default)]
+    pub installed_at: Option<String>,
+    #[serde(default)]
+    pub is_symlink: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -58,6 +64,14 @@ pub struct GroupedSkill {
     pub description: Option<String>,
     #[serde(default)]
     pub readme: Option<String>,
+    #[serde(default)]
+    pub source_url: Option<String>,
+    #[serde(default)]
+    pub installed_at: Option<String>,
+    #[serde(default)]
+    pub is_universal: bool,
+    #[serde(default)]
+    pub universal_agent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,6 +92,7 @@ pub struct ImportSkillResult {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub enum AgentType {
+    Universal,
     Codex,
     Claude,
     ClaudeCode,
@@ -92,6 +107,7 @@ pub enum AgentType {
 impl AgentType {
     pub fn as_str(&self) -> &'static str {
         match self {
+            AgentType::Universal => "universal",
             AgentType::Codex => "codex",
             AgentType::Claude => "claude",
             AgentType::ClaudeCode => "claudeCode",
@@ -125,6 +141,8 @@ pub struct AgentProfile {
     pub adapter_config: Option<Value>,
     #[serde(default)]
     pub user_tags: Vec<String>,
+    #[serde(default)]
+    pub supports_universal: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

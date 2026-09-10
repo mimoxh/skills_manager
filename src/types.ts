@@ -1,4 +1,4 @@
-export type AgentType = "codex" | "claude" | "claudeCode" | "claudeCowork" | "cursor" | "trae" | "custom" | "cherryStudio" | "opencode";
+export type AgentType = "universal" | "codex" | "claude" | "claudeCode" | "claudeCowork" | "cursor" | "trae" | "custom" | "cherryStudio" | "opencode";
 export type ConflictPolicy = "prompt" | "backupOverwrite" | "skip" | "rename";
 export type SkillsFilter = "all" | "covered" | "partial" | "needed";
 
@@ -30,6 +30,9 @@ export interface AgentSkillCopy {
   description?: string;
   readme?: string;
   isRegistered?: boolean;
+  sourceUrl?: string | null;
+  installedAt?: string | null;
+  isSymlink?: boolean;
 }
 
 export interface GroupedSkill {
@@ -41,6 +44,10 @@ export interface GroupedSkill {
   userTags: string[];
   description?: string;
   readme?: string;
+  sourceUrl?: string | null;
+  installedAt?: string | null;
+  isUniversal?: boolean;
+  universalAgentId?: string | null;
 }
 
 export interface ImportSkillFile {
@@ -61,6 +68,7 @@ export interface AgentProfile {
   skillsPath: string;
   adapterConfig?: Record<string, unknown> | null;
   userTags: string[];
+  supportsUniversal?: boolean;
 }
 
 export interface InstallResult {

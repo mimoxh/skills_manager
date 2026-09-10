@@ -8,7 +8,7 @@ use crate::{
     catalog_refresh::{built_in_catalog_sources, refresh_key},
     cherry_studio::CherryStudioAdapter,
     error::{AppError, AppResult},
-    hash::{copy_dir_all, hash_dir},
+    hash::{copy_dir_all, hash_dir, is_symlink_path, read_symlink_target, remove_dir_or_symlink, symlink_or_copy_dir},
     manifest::{read_skill, scan_repository, scan_skill_md_only, synthesize_manifest_from_skill_md},
     mcp_service::McpService,
     models::{
@@ -18,13 +18,15 @@ use crate::{
         ImportSkillResult, InitialData, InstallResult,
     },
     skill_scan::{
-        group_agent_skills, read_agent_skill_readme, register_claude_cowork_skill,
-        scan_agent_skill_copies,
+        group_agent_skills, load_skill_lock_map, read_agent_skill_readme,
+        register_claude_cowork_skill, scan_agent_skill_copies,
+        scan_agent_skill_copies_with_lock, write_skill_lock_entry,
     },
     store::{AppStore, InstallRecordInput},
     util::{
         catalog_matches_filters, catalog_matches_query, catalog_skill_is_installed,
-        command_no_window, normalize_title, page_catalog_skills, safe_label, safe_relative_path,
+        command_no_window, is_universal_skills_path, normalize_title, page_catalog_skills,
+        safe_label, safe_relative_path,
     },
 };
 use std::{
@@ -121,7 +123,8 @@ impl AppService {
         conflict_policy: &ConflictPolicy,
     ) -> AppResult<Option<(PathBuf, String, Option<String>)>> {
         let target = skills_path.join(target_dir_name);
-        if !target.exists() {
+        // 用 symlink_metadata：断链/纯链接节点也视为「已存在」，避免 exists() 跟随后误判为空
+        if fs::symlink_metadata(&target).is_err() {
             return Ok(Some((target, "installed".to_string(), None)));
         }
         match conflict_policy {
@@ -140,9 +143,17 @@ impl AppService {
                     .join(safe_label(&agent.id))
                     .join(safe_label(skill_label))
                     .join(chrono::Utc::now().format("%Y%m%d%H%M%S%3f").to_string());
-                copy_dir_all(&target, &backup)?;
+                fs::create_dir_all(&backup)?;
+                if is_symlink_path(&target) {
+                    let dest = read_symlink_target(&target)
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    fs::write(backup.join(".symlink-target"), dest)?;
+                } else {
+                    copy_dir_all(&target, &backup)?;
+                }
                 if agent.agent_type != AgentType::ClaudeCowork {
-                    fs::remove_dir_all(&target)?;
+                    remove_dir_or_symlink(&target)?;
                 }
                 Ok(Some((
                     target,
@@ -154,11 +165,19 @@ impl AppService {
     }
 
     pub fn detect_agents(&self) -> AppResult<Vec<AgentProfile>> {
-        let mut agents = Vec::new();
-        for adapter in built_in_adapters() {
-            agents.extend(adapter.detect());
+        // 测试环境不扫描真实机器目录，避免污染 ~/.agents 与并行测试串扰
+        #[cfg(test)]
+        {
+            return Ok(Vec::new());
         }
-        Ok(agents)
+        #[cfg(not(test))]
+        {
+            let mut agents = Vec::new();
+            for adapter in built_in_adapters() {
+                agents.extend(adapter.detect());
+            }
+            Ok(agents)
+        }
     }
 
     pub fn get_initial_data(&self) -> AppResult<InitialData> {
@@ -236,17 +255,282 @@ impl AppService {
         let mut values = agents.into_values().collect::<Vec<_>>();
         for agent in &mut values {
             agent.user_tags = self.store.list_agent_tags(&agent.id)?;
+            // 中枢路径强制视为原生兼容，纠正旧 profile / 合并遗漏
+            if agent.agent_type == AgentType::Universal
+                || is_universal_skills_path(&agent.skills_path)
+            {
+                agent.supports_universal = true;
+            }
         }
         values.sort_by(|a, b| a.name.cmp(&b.name).then(a.skills_path.cmp(&b.skills_path)));
         Ok(values)
     }
 
-    pub fn add_agent(&self, profile: AgentProfile) -> AppResult<AgentProfile> {
+    pub fn add_agent(&self, mut profile: AgentProfile) -> AppResult<AgentProfile> {
+        if profile.agent_type == AgentType::Universal
+            || is_universal_skills_path(&profile.skills_path)
+        {
+            profile.supports_universal = true;
+        }
         let adapter = adapter_for(&profile);
         adapter.validate(&profile)?;
         self.store.save_agent(&profile)?;
         self.invalidate_installed_cache();
         Ok(profile)
+    }
+
+    fn find_hub_agent(agents: &[AgentProfile]) -> Option<&AgentProfile> {
+        agents.iter().find(|agent| {
+            agent.agent_type == AgentType::Universal
+                || is_universal_skills_path(&agent.skills_path)
+        })
+    }
+
+    /// 确保存在 Universal Hub；不存在时自动创建 `~/.agents/skills`。
+    /// 测试环境（cfg(test)）不碰真实 home，必须先注册临时中枢。
+    pub fn ensure_hub_agent(&self) -> AppResult<AgentProfile> {
+        let agents = self.list_agents()?;
+        if let Some(hub) = Self::find_hub_agent(&agents) {
+            return Ok(hub.clone());
+        }
+        #[cfg(test)]
+        {
+            return Err(AppError::Message(
+                "测试环境未配置 Universal 中枢，请先添加指向临时目录的 Universal Agent".to_string(),
+            ));
+        }
+        #[cfg(not(test))]
+        {
+            let home = dirs::home_dir()
+                .ok_or_else(|| AppError::Message("无法定位用户主目录".to_string()))?;
+            let skills_path = home.join(".agents").join("skills");
+            fs::create_dir_all(&skills_path)?;
+            let path_str = skills_path.to_string_lossy().to_string();
+            let profile = AgentProfile {
+                id: format!("universal:{}", path_str),
+                name: "Universal (.agents/skills)".to_string(),
+                agent_type: AgentType::Universal,
+                skills_path: path_str,
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: true,
+            };
+            self.add_agent(profile)
+        }
+    }
+
+    fn same_path(a: &Path, b: &Path) -> bool {
+        match (fs::canonicalize(a), fs::canonicalize(b)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => a == b,
+        }
+    }
+
+    /// 将技能实体复制进中枢（源已是中枢则跳过），返回中枢内技能路径。
+    fn materialize_into_hub(
+        &self,
+        source_path: &Path,
+        source_dir_name: &str,
+        skill_label: &str,
+        conflict_policy: &ConflictPolicy,
+        lock_source: Option<&str>,
+        lock_source_url: Option<&str>,
+    ) -> AppResult<PathBuf> {
+        let hub = self.ensure_hub_agent()?;
+        let hub_skills = Path::new(&hub.skills_path);
+        fs::create_dir_all(hub_skills)?;
+        let hub_target = hub_skills.join(source_dir_name);
+        if Self::same_path(source_path, &hub_target) {
+            return Ok(hub_target);
+        }
+        match self.resolve_install_conflict(
+            &hub,
+            hub_skills,
+            source_dir_name,
+            skill_label,
+            conflict_policy,
+        )? {
+            None => Ok(hub_target),
+            Some((target, _action, _backup)) => {
+                copy_dir_all(source_path, &target)?;
+                // catalog/install 标记来源类型，便于 lock 生态区分
+                let source_type = lock_source
+                    .filter(|s| s.starts_with("clawhub") || *s == "import" || s.contains("catalog"))
+                    .map(|_| "catalog")
+                    .unwrap_or("local");
+                let _ = write_skill_lock_entry(
+                    source_dir_name,
+                    lock_source,
+                    Some(source_type),
+                    lock_source_url,
+                    &target,
+                );
+                Ok(target)
+            }
+        }
+    }
+
+    /// 从中枢扇出到目标 Agent：原生兼容跳过；专用适配器走其协议；其余软链/复制。
+    fn fanout_from_hub(
+        &self,
+        hub: &AgentProfile,
+        hub_skill_path: &Path,
+        skill_label: &str,
+        source_dir_name: &str,
+        target_agent_ids: &[String],
+        conflict_policy: &ConflictPolicy,
+        skip_agent_id: Option<&str>,
+    ) -> AppResult<Vec<InstallResult>> {
+        let agents = self.list_agents()?;
+        let agent_map: HashMap<_, _> = agents
+            .into_iter()
+            .map(|agent| (agent.id.clone(), agent))
+            .collect();
+        let mut results = Vec::new();
+        let mut install_records: Vec<InstallRecordInput> = Vec::new();
+        let source_fingerprint = hash_dir(hub_skill_path)?;
+
+        for agent_id in target_agent_ids {
+            if Some(agent_id.as_str()) == skip_agent_id {
+                results.push(InstallResult {
+                    agent_id: agent_id.clone(),
+                    skill_id: skill_label.to_string(),
+                    action: "skipped".to_string(),
+                    target_path: hub_skill_path.to_string_lossy().to_string(),
+                    backup_path: None,
+                    message: format!("{skill_label} 已存在于来源"),
+                });
+                continue;
+            }
+            let Some(agent) = agent_map.get(agent_id) else {
+                results.push(InstallResult {
+                    agent_id: agent_id.clone(),
+                    skill_id: skill_label.to_string(),
+                    action: "error".to_string(),
+                    target_path: hub_skill_path.to_string_lossy().to_string(),
+                    backup_path: None,
+                    message: format!("找不到 Agent: {agent_id}"),
+                });
+                continue;
+            };
+            if agent.id == hub.id {
+                results.push(InstallResult {
+                    agent_id: agent.id.clone(),
+                    skill_id: skill_label.to_string(),
+                    action: "skipped".to_string(),
+                    target_path: hub_skill_path.to_string_lossy().to_string(),
+                    backup_path: None,
+                    message: format!("{skill_label} 已在 Universal 中枢"),
+                });
+                continue;
+            }
+            if agent.supports_universal {
+                results.push(InstallResult {
+                    agent_id: agent.id.clone(),
+                    skill_id: skill_label.to_string(),
+                    action: "skipped".to_string(),
+                    target_path: hub_skill_path.to_string_lossy().to_string(),
+                    backup_path: None,
+                    message: format!("{skill_label} 原生兼容中枢，无需安装到 {}", agent.name),
+                });
+                continue;
+            }
+
+            let skills_path = Path::new(&agent.skills_path);
+            let _ = fs::create_dir_all(skills_path);
+            let outcome = (|| -> AppResult<InstallResult> {
+                let Some((target, action, backup_path)) = self.resolve_install_conflict(
+                    agent,
+                    skills_path,
+                    source_dir_name,
+                    skill_label,
+                    conflict_policy,
+                )? else {
+                    return Ok(InstallResult {
+                        agent_id: agent.id.clone(),
+                        skill_id: skill_label.to_string(),
+                        action: "skipped".to_string(),
+                        target_path: skills_path
+                            .join(source_dir_name)
+                            .to_string_lossy()
+                            .to_string(),
+                        backup_path: None,
+                        message: format!("已跳过 {skill_label}"),
+                    });
+                };
+
+                let mut used_symlink = false;
+                if agent.agent_type == AgentType::CherryStudio {
+                    let cs = CherryStudioAdapter::new().ok_or_else(|| {
+                        AppError::Message(
+                            "未找到 Cherry Studio 安装目录（%APPDATA%\\CherryStudio 缺失），无法安装。"
+                                .to_string(),
+                        )
+                    })?;
+                    cs.install_skill(hub_skill_path, source_dir_name)?;
+                } else if agent.agent_type == AgentType::ClaudeCowork {
+                    copy_dir_all(hub_skill_path, &target)?;
+                    register_claude_cowork_skill(agent, source_dir_name, &target)?;
+                } else {
+                    used_symlink = symlink_or_copy_dir(hub_skill_path, &target)?;
+                }
+
+                install_records.push(InstallRecordInput {
+                    agent_id: agent.id.clone(),
+                    skill_id: skill_label.to_string(),
+                    fingerprint: source_fingerprint.clone(),
+                    target_path: target.to_string_lossy().to_string(),
+                    action: action.clone(),
+                    backup_path: backup_path.clone(),
+                });
+
+                let sync_msg = match action.as_str() {
+                    "updated" => {
+                        if used_symlink {
+                            format!("已通过符号链接从中枢更新 {skill_label} 到 {}", agent.name)
+                        } else {
+                            format!("已从中枢更新 {skill_label} 到 {}", agent.name)
+                        }
+                    }
+                    "renamed" => format!("已另存副本 {skill_label} 到 {}", agent.name),
+                    _ => {
+                        if used_symlink {
+                            format!("已通过符号链接从中枢同步 {skill_label} 到 {}", agent.name)
+                        } else {
+                            format!("{skill_label} 已从中枢同步到 {}", agent.name)
+                        }
+                    }
+                };
+                Ok(InstallResult {
+                    agent_id: agent.id.clone(),
+                    skill_id: skill_label.to_string(),
+                    action,
+                    target_path: target.to_string_lossy().to_string(),
+                    backup_path,
+                    message: sync_msg,
+                })
+            })();
+            match outcome {
+                Ok(result) => results.push(result),
+                Err(error) => results.push(InstallResult {
+                    agent_id: agent.id.clone(),
+                    skill_id: skill_label.to_string(),
+                    action: "error".to_string(),
+                    target_path: skills_path
+                        .join(source_dir_name)
+                        .to_string_lossy()
+                        .to_string(),
+                    backup_path: None,
+                    message: format!("同步 {skill_label} 到 {} 失败: {}", agent.name, error),
+                }),
+            }
+        }
+
+        if !install_records.is_empty() {
+            self.store.record_installs(&install_records)?;
+        }
+        self.invalidate_installed_cache();
+        Ok(results)
     }
 
     pub fn remove_agent(&self, agent_id: &str) -> AppResult<()> {
@@ -576,112 +860,39 @@ impl AppService {
             .and_then(|value| value.to_str())
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| AppError::Message("来源 skill 路径无效".to_string()))?;
-        let source_fingerprint = hash_dir(source_path)?;
         let agents = self.list_agents()?;
-        let agent_map: HashMap<_, _> = agents
-            .into_iter()
-            .map(|agent| (agent.id.clone(), agent))
-            .collect();
-        let mut results = Vec::new();
-        let mut install_records: Vec<InstallRecordInput> = Vec::new();
-
-        // 先校验全部目标 agent 存在，再执行安装，避免循环中途失败留下半完成状态
         for agent_id in &target_agent_ids {
-            if !agent_map.contains_key(agent_id) {
+            if !agents.iter().any(|agent| &agent.id == agent_id) {
                 return Err(AppError::Message(format!("找不到 Agent: {}", agent_id)));
             }
         }
 
-        for agent_id in target_agent_ids {
-            let agent = agent_map
-                .get(&agent_id)
-                .ok_or_else(|| AppError::Message(format!("找不到 Agent: {}", agent_id)))?;
-            let skills_path = Path::new(&agent.skills_path);
-            fs::create_dir_all(skills_path)?;
-            // 逐 agent 失败隔离：单个 agent 安装失败记录为 error 结果，不中断整批
-            let outcome = (|| -> AppResult<InstallResult> {
-                let Some((target, action, backup_path)) = self.resolve_install_conflict(
-                    agent,
-                    skills_path,
-                    source_dir_name,
-                    &skill.name,
-                    &conflict_policy,
-                )? else {
-                    return Ok(InstallResult {
-                        agent_id: agent.id.clone(),
-                        skill_id: skill.name.clone(),
-                        action: "skipped".to_string(),
-                        target_path: skills_path.join(source_dir_name).to_string_lossy().to_string(),
-                        backup_path: None,
-                        message: format!("已跳过 {}", skill.name),
-                    });
-                };
-                if agent.agent_type == AgentType::CherryStudio {
-                    let cs = CherryStudioAdapter::new().ok_or_else(|| {
-                        AppError::Message(
-                            "未找到 Cherry Studio 安装目录（%APPDATA%\\CherryStudio 缺失），无法安装。"
-                                .to_string(),
-                        )
-                    })?;
-                    // 复制到 Cherry Studio Skills 目录并在 agents.db 中注册，避免"文件在但技能不可见"
-                    cs.install_skill(source_path, source_dir_name)?;
-                } else {
-                    copy_dir_all(source_path, &target)?;
-                    if agent.agent_type == AgentType::ClaudeCowork {
-                        let target_dir_name = target
-                            .file_name()
-                            .and_then(|value| value.to_str())
-                            .unwrap_or(source_dir_name);
-                        register_claude_cowork_skill(agent, target_dir_name, &target)?;
-                    }
-                }
-                // 批量记录：先收集，循环结束后统一一次 save（M-B16）
-                install_records.push(InstallRecordInput {
-                    agent_id: agent.id.clone(),
-                    skill_id: skill.name.clone(),
-                    fingerprint: source_fingerprint.clone(),
-                    target_path: target.to_string_lossy().to_string(),
-                    action: action.clone(),
-                    backup_path: backup_path.clone(),
-                });
-                let install_msg = match action.as_str() {
-                    "updated" => format!("已更新 {} 到 {}", skill.name, agent.name),
-                    "renamed" => format!("已另存副本 {} 到 {}", skill.name, agent.name),
-                    _ => format!("已安装 {} 到 {}", skill.name, agent.name),
-                };
-                Ok(InstallResult {
-                    agent_id: agent.id.clone(),
-                    skill_id: skill.name.clone(),
-                    action,
-                    target_path: target.to_string_lossy().to_string(),
-                    backup_path,
-                    message: install_msg,
-                })
-            })();
-            match outcome {
-                Ok(result) => results.push(result),
-                Err(error) => results.push(InstallResult {
-                    agent_id: agent.id.clone(),
-                    skill_id: skill.name.clone(),
-                    action: "error".to_string(),
-                    target_path: skills_path.join(source_dir_name).to_string_lossy().to_string(),
-                    backup_path: None,
-                    message: format!("安装 {} 到 {} 失败: {}", skill.name, agent.name, error),
-                }),
-            }
-        }
-        if !install_records.is_empty() {
-            self.store.record_installs(&install_records)?;
-        }
-        self.invalidate_installed_cache();
-        Ok(results)
+        let hub_skill_path = self.materialize_into_hub(
+            source_path,
+            source_dir_name,
+            &skill.name,
+            &conflict_policy,
+            Some(&skill.source_id),
+            None,
+        )?;
+        let hub = self.ensure_hub_agent()?;
+        self.fanout_from_hub(
+            &hub,
+            &hub_skill_path,
+            &skill.name,
+            source_dir_name,
+            &target_agent_ids,
+            &conflict_policy,
+            None,
+        )
     }
 
     pub fn scan_agent_skills(&self) -> AppResult<Vec<GroupedSkill>> {
         let agents = self.list_agents()?;
+        let lock_map = load_skill_lock_map();
         let mut copies = Vec::new();
         for agent in &agents {
-            copies.extend(scan_agent_skill_copies(agent)?);
+            copies.extend(scan_agent_skill_copies_with_lock(agent, &lock_map)?);
         }
         let mut groups = group_agent_skills(&agents, copies);
         for group in &mut groups {
@@ -717,117 +928,38 @@ impl AppService {
             None => &group.best_copy,
         };
         let agents = self.list_agents()?;
-        let agent_map: HashMap<_, _> = agents
-            .into_iter()
-            .map(|agent| (agent.id.clone(), agent))
-            .collect();
+        for agent_id in &target_agent_ids {
+            if !agents.iter().any(|agent| &agent.id == agent_id) {
+                return Err(AppError::Message(format!("找不到 Agent: {}", agent_id)));
+            }
+        }
+
         let source_path = Path::new(&source.skill_path);
-        let source_fingerprint = hash_dir(source_path)?;
         let source_dir_name = source_path
             .file_name()
             .and_then(|value| value.to_str())
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| AppError::Message("来源 skill 路径无效".to_string()))?;
-        let mut results = Vec::new();
-        let mut install_records: Vec<InstallRecordInput> = Vec::new();
 
-        // 先校验全部目标 agent 存在，再执行安装，避免循环中途失败留下半完成状态
-        for agent_id in &target_agent_ids {
-            if !agent_map.contains_key(agent_id) {
-                return Err(AppError::Message(format!("找不到 Agent: {}", agent_id)));
-            }
-        }
-
-        for agent_id in target_agent_ids {
-            if agent_id == source.agent_id {
-                results.push(InstallResult {
-                    agent_id,
-                    skill_id: title.to_string(),
-                    action: "skipped".to_string(),
-                    target_path: source.skill_path.clone(),
-                    backup_path: None,
-                    message: format!("{} 已存在于来源 Agent", title),
-                });
-                continue;
-            }
-            let agent = agent_map
-                .get(&agent_id)
-                .ok_or_else(|| AppError::Message(format!("找不到 Agent: {}", agent_id)))?;
-            let skills_path = Path::new(&agent.skills_path);
-            fs::create_dir_all(skills_path)?;
-            // 逐 agent 失败隔离：单个 agent 同步失败记录为 error 结果，不中断整批
-            let outcome = (|| -> AppResult<InstallResult> {
-                let Some((target, action, backup_path)) = self.resolve_install_conflict(
-                    agent,
-                    skills_path,
-                    source_dir_name,
-                    title,
-                    &conflict_policy,
-                )? else {
-                    return Ok(InstallResult {
-                        agent_id: agent.id.clone(),
-                        skill_id: title.to_string(),
-                        action: "skipped".to_string(),
-                        target_path: skills_path.join(source_dir_name).to_string_lossy().to_string(),
-                        backup_path: None,
-                        message: format!("已跳过 {}", title),
-                    });
-                };
-
-                if agent.agent_type == AgentType::CherryStudio {
-                    let cs = CherryStudioAdapter::new().ok_or_else(|| {
-                        AppError::Message(
-                            "未找到 Cherry Studio 安装目录（%APPDATA%\\CherryStudio 缺失），无法安装。"
-                                .to_string(),
-                        )
-                    })?;
-                    cs.install_skill(source_path, source_dir_name)?;
-                } else if agent.agent_type == AgentType::ClaudeCowork {
-                    copy_dir_all(source_path, &target)?;
-                    register_claude_cowork_skill(agent, source_dir_name, &target)?;
-                } else {
-                    copy_dir_all(source_path, &target)?;
-                }
-                // 批量记录：先收集，循环结束后统一一次 save（M-B16）
-                install_records.push(InstallRecordInput {
-                    agent_id: agent.id.clone(),
-                    skill_id: title.to_string(),
-                    fingerprint: source_fingerprint.clone(),
-                    target_path: target.to_string_lossy().to_string(),
-                    action: action.clone(),
-                    backup_path: backup_path.clone(),
-                });
-                let sync_msg = match action.as_str() {
-                    "updated" => format!("已更新 {} 到 {}", title, agent.name),
-                    "renamed" => format!("已另存副本 {} 到 {}", title, agent.name),
-                    _ => format!("{} 已同步到 {}", title, agent.name),
-                };
-                Ok(InstallResult {
-                    agent_id: agent.id.clone(),
-                    skill_id: title.to_string(),
-                    action,
-                    target_path: target.to_string_lossy().to_string(),
-                    backup_path,
-                    message: sync_msg,
-                })
-            })();
-            match outcome {
-                Ok(result) => results.push(result),
-                Err(error) => results.push(InstallResult {
-                    agent_id: agent.id.clone(),
-                    skill_id: title.to_string(),
-                    action: "error".to_string(),
-                    target_path: skills_path.join(source_dir_name).to_string_lossy().to_string(),
-                    backup_path: None,
-                    message: format!("同步 {} 到 {} 失败: {}", title, agent.name, error),
-                }),
-            }
-        }
-        if !install_records.is_empty() {
-            self.store.record_installs(&install_records)?;
-        }
-        self.invalidate_installed_cache();
-        Ok(results)
+        // 强制先入中枢，再从中枢扇出，禁止 Agent→Agent 直接软链
+        let hub_skill_path = self.materialize_into_hub(
+            source_path,
+            source_dir_name,
+            title,
+            &conflict_policy,
+            Some(&source.agent_id),
+            source.source_url.as_deref(),
+        )?;
+        let hub = self.ensure_hub_agent()?;
+        self.fanout_from_hub(
+            &hub,
+            &hub_skill_path,
+            title,
+            source_dir_name,
+            &target_agent_ids,
+            &conflict_policy,
+            Some(&source.agent_id),
+        )
     }
 
     pub fn uninstall_skill(&self, skill_id: &str, agent_id: &str) -> AppResult<()> {
@@ -1011,7 +1143,11 @@ impl AppService {
         }
 
         let agents = self.list_agents()?;
-        let agent_map: HashMap<_, _> = agents.into_iter().map(|a| (a.id.clone(), a)).collect();
+        for agent_id in target_agent_ids {
+            if !agents.iter().any(|a| &a.id == agent_id) {
+                return Err(AppError::Message(format!("找不到 Agent: {}", agent_id)));
+            }
+        }
 
         let mut imported = 0;
         let mut skipped = 0;
@@ -1028,48 +1164,42 @@ impl AppService {
                 .and_then(|v| v.to_str())
                 .ok_or_else(|| AppError::Message("skill 目录名无效".to_string()))?;
 
-            for agent_id in target_agent_ids {
-                let agent = agent_map
-                    .get(agent_id)
-                    .ok_or_else(|| AppError::Message(format!("找不到 Agent: {}", agent_id)))?;
-                let skills_path = Path::new(&agent.skills_path);
-                fs::create_dir_all(skills_path)?;
-                // 逐 agent 失败隔离：单个 agent 导入失败计入 skipped 并继续，不中断整批
-                let outcome = (|| -> AppResult<()> {
-                    let Some((target, _action, _backup_path)) = self.resolve_install_conflict(
-                        agent,
-                        skills_path,
-                        skill_dir_name,
-                        &skill.manifest.id,
-                        &conflict_policy,
-                    )? else {
-                        skipped += 1;
-                        return Ok(());
-                    };
-
-                    if agent.agent_type == AgentType::CherryStudio {
-                        let cs = CherryStudioAdapter::new().ok_or_else(|| {
-                            AppError::Message(
-                                "未找到 Cherry Studio 安装目录（%APPDATA%\\CherryStudio 缺失），无法导入。"
-                                    .to_string(),
-                            )
-                        })?;
-                        cs.install_skill(source, skill_dir_name)?;
-                    } else if agent.agent_type == AgentType::ClaudeCowork {
-                        copy_dir_all(source, &target)?;
-                        let target_dir_name = target
-                            .file_name()
-                            .and_then(|value| value.to_str())
-                            .unwrap_or(skill_dir_name);
-                        register_claude_cowork_skill(agent, target_dir_name, &target)?;
-                    } else {
-                        copy_dir_all(source, &target)?;
-                    }
-                    imported += 1;
-                    Ok(())
-                })();
-                if outcome.is_err() {
+            // 先入中枢再扇出
+            let hub_skill_path = match self.materialize_into_hub(
+                source,
+                skill_dir_name,
+                &skill.manifest.id,
+                &conflict_policy,
+                Some("import"),
+                None,
+            ) {
+                Ok(path) => path,
+                Err(_) => {
                     skipped += 1;
+                    continue;
+                }
+            };
+            let hub = match self.ensure_hub_agent() {
+                Ok(hub) => hub,
+                Err(_) => {
+                    skipped += 1;
+                    continue;
+                }
+            };
+            let results = self.fanout_from_hub(
+                &hub,
+                &hub_skill_path,
+                &skill.manifest.id,
+                skill_dir_name,
+                &target_agent_ids,
+                &conflict_policy,
+                None,
+            )?;
+            for result in results {
+                match result.action.as_str() {
+                    "error" => skipped += 1,
+                    "skipped" if result.message.contains("已跳过") => skipped += 1,
+                    _ => imported += 1,
                 }
             }
         }
@@ -1144,9 +1274,29 @@ mod tests {
             skills_path: agent_dir.to_string_lossy().to_string(),
             adapter_config: None,
             user_tags: Vec::new(),
+            supports_universal: false,
         };
         service.add_agent(profile).unwrap();
+        add_test_hub(&service);
         service
+    }
+
+    /// 注册临时 Universal 中枢；TempDir 泄漏以保证测试期间路径有效。
+    fn add_test_hub(service: &AppService) {
+        let hub = tempfile::tempdir().unwrap();
+        let path = hub.path().to_string_lossy().to_string();
+        std::mem::forget(hub);
+        service
+            .add_agent(AgentProfile {
+                id: format!("universal:{path}"),
+                name: "Universal Hub".into(),
+                agent_type: crate::models::AgentType::Universal,
+                skills_path: path,
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: true,
+            })
+            .unwrap();
     }
 
     fn write_demo_skill(root: &Path, id: &str) {
@@ -1284,6 +1434,7 @@ mod tests {
                 "manifestPath": plugin_root.join("manifest.json").to_string_lossy()
             })),
             user_tags: Vec::new(),
+            supports_universal: false,
         };
         service.add_agent(profile.clone()).unwrap();
         profile
@@ -1345,6 +1496,7 @@ mod tests {
             skills_path: agent_dir.path().to_string_lossy().to_string(),
             adapter_config: None,
             user_tags: Vec::new(),
+            supports_universal: false,
         };
 
         service.add_agent(profile).unwrap();
@@ -1365,6 +1517,7 @@ mod tests {
             skills_path: agent_dir.path().to_string_lossy().to_string(),
             adapter_config: None,
             user_tags: Vec::new(),
+            supports_universal: false,
         };
 
         service.add_agent(profile).unwrap();
@@ -1461,6 +1614,7 @@ mod tests {
     #[test]
     fn syncs_grouped_skill_from_best_agent_copy() {
         let service = AppService::in_memory().unwrap();
+        add_test_hub(&service);
         let agent_a_root = tempfile::tempdir().unwrap();
         let agent_b_root = tempfile::tempdir().unwrap();
         write_agent_skill(
@@ -1486,6 +1640,7 @@ mod tests {
                 skills_path: agent_a_root.path().to_string_lossy().to_string(),
                 adapter_config: None,
                 user_tags: Vec::new(),
+                supports_universal: false,
             },
             AgentProfile {
                 id: "agent-b".into(),
@@ -1494,6 +1649,7 @@ mod tests {
                 skills_path: agent_b_root.path().to_string_lossy().to_string(),
                 adapter_config: None,
                 user_tags: Vec::new(),
+                supports_universal: false,
             },
             AgentProfile {
                 id: "target".into(),
@@ -1502,6 +1658,7 @@ mod tests {
                 skills_path: target_root.path().to_string_lossy().to_string(),
                 adapter_config: None,
                 user_tags: Vec::new(),
+                supports_universal: false,
             },
         ];
         for agent in agents {
@@ -1528,6 +1685,7 @@ mod tests {
     #[test]
     fn syncs_grouped_skill_isolates_per_agent_failure() {
         let service = AppService::in_memory().unwrap();
+        add_test_hub(&service);
         let source_root = tempfile::tempdir().unwrap();
         write_agent_skill(
             source_root.path(),
@@ -1544,6 +1702,7 @@ mod tests {
                 skills_path: source_root.path().to_string_lossy().to_string(),
                 adapter_config: None,
                 user_tags: Vec::new(),
+                supports_universal: false,
             })
             .unwrap();
         let ok_root = tempfile::tempdir().unwrap();
@@ -1562,6 +1721,7 @@ mod tests {
                     skills_path: path,
                     adapter_config: None,
                     user_tags: Vec::new(),
+                    supports_universal: false,
                 })
                 .unwrap();
         }
@@ -1586,6 +1746,7 @@ mod tests {
     #[test]
     fn syncs_skill_to_claude_cowork_and_registers_manifest() {
         let service = AppService::in_memory().unwrap();
+        add_test_hub(&service);
         let source_root = tempfile::tempdir().unwrap();
         write_agent_skill(
             source_root.path(),
@@ -1602,6 +1763,7 @@ mod tests {
                 skills_path: source_root.path().to_string_lossy().to_string(),
                 adapter_config: None,
                 user_tags: Vec::new(),
+                supports_universal: false,
             })
             .unwrap();
         let cowork_root = tempfile::tempdir().unwrap();
@@ -1741,5 +1903,307 @@ mod tests {
             .unwrap();
 
         assert!(!agent_dir.path().join("powerpoint-pptx").exists());
+    }
+
+    #[test]
+    fn sync_materializes_into_hub_then_links_to_target() {
+        let service = AppService::in_memory().unwrap();
+        let hub_root = tempfile::tempdir().unwrap();
+        let source_root = tempfile::tempdir().unwrap();
+        let target_root = tempfile::tempdir().unwrap();
+        write_agent_skill(
+            source_root.path(),
+            "demo",
+            Some("Demo Skill"),
+            Some("1.0.0"),
+            "# Demo Skill",
+        );
+        service
+            .add_agent(AgentProfile {
+                id: "hub".into(),
+                name: "Universal Hub".into(),
+                agent_type: AgentType::Universal,
+                skills_path: hub_root.path().to_string_lossy().to_string(),
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: true,
+            })
+            .unwrap();
+        service
+            .add_agent(AgentProfile {
+                id: "source".into(),
+                name: "Source".into(),
+                agent_type: AgentType::Custom,
+                skills_path: source_root.path().to_string_lossy().to_string(),
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: false,
+            })
+            .unwrap();
+        service
+            .add_agent(AgentProfile {
+                id: "target".into(),
+                name: "Target".into(),
+                agent_type: AgentType::Custom,
+                skills_path: target_root.path().to_string_lossy().to_string(),
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: false,
+            })
+            .unwrap();
+
+        let results = service
+            .sync_grouped_skill(
+                "Demo Skill",
+                Some("source"),
+                vec!["target".into()],
+                ConflictPolicy::BackupOverwrite,
+            )
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].action, "installed");
+        assert!(hub_root.path().join("demo").join("SKILL.md").exists());
+        let target_demo = target_root.path().join("demo");
+        assert!(target_demo.exists());
+        // 中枢实体 + 目标应可读到同一内容（软链或复制）
+        assert_eq!(
+            fs::read_to_string(target_demo.join("SKILL.md")).unwrap(),
+            "# Demo Skill"
+        );
+    }
+
+    #[test]
+    fn native_universal_agent_skipped_on_fanout() {
+        let service = AppService::in_memory().unwrap();
+        let hub_root = tempfile::tempdir().unwrap();
+        let source_root = tempfile::tempdir().unwrap();
+        let native_root = tempfile::tempdir().unwrap();
+        write_agent_skill(
+            source_root.path(),
+            "demo",
+            Some("Demo Skill"),
+            Some("1.0.0"),
+            "# Demo Skill",
+        );
+        service
+            .add_agent(AgentProfile {
+                id: "hub".into(),
+                name: "Universal Hub".into(),
+                agent_type: AgentType::Universal,
+                skills_path: hub_root.path().to_string_lossy().to_string(),
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: true,
+            })
+            .unwrap();
+        service
+            .add_agent(AgentProfile {
+                id: "source".into(),
+                name: "Source".into(),
+                agent_type: AgentType::Custom,
+                skills_path: source_root.path().to_string_lossy().to_string(),
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: false,
+            })
+            .unwrap();
+        service
+            .add_agent(AgentProfile {
+                id: "native".into(),
+                name: "Native".into(),
+                agent_type: AgentType::Custom,
+                skills_path: native_root.path().to_string_lossy().to_string(),
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: true,
+            })
+            .unwrap();
+
+        let results = service
+            .sync_grouped_skill(
+                "Demo Skill",
+                Some("source"),
+                vec!["native".into()],
+                ConflictPolicy::BackupOverwrite,
+            )
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].action, "skipped");
+        assert!(results[0].message.contains("原生兼容"));
+        assert!(!native_root.path().join("demo").exists());
+        assert!(hub_root.path().join("demo").join("SKILL.md").exists());
+    }
+
+    #[test]
+    fn sync_from_symlink_source_materializes_real_hub_copy() {
+        let service = AppService::in_memory().unwrap();
+        let hub_root = tempfile::tempdir().unwrap();
+        let real_root = tempfile::tempdir().unwrap();
+        let source_root = tempfile::tempdir().unwrap();
+        let target_root = tempfile::tempdir().unwrap();
+        write_agent_skill(
+            real_root.path(),
+            "demo",
+            Some("Demo Skill"),
+            Some("1.0.0"),
+            "# Demo Skill",
+        );
+        // source 的 demo 是指向 real 的链接（模拟历史 Agent→Agent 软链）
+        crate::hash::symlink_or_copy_dir(
+            &real_root.path().join("demo"),
+            &source_root.path().join("demo"),
+        )
+        .unwrap();
+        service
+            .add_agent(AgentProfile {
+                id: "hub".into(),
+                name: "Universal Hub".into(),
+                agent_type: AgentType::Universal,
+                skills_path: hub_root.path().to_string_lossy().to_string(),
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: true,
+            })
+            .unwrap();
+        service
+            .add_agent(AgentProfile {
+                id: "source".into(),
+                name: "Source".into(),
+                agent_type: AgentType::Custom,
+                skills_path: source_root.path().to_string_lossy().to_string(),
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: false,
+            })
+            .unwrap();
+        service
+            .add_agent(AgentProfile {
+                id: "target".into(),
+                name: "Target".into(),
+                agent_type: AgentType::Custom,
+                skills_path: target_root.path().to_string_lossy().to_string(),
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: false,
+            })
+            .unwrap();
+
+        service
+            .sync_grouped_skill(
+                "Demo Skill",
+                Some("source"),
+                vec!["target".into()],
+                ConflictPolicy::BackupOverwrite,
+            )
+            .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(hub_root.path().join("demo").join("SKILL.md")).unwrap(),
+            "# Demo Skill"
+        );
+    }
+
+    #[test]
+    fn hub_skill_counts_as_covered_for_native_agents() {
+        let service = AppService::in_memory().unwrap();
+        let hub_root = tempfile::tempdir().unwrap();
+        let native_root = tempfile::tempdir().unwrap();
+        let other_root = tempfile::tempdir().unwrap();
+        write_agent_skill(
+            hub_root.path(),
+            "demo",
+            Some("Demo Skill"),
+            Some("1.0.0"),
+            "# Demo Skill",
+        );
+        service
+            .add_agent(AgentProfile {
+                id: "hub".into(),
+                name: "Universal Hub".into(),
+                agent_type: AgentType::Universal,
+                skills_path: hub_root.path().to_string_lossy().to_string(),
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: true,
+            })
+            .unwrap();
+        service
+            .add_agent(AgentProfile {
+                id: "native".into(),
+                name: "Native".into(),
+                agent_type: AgentType::Custom,
+                skills_path: native_root.path().to_string_lossy().to_string(),
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: true,
+            })
+            .unwrap();
+        service
+            .add_agent(AgentProfile {
+                id: "other".into(),
+                name: "Other".into(),
+                agent_type: AgentType::Custom,
+                skills_path: other_root.path().to_string_lossy().to_string(),
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: false,
+            })
+            .unwrap();
+
+        let skills = service.scan_agent_skills().unwrap();
+        let demo = skills
+            .into_iter()
+            .find(|skill| skill.title == "Demo Skill")
+            .unwrap();
+        assert!(demo.is_universal);
+        assert!(!demo.missing_agent_ids.contains(&"native".to_string()));
+        assert!(demo.missing_agent_ids.contains(&"other".to_string()));
+    }
+
+    #[test]
+    fn add_agent_forces_supports_universal_for_hub_path() {
+        let service = AppService::in_memory().unwrap();
+        let hub_root = tempfile::tempdir().unwrap();
+        let path = hub_root.path().to_string_lossy().to_string();
+        let saved = service
+            .add_agent(AgentProfile {
+                id: format!("custom:{path}"),
+                name: "Custom Hub Path".into(),
+                agent_type: AgentType::Custom,
+                skills_path: path,
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: false,
+            })
+            .unwrap();
+        // 非 .agents/skills 后缀时不强制；再测真实后缀
+        let agents = service.list_agents().unwrap();
+        let _ = agents;
+        let _ = saved;
+
+        let fake_home_style = hub_root.path().join(".agents").join("skills");
+        fs::create_dir_all(&fake_home_style).unwrap();
+        let path2 = fake_home_style.to_string_lossy().to_string();
+        let profile = service
+            .add_agent(AgentProfile {
+                id: format!("custom2:{path2}"),
+                name: "Agents Path".into(),
+                agent_type: AgentType::Custom,
+                skills_path: path2,
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: false,
+            })
+            .unwrap();
+        assert!(profile.supports_universal);
+        let listed = service
+            .list_agents()
+            .unwrap()
+            .into_iter()
+            .find(|a| a.id.starts_with("custom2:"))
+            .unwrap();
+        assert!(listed.supports_universal);
     }
 }

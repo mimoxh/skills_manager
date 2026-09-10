@@ -10,16 +10,23 @@ interface OverviewViewProps {
 }
 
 export function OverviewView({ skills, agents, noFullCoverageTitles, onNavigate, onFolder, onArchive }: OverviewViewProps) {
+  const universalCount = skills.filter((s) => s.isUniversal).length;
   const missing = skills.filter((s) => s.missingAgentIds.length > 0 && !noFullCoverageTitles.has(s.title)).length;
 
   return (
     <>
       {/* Stats */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 24 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 24 }}>
         <div className="card" onClick={() => onNavigate("skills")} style={{ cursor: "pointer" }}>
           <div className="card-header">
-            <div className="card-desc">技能</div>
+            <div className="card-desc">总技能数</div>
             <div className="card-title" style={{ fontSize: 28, marginTop: 4 }}>{skills.length}</div>
+          </div>
+        </div>
+        <div className="card" onClick={() => onNavigate("skills")} style={{ cursor: "pointer" }}>
+          <div className="card-header">
+            <div className="card-desc">Universal 中枢</div>
+            <div className="card-title" style={{ fontSize: 28, marginTop: 4, color: "var(--accent)" }}>{universalCount}</div>
           </div>
         </div>
         <div className="card" onClick={() => onNavigate("agents")} style={{ cursor: "pointer" }}>
@@ -30,8 +37,8 @@ export function OverviewView({ skills, agents, noFullCoverageTitles, onNavigate,
         </div>
         <div className="card" onClick={() => onNavigate("skills", "needed")} style={{ cursor: "pointer" }}>
           <div className="card-header">
-            <div className="card-desc">需同步</div>
-            <div className="card-title" style={{ fontSize: 28, marginTop: 4, color: "var(--warning)" }}>{missing}</div>
+            <div className="card-desc">需定向同步</div>
+            <div className="card-title" style={{ fontSize: 28, marginTop: 4, color: missing > 0 ? "var(--warning)" : "var(--success)" }}>{missing}</div>
           </div>
         </div>
       </div>
