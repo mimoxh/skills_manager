@@ -11,6 +11,18 @@ use std::{
     time::SystemTime,
 };
 
+/// 展开路径前缀中的 `~` 为用户主目录；其余情况仅去除首尾空格。
+pub(crate) fn expand_user_path(path: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed == "~" || trimmed.starts_with("~/") || trimmed.starts_with("~\\") {
+        if let Some(home) = dirs::home_dir() {
+            let rest = trimmed[1..].trim_start_matches(['/', '\\']);
+            return home.join(rest).to_string_lossy().to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
 /// 判断 skills 路径是否指向 Universal 中枢 `~/.agents/skills`（兼容 Windows 反斜杠）。
 pub fn is_universal_skills_path(path: &str) -> bool {
     let normalized = path.trim().replace('\\', "/");
@@ -292,6 +304,16 @@ mod tests {
         let result = sanitize_zip_path("dir/file.txt");
         assert!(result.is_some());
         assert_eq!(result.unwrap(), Path::new("dir/file.txt"));
+    }
+
+    #[test]
+    fn expand_user_path_expands_leading_tilde() {
+        if let Some(home) = dirs::home_dir() {
+            let expanded = expand_user_path("~/.opencode/skills");
+            assert!(Path::new(&expanded).starts_with(&home));
+        }
+        assert_eq!(expand_user_path("C:\\x\\skills"), "C:\\x\\skills");
+        assert_eq!(expand_user_path("  D:\\y  "), "D:\\y");
     }
 
     #[test]

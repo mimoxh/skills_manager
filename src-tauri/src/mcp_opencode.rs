@@ -6,7 +6,7 @@ use crate::{
 use serde_json::Value as JsonValue;
 use std::path::{Path, PathBuf};
 
-/// OpenCode MCP 适配器，读写 `~/.opencode.json`
+/// OpenCode MCP 适配器，读写 `~/.config/opencode/opencode.json`（兼容 `.jsonc` 与旧版 `~/.opencode.json`）
 /// OpenCode 使用 "mcp" 作为顶层 key，"remote" 作为远程传输类型，支持 "enabled" 字段
 const AGENT_LABEL: &str = "OpenCode";
 
@@ -24,33 +24,43 @@ impl OpenCodeMcpAdapter {
     fn default_config_path() -> Option<PathBuf> {
         let home = dirs::home_dir()?;
 
-        let home_config = home.join(".opencode.json");
-        if home_config.exists() {
-            return Some(home_config);
+        // 旧版 `~/.opencode.json`
+        let legacy_home_config = home.join(".opencode.json");
+        if legacy_home_config.exists() {
+            return Some(legacy_home_config);
         }
 
-        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-            let xdg_path = PathBuf::from(xdg).join("opencode").join(".opencode.json");
-            if xdg_path.exists() {
-                return Some(xdg_path);
+        let mut config_dirs = Vec::new();
+        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+            if !xdg.is_empty() {
+                config_dirs.push(PathBuf::from(xdg).join("opencode"));
             }
         }
+        config_dirs.push(home.join(".config").join("opencode"));
 
-        let dot_config = home.join(".config").join("opencode").join(".opencode.json");
-        if dot_config.exists() {
-            return Some(dot_config);
+        for dir in &config_dirs {
+            let json = dir.join("opencode.json");
+            if json.exists() {
+                return Some(json);
+            }
+            let jsonc = dir.join("opencode.jsonc");
+            if jsonc.exists() {
+                return Some(jsonc);
+            }
         }
 
         if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-            let local_path = PathBuf::from(local_app_data)
-                .join("opencode")
-                .join(".opencode.json");
-            if local_path.exists() {
-                return Some(local_path);
+            let local_dir = PathBuf::from(local_app_data).join("opencode");
+            let local_json = local_dir.join("opencode.json");
+            if local_json.exists() {
+                return Some(local_json);
             }
         }
 
-        Some(home_config)
+        config_dirs
+            .into_iter()
+            .next()
+            .map(|dir| dir.join("opencode.json"))
     }
 
     /// 将 env 字符串数组 ["KEY=val", ...] 转换为 HashMap

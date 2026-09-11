@@ -663,7 +663,16 @@ function AddAgentPanel({ customAgent, busy, onCustomChange, onSaveCustom, pickFo
       <div className="card-body">
         <div className="input-group">
           <label className="input-label">类型</label>
-          <select className="input" value={customAgent.type} onChange={(e) => { const t = e.target.value as AgentType; onCustomChange({ ...customAgent, type: t, adapterConfig: isMcpAgent(t, {}) ? { mcpConfigPath: "" } : {} }); }}>
+          <select className="input" value={customAgent.type} onChange={(e) => {
+            const t = e.target.value as AgentType;
+            onCustomChange({
+              ...customAgent,
+              type: t,
+              name: defaultAgentName(t),
+              skillsPath: defaultAgentSkillsPath(t),
+              adapterConfig: isMcpAgent(t, {}) ? { mcpConfigPath: "" } : {},
+            });
+          }}>
             {agentTypeOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
           </select>
         </div>
@@ -725,6 +734,16 @@ function agentPlaceholder(type: AgentType): string {
 function skillsPlaceholder(type: AgentType): string {
   const map: Partial<Record<AgentType, string>> = { universal: "~/.agents/skills", opencode: "~/.opencode/skills", codex: "~/.codex/skills", claudeCode: "~/.claude/skills", claudeCowork: "%LOCALAPPDATA%\\Claude-3p\\...\\skills", cursor: "~/.cursor/skills", trae: "~/.trae/skills" };
   return map[type] ?? "C:\\Users\\you\\.agents\\skills";
+}
+
+/// 选择内置类型时预填默认名称；自定义类型留空由用户填写。
+function defaultAgentName(type: AgentType): string {
+  return type === "custom" ? "" : agentPlaceholder(type);
+}
+
+/// 选择内置类型时预填默认 Skills 目录；`~` 由后端展开为用户主目录。
+function defaultAgentSkillsPath(type: AgentType): string {
+  return type === "custom" ? "" : skillsPlaceholder(type);
 }
 
 function mcpPlaceholder(type: AgentType, format?: string): string {

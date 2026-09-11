@@ -119,6 +119,22 @@ impl AgentType {
             AgentType::OpenCode => "opencode",
         }
     }
+
+    /// 内置 Agent 类型的默认展示名；自定义类型没有默认名称。
+    pub fn default_name(&self) -> Option<&'static str> {
+        match self {
+            AgentType::Universal => Some("Universal (.agents/skills)"),
+            AgentType::Codex => Some("Codex"),
+            AgentType::Claude => Some("Claude"),
+            AgentType::ClaudeCode => Some("Claude Code"),
+            AgentType::ClaudeCowork => Some("Claude Desktop Cowork"),
+            AgentType::Cursor => Some("Cursor"),
+            AgentType::Trae => Some("Trae"),
+            AgentType::CherryStudio => Some("Cherry Studio"),
+            AgentType::OpenCode => Some("OpenCode"),
+            AgentType::Custom => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -88,16 +88,16 @@ export function useSkillsData({ showToast, setBusy, setMcpServers, setNoFullCove
       skillsPath: source.skillsPath.trim(),
       userTags: source.userTags ?? [],
     };
-    if (!agent.name || !agent.skillsPath) {
+    if (source.type === "custom" && (!agent.name || !agent.skillsPath)) {
       showToast("自定义 Agent 需要填写名称和 Skills 安装目录。", "error");
       return;
     }
     setBusy(true);
     try {
-      await api.addAgent(agent);
+      const saved = await api.addAgent(agent);
       if (!override) setCustomAgent(emptyCustom);
       await refreshAll();
-      showToast(`已保存 ${agent.name}。`, "success");
+      showToast(`已保存 ${saved.name || agent.name}。`, "success");
     } catch (error) {
       showToast(String(error), "error");
     } finally {

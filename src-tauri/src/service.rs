@@ -1,5 +1,5 @@
 use crate::{
-    adapter::{AgentAdapter, adapter_for, built_in_adapters},
+    adapter::{AgentAdapter, adapter_for, built_in_adapters, default_skills_path},
     catalog::{
         CLAWHUB_API_CACHE_FILE, scan_catalog_repository, scan_clawhub_api_cache,
         sort_catalog_skills,
@@ -25,8 +25,8 @@ use crate::{
     store::{AppStore, InstallRecordInput},
     util::{
         catalog_matches_filters, catalog_matches_query, catalog_skill_is_installed,
-        command_no_window, is_universal_skills_path, normalize_title, page_catalog_skills,
-        safe_label, safe_relative_path,
+        command_no_window, expand_user_path, is_universal_skills_path, normalize_title,
+        page_catalog_skills, safe_label, safe_relative_path,
     },
 };
 use std::{
@@ -267,6 +267,20 @@ impl AppService {
     }
 
     pub fn add_agent(&self, mut profile: AgentProfile) -> AppResult<AgentProfile> {
+        // 内置类型允许留空名称/目录，使用该类型的默认值，避免用户必须手动填写。
+        if profile.name.trim().is_empty() {
+            if let Some(name) = profile.agent_type.default_name() {
+                profile.name = name.to_string();
+            }
+        }
+        profile.name = profile.name.trim().to_string();
+        if profile.skills_path.trim().is_empty() {
+            if let Some(path) = default_skills_path(&profile.agent_type) {
+                profile.skills_path = path.to_string_lossy().to_string();
+            }
+        } else {
+            profile.skills_path = expand_user_path(&profile.skills_path);
+        }
         if profile.agent_type == AgentType::Universal
             || is_universal_skills_path(&profile.skills_path)
         {
@@ -2205,5 +2219,38 @@ mod tests {
             .find(|a| a.id.starts_with("custom2:"))
             .unwrap();
         assert!(listed.supports_universal);
+    }
+
+    #[test]
+    fn add_agent_fills_default_name_for_builtin_type() {
+        let service = AppService::in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let saved = service
+            .add_agent(AgentProfile {
+                id: String::new(),
+                name: "   ".into(),
+                agent_type: AgentType::Codex,
+                skills_path: dir.path().to_string_lossy().to_string(),
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: false,
+            })
+            .unwrap();
+        assert_eq!(saved.name, "Codex");
+    }
+
+    #[test]
+    fn add_agent_still_requires_path_for_custom_type() {
+        let service = AppService::in_memory().unwrap();
+        let result = service.add_agent(AgentProfile {
+            id: String::new(),
+            name: "My Agent".into(),
+            agent_type: AgentType::Custom,
+            skills_path: "  ".into(),
+            adapter_config: None,
+            user_tags: Vec::new(),
+            supports_universal: false,
+        });
+        assert!(result.is_err());
     }
 }

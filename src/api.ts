@@ -50,7 +50,7 @@ export const api = {
     return command<AgentProfile[]>("list_agents", {}, () => []);
   },
   addAgent(profile: AgentProfile) {
-    return command("add_agent", { profile }, () => profile);
+    return command<AgentProfile>("add_agent", { profile }, () => profile);
   },
   removeAgent(agentId: string) {
     return command<void>("remove_agent", { agentId }, () => undefined);
