@@ -163,6 +163,17 @@ export default function App() {
             resolvedTheme={theme.resolvedTheme}
             onPaletteChange={theme.setPalette}
             onThemeChange={theme.setThemeMode}
+            syncConfig={state.syncConfig}
+            syncStatus={state.syncStatus}
+            syncConflicts={state.syncConflicts}
+            syncBusy={state.syncBusy}
+            installToHub={state.installToHub}
+            onSaveSyncConfig={state.saveSyncConfig}
+            onTestSyncConnection={state.testSyncConnection}
+            onSyncNow={state.syncNow}
+            onResolveSyncConflict={state.resolveSyncConflict}
+            onSyncGc={state.runSyncGc}
+            onInstallToHubChange={state.setInstallToHub}
           />
         );
       default:

@@ -27,9 +27,11 @@ interface Props {
   refreshAll: () => Promise<void>;
   /** 内置默认 catalog 源 id（后端 InitialData 下发），替代硬编码 "clawhub" */
   defaultSourceId: string;
+  /** 新安装默认范围：true = 写入中枢并同步，false = 仅本机。 */
+  getInstallToHub?: () => boolean;
 }
 
-export function useCatalog({ showToast, refreshAll, defaultSourceId }: Props) {
+export function useCatalog({ showToast, refreshAll, defaultSourceId, getInstallToHub }: Props) {
   const [catalogBusy, setCatalogBusy] = useState(false);
   const [catalogStartupRefreshing, setCatalogStartupRefreshing] = useState(false);
   const [catalogSources, setCatalogSources] = useState<CatalogSource[]>([]);
@@ -190,7 +192,7 @@ export function useCatalog({ showToast, refreshAll, defaultSourceId }: Props) {
     }
     setCatalogBusy(true);
     try {
-      const results = await api.installCatalogSkill(catalogSkillId, targetAgentIds, conflictPolicy);
+      const results = await api.installCatalogSkill(catalogSkillId, targetAgentIds, conflictPolicy, getInstallToHub?.() ?? true);
       await refreshAll();
       await searchCatalog();
       showToast(`已完成 ${results.length} 个安装任务。`, "success");

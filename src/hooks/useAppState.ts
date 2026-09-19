@@ -2,12 +2,15 @@ import { useEffect, useState } from "react";
 import { useCatalog } from "./useCatalog";
 import { useMcpServers } from "./useMcpServers";
 import { useSkillsData } from "./useSkillsData";
+import { useInstallScope, useSync } from "./useSync";
 import { useToast } from "./useToast";
 
 export function useAppState() {
   const { toast, showToast, dismissToast } = useToast();
   // busy 提升到组合层，跨 skills/mcp 域共享单一加载状态
   const [busy, setBusy] = useState(false);
+  const { installToHub, setInstallToHub } = useInstallScope();
+  const sync = useSync({ showToast });
 
   const mcp = useMcpServers({ showToast, setBusy });
   const skillsData = useSkillsData({
@@ -15,11 +18,13 @@ export function useAppState() {
     setBusy,
     setMcpServers: mcp.setMcpServers,
     setNoFullCoverageMcpTitles: mcp.setNoFullCoverageMcpTitles,
+    getInstallToHub: () => installToHub,
   });
   const catalog = useCatalog({
     showToast,
     refreshAll: skillsData.refreshAll,
     defaultSourceId: skillsData.defaultCatalogSourceId,
+    getInstallToHub: () => installToHub,
   });
 
   // 启动初始化：全量刷新 skills/agents + MCP，随后拉取两种安全模式的刷新状态
@@ -98,5 +103,17 @@ export function useAppState() {
     removeMcpServerFromAgents: mcp.removeMcpServerFromAgents,
     noFullCoverageMcpTitles: mcp.noFullCoverageMcpTitles,
     toggleMcpNoFullCoverage: mcp.toggleMcpNoFullCoverage,
+    // 同步
+    syncConfig: sync.syncConfig,
+    syncStatus: sync.syncStatus,
+    syncConflicts: sync.syncConflicts,
+    syncBusy: sync.syncBusy,
+    saveSyncConfig: sync.saveSyncConfig,
+    testSyncConnection: sync.testSyncConnection,
+    syncNow: sync.syncNow,
+    resolveSyncConflict: sync.resolveSyncConflict,
+    runSyncGc: sync.runSyncGc,
+    installToHub,
+    setInstallToHub,
   };
 }

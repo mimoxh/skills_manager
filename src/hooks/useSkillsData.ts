@@ -25,9 +25,11 @@ interface Props {
   setBusy: (busy: boolean) => void;
   setMcpServers: (servers: GroupedMcpServer[]) => void;
   setNoFullCoverageMcpTitles: (titles: Set<string>) => void;
+  /** 新安装默认范围：true = 写入中枢并同步，false = 仅本机。 */
+  getInstallToHub?: () => boolean;
 }
 
-export function useSkillsData({ showToast, setBusy, setMcpServers, setNoFullCoverageMcpTitles }: Props) {
+export function useSkillsData({ showToast, setBusy, setMcpServers, setNoFullCoverageMcpTitles, getInstallToHub }: Props) {
   const [skills, setSkills] = useState<GroupedSkill[]>([]);
   const [agents, setAgents] = useState<AgentProfile[]>([]);
   const [customAgent, setCustomAgent] = useState<AgentProfile>(emptyCustom);
@@ -172,7 +174,7 @@ export function useSkillsData({ showToast, setBusy, setMcpServers, setNoFullCove
     }
     setBusy(true);
     try {
-      const results = await api.syncGroupedSkill(title, sourceAgentId, targetAgentIds, conflictPolicy);
+      const results = await api.syncGroupedSkill(title, sourceAgentId, targetAgentIds, conflictPolicy, getInstallToHub?.() ?? true);
       await refreshAll();
       showToast(`已完成 ${results.length} 个同步任务。`, "success");
       return results;
@@ -219,7 +221,7 @@ export function useSkillsData({ showToast, setBusy, setMcpServers, setNoFullCove
     if (!pendingImport) return;
     setBusy(true);
     try {
-      const result = await api.importSkillUpload(pendingImport.fileName, pendingImport.files, targetAgentIds, conflictPolicy);
+      const result = await api.importSkillUpload(pendingImport.fileName, pendingImport.files, targetAgentIds, conflictPolicy, getInstallToHub?.() ?? true);
       await refreshAll();
       showToast(result.message, "success");
     } catch (error) {

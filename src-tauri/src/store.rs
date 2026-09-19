@@ -1,6 +1,6 @@
 use crate::{
     error::{AppError, AppResult},
-    models::{AgentProfile, CatalogSource, DiscoveryPathEntry},
+    models::{AgentProfile, CatalogSource, DiscoveryPathEntry, SyncConfig, SyncConflict},
 };
 
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,30 @@ struct AppState {
     skill_tags: HashMap<String, Vec<String>>,
     #[serde(default)]
     agent_tags: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    device_id: String,
+    #[serde(default)]
+    device_name: String,
+    #[serde(default)]
+    sync_config: SyncConfig,
+    #[serde(default)]
+    sync_skill_state: HashMap<String, SyncSkillState>,
+    #[serde(default)]
+    sync_conflicts: Vec<SyncConflict>,
+    #[serde(default)]
+    sync_last_error: Option<String>,
+    #[serde(default)]
+    sync_last_run_at: Option<String>,
+}
+
+/// 每个 skill 的同步基准（key = `normalize(name)`），用于区分真冲突与快进。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncSkillState {
+    #[serde(default)]
+    pub last_merged_hash: Option<String>,
+    #[serde(default)]
+    pub last_synced_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,12 +98,25 @@ pub struct AppStore {
     data_dir: PathBuf,
 }
 
+/// 解析应用数据目录：优先 `SKILLS_MANAGER_DATA_DIR`，否则 `%LOCALAPPDATA%/skill-sync-manager`。
+/// 同机双开做同步实验时，给第二个实例设不同目录即可得到独立 `device_id`。
+pub fn resolve_data_dir_from(override_dir: Option<std::ffi::OsString>) -> PathBuf {
+    if let Some(dir) = override_dir {
+        let path = PathBuf::from(dir);
+        if !path.as_os_str().is_empty() {
+            return path;
+        }
+    }
+    dirs::data_local_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("skill-sync-manager")
+}
+
 impl AppStore {
     pub fn new() -> AppResult<Self> {
-        let data_dir = dirs::data_local_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("skill-sync-manager");
-        Self::load_from(data_dir)
+        Self::load_from(resolve_data_dir_from(std::env::var_os(
+            "SKILLS_MANAGER_DATA_DIR",
+        )))
     }
 
     /// 从指定数据目录加载状态；state.json 损坏时保留原文件并回退默认状态，绝不静默覆盖用户数据。
@@ -111,7 +148,7 @@ impl AppStore {
         })
     }
 
-    #[cfg(test)]
+    /// 从指定数据目录加载（同机双开 / 便携实例 / 测试）。
     pub fn with_data_dir(data_dir: PathBuf) -> AppResult<Self> {
         Self::load_from(data_dir)
     }
@@ -492,6 +529,154 @@ impl AppStore {
         sources.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(sources)
     }
+
+    // ── 同步相关访问器 ────────────────────────────────────────────────
+
+    /// 返回本机设备 id；为空时生成并持久化。设备 id 一经生成不再变化。
+    pub fn ensure_device_id(&self) -> AppResult<String> {
+        let existing = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+            state.device_id.clone()
+        };
+        if !existing.trim().is_empty() {
+            return Ok(existing);
+        }
+        let generated = format!("device-{}", uuid::Uuid::new_v4().simple());
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+            state.device_id = generated.clone();
+        }
+        self.save()?;
+        Ok(generated)
+    }
+
+    pub fn device_name(&self) -> AppResult<String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        Ok(state.device_name.clone())
+    }
+
+    pub fn set_device_name(&self, name: &str) -> AppResult<()> {
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+            state.device_name = name.trim().to_string();
+        }
+        self.save()
+    }
+
+    pub fn sync_config(&self) -> AppResult<SyncConfig> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        Ok(state.sync_config.clone())
+    }
+
+    pub fn set_sync_config(&self, config: &SyncConfig) -> AppResult<()> {
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+            state.sync_config = config.clone();
+        }
+        self.save()
+    }
+
+    pub fn sync_skill_state(&self, key: &str) -> AppResult<Option<SyncSkillState>> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        Ok(state.sync_skill_state.get(key).cloned())
+    }
+
+    pub fn set_sync_skill_state(&self, key: &str, value: SyncSkillState) -> AppResult<()> {
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+            state.sync_skill_state.insert(key.to_string(), value);
+        }
+        self.save()
+    }
+
+    pub fn list_sync_skill_state(&self) -> AppResult<HashMap<String, SyncSkillState>> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        Ok(state.sync_skill_state.clone())
+    }
+
+    pub fn sync_conflicts(&self) -> AppResult<Vec<SyncConflict>> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        Ok(state.sync_conflicts.clone())
+    }
+
+    pub fn set_sync_conflicts(&self, conflicts: Vec<SyncConflict>) -> AppResult<()> {
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+            state.sync_conflicts = conflicts;
+        }
+        self.save()
+    }
+
+    pub fn sync_last_error(&self) -> AppResult<Option<String>> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        Ok(state.sync_last_error.clone())
+    }
+
+    pub fn set_sync_last_error(&self, error: Option<&str>) -> AppResult<()> {
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+            state.sync_last_error = error.map(|value| value.to_string());
+        }
+        self.save()
+    }
+
+    pub fn sync_last_run_at(&self) -> AppResult<Option<String>> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        Ok(state.sync_last_run_at.clone())
+    }
+
+    pub fn set_sync_last_run_at(&self, value: Option<String>) -> AppResult<()> {
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+            state.sync_last_run_at = value;
+        }
+        self.save()
+    }
 }
 
 fn sanitize_tags(tags: Vec<String>) -> AppResult<Vec<String>> {
@@ -519,7 +704,9 @@ fn sanitize_tags(tags: Vec<String>) -> AppResult<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{AgentType, CatalogSource, CatalogSourceKind};
+    use crate::models::{
+        AgentType, CatalogSource, CatalogSourceKind, SyncConflict, SyncConflictKind,
+    };
 
     #[test]
     fn saves_and_lists_agents() {
@@ -679,6 +866,78 @@ mod tests {
         assert_eq!(agents[0].id, "test-atomic");
         // 无残留临时文件
         assert!(!dir.path().join("state.json.tmp").exists());
+    }
+
+    #[test]
+    fn device_id_is_generated_once_and_stable() {
+        let store = AppStore::in_memory().unwrap();
+        let first = store.ensure_device_id().unwrap();
+        assert!(first.starts_with("device-"));
+        assert_eq!(store.ensure_device_id().unwrap(), first);
+    }
+
+    #[test]
+    fn resolve_data_dir_honors_override() {
+        let custom = PathBuf::from("D:/tmp/skills-manager-device-b");
+        assert_eq!(
+            resolve_data_dir_from(Some(custom.clone().into_os_string())),
+            custom
+        );
+        let fallback = resolve_data_dir_from(Some(std::ffi::OsString::new()));
+        assert!(fallback.ends_with("skill-sync-manager"));
+        let explicit = resolve_data_dir_from(Some(std::ffi::OsString::from("E:/x")));
+        assert_eq!(explicit, PathBuf::from("E:/x"));
+    }
+
+    #[test]
+    fn sync_fields_persist_and_recover_after_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let store = AppStore::with_data_dir(dir.path().to_path_buf()).unwrap();
+            store.ensure_device_id().unwrap();
+            store.set_device_name("win-desktop").unwrap();
+            store
+                .set_sync_config(&SyncConfig {
+                    enabled: true,
+                    endpoint: "https://openlist.example/s3".into(),
+                    bucket: "skills".into(),
+                    ..SyncConfig::default()
+                })
+                .unwrap();
+            store
+                .set_sync_skill_state(
+                    "demo skill",
+                    SyncSkillState {
+                        last_merged_hash: Some("abc".into()),
+                        last_synced_at: Some("2026-09-11T00:00:00Z".into()),
+                    },
+                )
+                .unwrap();
+            store
+                .set_sync_conflicts(vec![SyncConflict {
+                    skill_id: "demo skill".into(),
+                    name: "Demo Skill".into(),
+                    dir_name: "demo-skill".into(),
+                    local_hash: Some("local".into()),
+                    remote_hash: Some("remote".into()),
+                    remote_device_id: "device-mac".into(),
+                    kind: SyncConflictKind::BothModified,
+                    detected_at: "2026-09-11T00:00:00Z".into(),
+                }])
+                .unwrap();
+            store.set_sync_last_error(Some("offline")).unwrap();
+        }
+
+        let reloaded = AppStore::with_data_dir(dir.path().to_path_buf()).unwrap();
+        assert_eq!(reloaded.device_name().unwrap(), "win-desktop");
+        assert_eq!(reloaded.sync_config().unwrap().bucket, "skills");
+        assert!(reloaded.sync_config().unwrap().enabled);
+        let state = reloaded.sync_skill_state("demo skill").unwrap().unwrap();
+        assert_eq!(state.last_merged_hash.as_deref(), Some("abc"));
+        let conflicts = reloaded.sync_conflicts().unwrap();
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].kind, SyncConflictKind::BothModified);
+        assert_eq!(reloaded.sync_last_error().unwrap().as_deref(), Some("offline"));
     }
 
     #[test]

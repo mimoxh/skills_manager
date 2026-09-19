@@ -17,6 +17,10 @@ import type {
   InstallResult,
   McpOperationResult,
   McpServerConfig,
+  SyncConfig,
+  SyncConflict,
+  SyncConflictChoice,
+  SyncStatus,
 } from "./types";
 
 function command<T>(name: string, args: Record<string, unknown>, fallback: () => T | Promise<T>) {
@@ -36,8 +40,8 @@ export const api = {
       defaultCatalogSourceId: "clawhub",
     }));
   },
-  importSkillUpload(fileName: string, files: ImportSkillFile[], targetAgentIds: string[], conflictPolicy: ConflictPolicy) {
-    return command<ImportSkillResult>("import_skill_upload", { fileName, files, targetAgentIds, conflictPolicy }, () => ({
+  importSkillUpload(fileName: string, files: ImportSkillFile[], targetAgentIds: string[], conflictPolicy: ConflictPolicy, toHub = true) {
+    return command<ImportSkillResult>("import_skill_upload", { fileName, files, targetAgentIds, conflictPolicy, toHub }, () => ({
       imported: 0,
       skipped: 0,
       message: "Upload import is available in the desktop app",
@@ -55,10 +59,10 @@ export const api = {
   removeAgent(agentId: string) {
     return command<void>("remove_agent", { agentId }, () => undefined);
   },
-  syncGroupedSkill(title: string, sourceAgentId: string | null | undefined, targetAgentIds: string[], conflictPolicy: ConflictPolicy) {
+  syncGroupedSkill(title: string, sourceAgentId: string | null | undefined, targetAgentIds: string[], conflictPolicy: ConflictPolicy, toHub = true) {
     return command<InstallResult[]>(
       "sync_grouped_skill",
-      { title, sourceAgentId, targetAgentIds, conflictPolicy },
+      { title, sourceAgentId, targetAgentIds, conflictPolicy, toHub },
       () => [],
     );
   },
@@ -166,12 +170,77 @@ export const api = {
       }),
     );
   },
-  installCatalogSkill(catalogSkillId: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) {
+  installCatalogSkill(catalogSkillId: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy, toHub = true) {
     return command<InstallResult[]>(
       "install_catalog_skill",
-      { catalogSkillId, targetAgentIds, conflictPolicy },
+      { catalogSkillId, targetAgentIds, conflictPolicy, toHub },
       () => [],
     );
+  },
+  // ── Skills 同步 API ──
+  syncGetConfig() {
+    return command<SyncConfig>("sync_get_config", {}, () => ({
+      enabled: false,
+      endpoint: "",
+      bucket: "",
+      region: "us-east-1",
+      pathStyle: true,
+      accessKeyId: "",
+      pollSecs: 60,
+      encrypt: true,
+    }));
+  },
+  syncSetConfig(config: SyncConfig, secretAccessKey?: string, encryptPassword?: string) {
+    return command<SyncConfig>(
+      "sync_set_config",
+      { config, secretAccessKey, encryptPassword },
+      () => config,
+    );
+  },
+  syncNow() {
+    return command<SyncStatus>("sync_now", {}, () => ({
+      configured: false,
+      enabled: false,
+      running: false,
+      lastRunAt: null,
+      lastError: "Desktop only",
+      pendingConflicts: 0,
+      deviceId: "",
+      deviceName: "",
+    }));
+  },
+  syncStatus() {
+    return command<SyncStatus>("sync_status", {}, () => ({
+      configured: false,
+      enabled: false,
+      running: false,
+      lastRunAt: null,
+      lastError: null,
+      pendingConflicts: 0,
+      deviceId: "",
+      deviceName: "",
+    }));
+  },
+  syncListConflicts() {
+    return command<SyncConflict[]>("sync_list_conflicts", {}, () => []);
+  },
+  syncResolveConflict(skillId: string, choice: SyncConflictChoice) {
+    return command<SyncStatus>("sync_resolve_conflict", { skillId, choice }, () => ({
+      configured: false,
+      enabled: false,
+      running: false,
+      lastRunAt: null,
+      lastError: "Desktop only",
+      pendingConflicts: 0,
+      deviceId: "",
+      deviceName: "",
+    }));
+  },
+  syncTestConnection(config: SyncConfig) {
+    return command<string>("sync_test_connection", { config }, () => "Desktop only");
+  },
+  syncGc() {
+    return command<number>("sync_gc", {}, () => 0);
   },
   // ── MCP API ──
   scanMcpServers() {

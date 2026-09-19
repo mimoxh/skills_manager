@@ -1,5 +1,5 @@
 use crate::{
-    adapter::{AgentAdapter, adapter_for, built_in_adapters, default_skills_path},
+    adapter::{AgentAdapter, adapter_for, default_skills_path},
     catalog::{
         CLAWHUB_API_CACHE_FILE, scan_catalog_repository, scan_clawhub_api_cache,
         sort_catalog_skills,
@@ -15,14 +15,19 @@ use crate::{
         AgentProfile, AgentType, CatalogFilters, CatalogInstallStatus, CatalogRefreshResult,
         CatalogRefreshStatus, CatalogSafetyMode, CatalogSearchResult, CatalogSkill, CatalogSort,
         CatalogSource, CatalogSourceKind, ConflictPolicy, GroupedSkill, ImportSkillFile,
-        ImportSkillResult, InitialData, InstallResult,
+        ImportSkillResult, InitialData, InstallResult, SyncConfig, SyncConflictChoice, SyncStatus,
     },
     skill_scan::{
-        group_agent_skills, load_skill_lock_map, read_agent_skill_readme,
+        group_agent_skills, load_skill_lock_map, read_agent_skill_info, read_agent_skill_readme,
         register_claude_cowork_skill, scan_agent_skill_copies,
         scan_agent_skill_copies_with_lock, write_skill_lock_entry,
     },
     store::{AppStore, InstallRecordInput},
+    sync::{
+        ensure_kdf_salt, is_local_endpoint, local_root_from_endpoint, Crypto, HubWatcher,
+        KeyringSecretStore, LocalDirTransport, S3Transport, SecretStore, SyncManager, SyncRuntime,
+        SyncTransport, ENCRYPT_PASSWORD, SECRET_ACCESS_KEY,
+    },
     util::{
         catalog_matches_filters, catalog_matches_query, catalog_skill_is_installed,
         command_no_window, expand_user_path, is_universal_skills_path, normalize_title,
@@ -36,6 +41,48 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+/// 按配置构造同步传输：本地目录或 S3。
+pub(crate) fn build_transport_from(
+    config: &SyncConfig,
+    secrets: &dyn SecretStore,
+) -> AppResult<Box<dyn SyncTransport>> {
+    if let Some(root) = local_root_from_endpoint(&config.endpoint) {
+        let root = if config.bucket.trim().is_empty() {
+            root
+        } else {
+            root.join(config.bucket.trim())
+        };
+        return Ok(Box::new(LocalDirTransport::new(root)?));
+    }
+    let secret = secrets
+        .get(SECRET_ACCESS_KEY)?
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| AppError::Message("未配置 S3 Secret Key。".to_string()))?;
+    Ok(Box::new(S3Transport::new(
+        &config.endpoint,
+        &config.bucket,
+        &config.region,
+        &config.access_key_id,
+        &secret,
+    )?))
+}
+
+/// 校验同步传输所需配置（本地目录只要求 endpoint；S3 还要 bucket）。
+pub(crate) fn ensure_sync_transport_ready(config: &SyncConfig) -> AppResult<()> {
+    if !config.enabled {
+        return Err(AppError::Message("同步未启用。".to_string()));
+    }
+    if is_local_endpoint(&config.endpoint) {
+        return Ok(());
+    }
+    if config.endpoint.trim().is_empty() || config.bucket.trim().is_empty() {
+        return Err(AppError::Message(
+            "请先配置同步 endpoint 与 bucket。".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct AppService {
     pub(crate) store: Arc<AppStore>,
@@ -45,34 +92,54 @@ pub struct AppService {
     /// 已安装集合缓存（installed_titles, installed_slugs）。
     /// search_catalog_skills 只需算一次，变更点（安装/同步/导入/卸载/回滚/agent 增删）时失效。
     installed_cache: Arc<Mutex<Option<(HashSet<String>, HashSet<String>)>>>,
+    /// 机密存储（S3 secret / 加密口令），默认走 OS 钥匙串。
+    pub(crate) secrets: Arc<dyn SecretStore>,
+    /// 后台同步执行器（串行化 + 兜底轮询）。
+    pub(crate) sync_manager: Arc<SyncManager>,
+    /// 中枢目录文件监听（启用同步时存在）。
+    pub(crate) sync_watcher: Arc<Mutex<Option<HubWatcher>>>,
 }
 
 impl AppService {
     pub fn new() -> AppResult<Self> {
         let store = Arc::new(AppStore::new()?);
+        Self::from_store(store, Arc::new(KeyringSecretStore::new("skill-sync-manager")))
+    }
+
+    /// 指定数据目录启动（同机双开做同步实验 / 便携实例）。
+    pub fn with_data_dir(data_dir: PathBuf) -> AppResult<Self> {
+        let store = Arc::new(AppStore::with_data_dir(data_dir)?);
+        Self::from_store(store, Arc::new(KeyringSecretStore::new("skill-sync-manager")))
+    }
+
+    pub fn from_store(store: Arc<AppStore>, secrets: Arc<dyn SecretStore>) -> AppResult<Self> {
         let catalog_index = Arc::new(CatalogIndex::new(&store.data_dir())?);
-        Ok(Self {
+        let service = Self {
             store: Arc::clone(&store),
             mcp_service: Arc::new(McpService::new(&store)),
             catalog_index,
             catalog_refresh_cancel: Arc::new(Mutex::new(HashSet::new())),
             installed_cache: Arc::new(Mutex::new(None)),
-        })
+            secrets,
+            sync_manager: Arc::new(SyncManager::new()),
+            sync_watcher: Arc::new(Mutex::new(None)),
+        };
+        // 已启用同步则随启动拉起后台轮询线程与文件监听。
+        if let Ok(config) = service.store.sync_config() {
+            if config.enabled {
+                service
+                    .sync_manager
+                    .start(service.clone(), config.poll_secs);
+                service.start_sync_watcher();
+            }
+        }
+        Ok(service)
     }
 
     #[cfg(test)]
     pub fn in_memory() -> AppResult<Self> {
         let store = Arc::new(AppStore::in_memory()?);
-        Ok(Self {
-            store: Arc::clone(&store),
-            mcp_service: Arc::new(McpService::new(&store)),
-            catalog_index: Arc::new(CatalogIndex::new(&std::env::temp_dir().join(format!(
-                "skill-sync-manager-test-index-{}",
-                chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-            )))?),
-            catalog_refresh_cancel: Arc::new(Mutex::new(HashSet::new())),
-            installed_cache: Arc::new(Mutex::new(None)),
-        })
+        Self::from_store(store, Arc::new(crate::sync::MemorySecretStore::new()))
     }
 
     pub fn store(&self) -> &AppStore {
@@ -173,7 +240,7 @@ impl AppService {
         #[cfg(not(test))]
         {
             let mut agents = Vec::new();
-            for adapter in built_in_adapters() {
+            for adapter in crate::adapter::built_in_adapters() {
                 agents.extend(adapter.detect());
             }
             Ok(agents)
@@ -225,19 +292,27 @@ impl AppService {
     }
 
     pub fn toggle_no_full_coverage(&self, title: &str) -> AppResult<bool> {
-        self.store.toggle_no_full_coverage(title)
+        let result = self.store.toggle_no_full_coverage(title)?;
+        // 便携层变更（无文件变化）主动触发一次同步上传。
+        self.sync_manager.trigger();
+        Ok(result)
     }
 
     pub fn toggle_no_full_coverage_mcp(&self, title: &str) -> AppResult<bool> {
+        // MCP 标记本轮不进同步层，保持本机。
         self.store.toggle_no_full_coverage_mcp(title)
     }
 
     pub fn set_skill_tags(&self, title: &str, tags: Vec<String>) -> AppResult<Vec<String>> {
-        self.store.set_skill_tags(title, tags)
+        let result = self.store.set_skill_tags(title, tags)?;
+        self.sync_manager.trigger();
+        Ok(result)
     }
 
     pub fn set_agent_tags(&self, agent_id: &str, tags: Vec<String>) -> AppResult<Vec<String>> {
-        self.store.set_agent_tags(agent_id, tags)
+        let result = self.store.set_agent_tags(agent_id, tags)?;
+        self.sync_manager.trigger();
+        Ok(result)
     }
 
     pub fn list_saved_agents(&self) -> AppResult<Vec<AgentProfile>> {
@@ -303,9 +378,18 @@ impl AppService {
     /// 确保存在 Universal Hub；不存在时自动创建 `~/.agents/skills`。
     /// 测试环境（cfg(test)）不碰真实 home，必须先注册临时中枢。
     pub fn ensure_hub_agent(&self) -> AppResult<AgentProfile> {
-        let agents = self.list_agents()?;
-        if let Some(hub) = Self::find_hub_agent(&agents) {
+        // 优先用户已保存的中枢，避免本机 detect 到的 ~/.agents/skills 因名称排序抢占。
+        if let Some(hub) = Self::find_hub_agent(&self.list_saved_agents()?) {
             return Ok(hub.clone());
+        }
+        if let Some(hub) = Self::find_hub_agent(&self.detect_agents()?) {
+            let mut hub = hub.clone();
+            // 落库，保证后续 ensure / 同步都稳定指向同一中枢
+            if !hub.skills_path.trim().is_empty() {
+                hub.skills_path = expand_user_path(&hub.skills_path);
+            }
+            let saved = self.store.save_agent(&hub).map(|_| hub.clone()).unwrap_or(hub);
+            return Ok(saved);
         }
         #[cfg(test)]
         {
@@ -452,80 +536,28 @@ impl AppService {
 
             let skills_path = Path::new(&agent.skills_path);
             let _ = fs::create_dir_all(skills_path);
-            let outcome = (|| -> AppResult<InstallResult> {
-                let Some((target, action, backup_path)) = self.resolve_install_conflict(
-                    agent,
-                    skills_path,
-                    source_dir_name,
-                    skill_label,
-                    conflict_policy,
-                )? else {
-                    return Ok(InstallResult {
-                        agent_id: agent.id.clone(),
-                        skill_id: skill_label.to_string(),
-                        action: "skipped".to_string(),
-                        target_path: skills_path
-                            .join(source_dir_name)
-                            .to_string_lossy()
-                            .to_string(),
-                        backup_path: None,
-                        message: format!("已跳过 {skill_label}"),
-                    });
-                };
-
-                let mut used_symlink = false;
-                if agent.agent_type == AgentType::CherryStudio {
-                    let cs = CherryStudioAdapter::new().ok_or_else(|| {
-                        AppError::Message(
-                            "未找到 Cherry Studio 安装目录（%APPDATA%\\CherryStudio 缺失），无法安装。"
-                                .to_string(),
-                        )
-                    })?;
-                    cs.install_skill(hub_skill_path, source_dir_name)?;
-                } else if agent.agent_type == AgentType::ClaudeCowork {
-                    copy_dir_all(hub_skill_path, &target)?;
-                    register_claude_cowork_skill(agent, source_dir_name, &target)?;
-                } else {
-                    used_symlink = symlink_or_copy_dir(hub_skill_path, &target)?;
+            match self.install_skill_into_agent(
+                agent,
+                hub_skill_path,
+                source_dir_name,
+                skill_label,
+                conflict_policy,
+                true,
+                true,
+            ) {
+                Ok(result) => {
+                    if matches!(result.action.as_str(), "installed" | "updated" | "renamed") {
+                        install_records.push(InstallRecordInput {
+                            agent_id: agent.id.clone(),
+                            skill_id: skill_label.to_string(),
+                            fingerprint: source_fingerprint.clone(),
+                            target_path: result.target_path.clone(),
+                            action: result.action.clone(),
+                            backup_path: result.backup_path.clone(),
+                        });
+                    }
+                    results.push(result);
                 }
-
-                install_records.push(InstallRecordInput {
-                    agent_id: agent.id.clone(),
-                    skill_id: skill_label.to_string(),
-                    fingerprint: source_fingerprint.clone(),
-                    target_path: target.to_string_lossy().to_string(),
-                    action: action.clone(),
-                    backup_path: backup_path.clone(),
-                });
-
-                let sync_msg = match action.as_str() {
-                    "updated" => {
-                        if used_symlink {
-                            format!("已通过符号链接从中枢更新 {skill_label} 到 {}", agent.name)
-                        } else {
-                            format!("已从中枢更新 {skill_label} 到 {}", agent.name)
-                        }
-                    }
-                    "renamed" => format!("已另存副本 {skill_label} 到 {}", agent.name),
-                    _ => {
-                        if used_symlink {
-                            format!("已通过符号链接从中枢同步 {skill_label} 到 {}", agent.name)
-                        } else {
-                            format!("{skill_label} 已从中枢同步到 {}", agent.name)
-                        }
-                    }
-                };
-                Ok(InstallResult {
-                    agent_id: agent.id.clone(),
-                    skill_id: skill_label.to_string(),
-                    action,
-                    target_path: target.to_string_lossy().to_string(),
-                    backup_path,
-                    message: sync_msg,
-                })
-            })();
-            match outcome {
-                Ok(result) => results.push(result),
                 Err(error) => results.push(InstallResult {
                     agent_id: agent.id.clone(),
                     skill_id: skill_label.to_string(),
@@ -536,6 +568,182 @@ impl AppService {
                         .to_string(),
                     backup_path: None,
                     message: format!("同步 {skill_label} 到 {} 失败: {}", agent.name, error),
+                }),
+            }
+        }
+
+        if !install_records.is_empty() {
+            self.store.record_installs(&install_records)?;
+        }
+        self.invalidate_installed_cache();
+        Ok(results)
+    }
+
+    /// 将某个来源目录安装到单个 Agent。
+    /// `link_generic=true` 时普通 Agent 优先软链（中枢 fanout）；false 时实体复制（仅本机直连）。
+    /// `from_hub` 仅影响提示文案。三条安装路径（安装/同步/导入）共用，避免逻辑分叉。
+    fn install_skill_into_agent(
+        &self,
+        agent: &AgentProfile,
+        source_path: &Path,
+        source_dir_name: &str,
+        skill_label: &str,
+        conflict_policy: &ConflictPolicy,
+        link_generic: bool,
+        from_hub: bool,
+    ) -> AppResult<InstallResult> {
+        let skills_path = Path::new(&agent.skills_path);
+        fs::create_dir_all(skills_path)?;
+        let Some((target, action, backup_path)) = self.resolve_install_conflict(
+            agent,
+            skills_path,
+            source_dir_name,
+            skill_label,
+            conflict_policy,
+        )? else {
+            return Ok(InstallResult {
+                agent_id: agent.id.clone(),
+                skill_id: skill_label.to_string(),
+                action: "skipped".to_string(),
+                target_path: skills_path
+                    .join(source_dir_name)
+                    .to_string_lossy()
+                    .to_string(),
+                backup_path: None,
+                message: format!("已跳过 {skill_label}"),
+            });
+        };
+
+        let mut used_symlink = false;
+        if agent.agent_type == AgentType::CherryStudio {
+            let cs = CherryStudioAdapter::new().ok_or_else(|| {
+                AppError::Message(
+                    "未找到 Cherry Studio 安装目录（%APPDATA%\\CherryStudio 缺失），无法安装。"
+                        .to_string(),
+                )
+            })?;
+            cs.install_skill(source_path, source_dir_name)?;
+        } else if agent.agent_type == AgentType::ClaudeCowork {
+            copy_dir_all(source_path, &target)?;
+            register_claude_cowork_skill(agent, source_dir_name, &target)?;
+        } else if link_generic {
+            used_symlink = symlink_or_copy_dir(source_path, &target)?;
+        } else {
+            copy_dir_all(source_path, &target)?;
+        }
+
+        let sync_msg = if from_hub {
+            match action.as_str() {
+                "updated" => {
+                    if used_symlink {
+                        format!("已通过符号链接从中枢更新 {skill_label} 到 {}", agent.name)
+                    } else {
+                        format!("已从中枢更新 {skill_label} 到 {}", agent.name)
+                    }
+                }
+                "renamed" => format!("已另存副本 {skill_label} 到 {}", agent.name),
+                _ => {
+                    if used_symlink {
+                        format!("已通过符号链接从中枢同步 {skill_label} 到 {}", agent.name)
+                    } else {
+                        format!("{skill_label} 已从中枢同步到 {}", agent.name)
+                    }
+                }
+            }
+        } else {
+            match action.as_str() {
+                "updated" => format!("已更新 {skill_label} 到 {}", agent.name),
+                "renamed" => format!("已另存副本 {skill_label} 到 {}", agent.name),
+                _ => format!("已复制 {skill_label} 到 {}", agent.name),
+            }
+        };
+
+        Ok(InstallResult {
+            agent_id: agent.id.clone(),
+            skill_id: skill_label.to_string(),
+            action,
+            target_path: target.to_string_lossy().to_string(),
+            backup_path,
+            message: sync_msg,
+        })
+    }
+
+    /// 仅本机安装（`toHub=false`）：源目录实体复制到目标 Agent，不进中枢、不 fanout。
+    fn install_direct_to_agents(
+        &self,
+        source_path: &Path,
+        source_dir_name: &str,
+        skill_label: &str,
+        target_agent_ids: &[String],
+        conflict_policy: &ConflictPolicy,
+        skip_agent_id: Option<&str>,
+    ) -> AppResult<Vec<InstallResult>> {
+        let agents = self.list_agents()?;
+        let agent_map: HashMap<_, _> = agents
+            .into_iter()
+            .map(|agent| (agent.id.clone(), agent))
+            .collect();
+        let mut results = Vec::new();
+        let mut install_records: Vec<InstallRecordInput> = Vec::new();
+        let source_fingerprint = hash_dir(source_path)?;
+
+        for agent_id in target_agent_ids {
+            if Some(agent_id.as_str()) == skip_agent_id {
+                results.push(InstallResult {
+                    agent_id: agent_id.clone(),
+                    skill_id: skill_label.to_string(),
+                    action: "skipped".to_string(),
+                    target_path: source_path.to_string_lossy().to_string(),
+                    backup_path: None,
+                    message: format!("{skill_label} 已存在于来源"),
+                });
+                continue;
+            }
+            let Some(agent) = agent_map.get(agent_id) else {
+                results.push(InstallResult {
+                    agent_id: agent_id.clone(),
+                    skill_id: skill_label.to_string(),
+                    action: "error".to_string(),
+                    target_path: source_path.to_string_lossy().to_string(),
+                    backup_path: None,
+                    message: format!("找不到 Agent: {agent_id}"),
+                });
+                continue;
+            };
+            let skills_path = Path::new(&agent.skills_path);
+            let _ = fs::create_dir_all(skills_path);
+            match self.install_skill_into_agent(
+                agent,
+                source_path,
+                source_dir_name,
+                skill_label,
+                conflict_policy,
+                false,
+                false,
+            ) {
+                Ok(result) => {
+                    if matches!(result.action.as_str(), "installed" | "updated" | "renamed") {
+                        install_records.push(InstallRecordInput {
+                            agent_id: agent.id.clone(),
+                            skill_id: skill_label.to_string(),
+                            fingerprint: source_fingerprint.clone(),
+                            target_path: result.target_path.clone(),
+                            action: result.action.clone(),
+                            backup_path: result.backup_path.clone(),
+                        });
+                    }
+                    results.push(result);
+                }
+                Err(error) => results.push(InstallResult {
+                    agent_id: agent.id.clone(),
+                    skill_id: skill_label.to_string(),
+                    action: "error".to_string(),
+                    target_path: skills_path
+                        .join(source_dir_name)
+                        .to_string_lossy()
+                        .to_string(),
+                    backup_path: None,
+                    message: format!("安装 {skill_label} 到 {} 失败: {}", agent.name, error),
                 }),
             }
         }
@@ -853,6 +1061,7 @@ impl AppService {
         catalog_skill_id: &str,
         target_agent_ids: Vec<String>,
         conflict_policy: ConflictPolicy,
+        to_hub: bool,
     ) -> AppResult<Vec<InstallResult>> {
         if target_agent_ids.is_empty() {
             return Err(AppError::Message("请至少选择一个目标 Agent。".to_string()));
@@ -879,6 +1088,17 @@ impl AppService {
             if !agents.iter().any(|agent| &agent.id == agent_id) {
                 return Err(AppError::Message(format!("找不到 Agent: {}", agent_id)));
             }
+        }
+
+        if !to_hub {
+            return self.install_direct_to_agents(
+                source_path,
+                source_dir_name,
+                &skill.name,
+                &target_agent_ids,
+                &conflict_policy,
+                None,
+            );
         }
 
         let hub_skill_path = self.materialize_into_hub(
@@ -925,6 +1145,7 @@ impl AppService {
         source_agent_id: Option<&str>,
         target_agent_ids: Vec<String>,
         conflict_policy: ConflictPolicy,
+        to_hub: bool,
     ) -> AppResult<Vec<InstallResult>> {
         let groups = self.scan_agent_skills()?;
         let group = groups
@@ -954,6 +1175,18 @@ impl AppService {
             .and_then(|value| value.to_str())
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| AppError::Message("来源 skill 路径无效".to_string()))?;
+
+        // 仅本机：直连实体复制到目标 Agent，不进中枢、不 fanout。
+        if !to_hub {
+            return self.install_direct_to_agents(
+                source_path,
+                source_dir_name,
+                title,
+                &target_agent_ids,
+                &conflict_policy,
+                Some(&source.agent_id),
+            );
+        }
 
         // 强制先入中枢，再从中枢扇出，禁止 Agent→Agent 直接软链
         let hub_skill_path = self.materialize_into_hub(
@@ -1089,6 +1322,7 @@ impl AppService {
         files: &[ImportSkillFile],
         target_agent_ids: &[String],
         conflict_policy: ConflictPolicy,
+        to_hub: bool,
     ) -> AppResult<ImportSkillResult> {
         if files.is_empty() {
             return Err(AppError::Message("上传内容为空".to_string()));
@@ -1103,7 +1337,7 @@ impl AppService {
             self.write_uploaded_files(files)?
         };
 
-        self.import_from_source_dir(&source_root, target_agent_ids, conflict_policy)
+        self.import_from_source_dir(&source_root, target_agent_ids, conflict_policy, to_hub)
     }
 
     fn import_from_source_dir(
@@ -1111,6 +1345,7 @@ impl AppService {
         source_root: &Path,
         target_agent_ids: &[String],
         conflict_policy: ConflictPolicy,
+        to_hub: bool,
     ) -> AppResult<ImportSkillResult> {
         let mut dirs = self.manifest_source_dirs(source_root)?;
         let mut using_skill_md_fallback = false;
@@ -1177,6 +1412,26 @@ impl AppService {
                 .file_name()
                 .and_then(|v| v.to_str())
                 .ok_or_else(|| AppError::Message("skill 目录名无效".to_string()))?;
+
+            // 仅本机：直连复制，不进中枢。
+            if !to_hub {
+                let results = self.install_direct_to_agents(
+                    source,
+                    skill_dir_name,
+                    &skill.manifest.id,
+                    target_agent_ids,
+                    &conflict_policy,
+                    None,
+                )?;
+                for result in results {
+                    match result.action.as_str() {
+                        "error" => skipped += 1,
+                        "skipped" if result.message.contains("已跳过") => skipped += 1,
+                        _ => imported += 1,
+                    }
+                }
+                continue;
+            }
 
             // 先入中枢再扇出
             let hub_skill_path = match self.materialize_into_hub(
@@ -1269,6 +1524,351 @@ impl AppService {
             fs::write(destination, &file.bytes)?;
         }
         Ok(workspace)
+    }
+
+    // ── 同步编排 ──────────────────────────────────────────────────────
+
+    pub fn sync_get_config(&self) -> AppResult<SyncConfig> {
+        self.store.sync_config()
+    }
+
+    /// 保存同步配置；`secret_access_key` / `encrypt_password` 为 `Some` 时写入钥匙串，
+    /// 传空字符串表示清除。密钥不落 `state.json`。
+    pub fn sync_set_config(
+        &self,
+        config: SyncConfig,
+        secret_access_key: Option<String>,
+        encrypt_password: Option<String>,
+    ) -> AppResult<SyncConfig> {
+        if let Some(value) = secret_access_key {
+            if value.trim().is_empty() {
+                self.secrets.delete(SECRET_ACCESS_KEY)?;
+            } else {
+                self.secrets.set(SECRET_ACCESS_KEY, value.trim())?;
+            }
+        }
+        if let Some(value) = encrypt_password {
+            if value.is_empty() {
+                self.secrets.delete(ENCRYPT_PASSWORD)?;
+            } else {
+                self.secrets.set(ENCRYPT_PASSWORD, &value)?;
+            }
+        }
+        self.store.ensure_device_id()?;
+        self.store.set_sync_config(&config)?;
+        if config.enabled {
+            self.sync_manager.start(self.clone(), config.poll_secs);
+            self.start_sync_watcher();
+        } else {
+            self.sync_manager.stop();
+            self.stop_sync_watcher();
+        }
+        Ok(config)
+    }
+
+    /// 启动中枢文件监听（幂等）。测试环境不启动，避免触发真实目录与并行干扰。
+    fn start_sync_watcher(&self) {
+        #[cfg(test)]
+        {
+            return;
+        }
+        #[cfg(not(test))]
+        {
+            if self
+                .sync_watcher
+                .lock()
+                .map(|guard| guard.is_some())
+                .unwrap_or(false)
+            {
+                return;
+            }
+            let hub = match self.ensure_hub_agent() {
+                Ok(hub) => hub,
+                Err(_) => return,
+            };
+            let trigger_manager = self.sync_manager.clone();
+            let skip_manager = self.sync_manager.clone();
+            match crate::sync::spawn_hub_watcher(
+                PathBuf::from(&hub.skills_path),
+                move || trigger_manager.trigger(),
+                move || skip_manager.is_suppressed(),
+            ) {
+                Ok(watcher) => {
+                    if let Ok(mut guard) = self.sync_watcher.lock() {
+                        *guard = Some(watcher);
+                    }
+                }
+                Err(error) => {
+                    eprintln!("[skills_manager] 启动同步文件监听失败: {error}");
+                }
+            }
+        }
+    }
+
+    fn stop_sync_watcher(&self) {
+        if let Ok(mut guard) = self.sync_watcher.lock() {
+            *guard = None;
+        }
+    }
+
+    pub fn sync_status(&self) -> AppResult<SyncStatus> {
+        let config = self.store.sync_config()?;
+        let has_secret = self
+            .secrets
+            .get(SECRET_ACCESS_KEY)?
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+        let has_password = self
+            .secrets
+            .get(ENCRYPT_PASSWORD)?
+            .map(|value| !value.is_empty())
+            .unwrap_or(false);
+        let configured = if is_local_endpoint(&config.endpoint) {
+            // 本地目录传输：不要求 S3 AK/SK/bucket；若启用加密则仍需口令。
+            !config.endpoint.trim().is_empty() && (!config.encrypt || has_password)
+        } else {
+            !config.endpoint.trim().is_empty()
+                && !config.bucket.trim().is_empty()
+                && !config.access_key_id.trim().is_empty()
+                && has_secret
+                && (!config.encrypt || has_password)
+        };
+        Ok(SyncStatus {
+            configured,
+            enabled: config.enabled,
+            running: self.sync_manager.is_running(),
+            last_run_at: self.store.sync_last_run_at()?,
+            last_error: self.store.sync_last_error()?,
+            pending_conflicts: self.store.sync_conflicts()?.len(),
+            device_id: self.store.ensure_device_id()?,
+            device_name: self.store.device_name()?,
+        })
+    }
+
+    pub fn sync_list_conflicts(&self) -> AppResult<Vec<crate::models::SyncConflict>> {
+        self.store.sync_conflicts()
+    }
+
+    fn build_transport(&self, config: &SyncConfig) -> AppResult<Box<dyn SyncTransport>> {
+        build_transport_from(config, self.secrets.as_ref())
+    }
+
+    fn build_crypto(
+        &self,
+        transport: &dyn SyncTransport,
+        config: &SyncConfig,
+    ) -> AppResult<Option<Crypto>> {
+        if !config.encrypt {
+            return Ok(None);
+        }
+        let password = self
+            .secrets
+            .get(ENCRYPT_PASSWORD)?
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| AppError::Message("未设置同步加密口令。".to_string()))?;
+        let salt = ensure_kdf_salt(transport)?;
+        Ok(Some(Crypto::from_password(&password, &salt)?))
+    }
+
+    pub fn sync_test_connection(&self, config: SyncConfig) -> AppResult<String> {
+        let transport = self.build_transport(&config)?;
+        transport.test_connection()?;
+        if is_local_endpoint(&config.endpoint) {
+            let root = local_root_from_endpoint(&config.endpoint)
+                .map(|path| {
+                    if config.bucket.trim().is_empty() {
+                        path
+                    } else {
+                        path.join(config.bucket.trim())
+                    }
+                })
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| config.endpoint.clone());
+            Ok(format!("本地目录可用：{root}"))
+        } else {
+            Ok(format!("连接成功：{} / {}", config.endpoint, config.bucket))
+        }
+    }
+
+    /// 立即同步：先发布本机，再拉取远端并落中枢，最后 reconcile fanout。
+    pub fn sync_now(&self) -> AppResult<SyncStatus> {
+        let _guard = self.sync_manager.lock();
+        let config = self.store.sync_config()?;
+        ensure_sync_transport_ready(&config)?;
+        let transport = self.build_transport(&config)?;
+        self.sync_run_with(transport.as_ref(), &config)
+    }
+
+    /// 后台轮询调用：未启用 / 未配置时静默跳过；失败仅记录 `sync_last_error`。
+    pub fn sync_auto_once(&self) -> AppResult<()> {
+        let _guard = self.sync_manager.lock();
+        let config = self.store.sync_config()?;
+        if !config.enabled || ensure_sync_transport_ready(&config).is_err() {
+            return Ok(());
+        }
+        let transport = match self.build_transport(&config) {
+            Ok(transport) => transport,
+            Err(error) => {
+                self.store.set_sync_last_error(Some(&error.to_string()))?;
+                return Err(error);
+            }
+        };
+        let _ = self.sync_run_with(transport.as_ref(), &config);
+        Ok(())
+    }
+
+    /// 用给定传输执行一次同步（生产用 S3/本地目录；测试可注入传输）。
+    pub(crate) fn sync_run_with(
+        &self,
+        transport: &dyn SyncTransport,
+        config: &SyncConfig,
+    ) -> AppResult<SyncStatus> {
+        // 抑制 watcher：本机落中枢/写清单不应再触发一轮自同步。
+        let _op_guard = self.sync_manager.operation_guard();
+        let hub = self.ensure_hub_agent()?;
+        let crypto = self.build_crypto(transport, config)?;
+        let result = (|| -> AppResult<()> {
+            let runtime = SyncRuntime::new(
+                self.store.as_ref(),
+                transport,
+                crypto.as_ref(),
+                PathBuf::from(&hub.skills_path),
+            )?;
+            runtime.publish()?;
+            let pull = runtime.pull()?;
+            self.reconcile_from_hub(&pull.applied_dirs)?;
+            Ok(())
+        })();
+
+        self.store
+            .set_sync_last_run_at(Some(chrono::Utc::now().to_rfc3339()))?;
+        match result {
+            Ok(()) => {
+                self.store.set_sync_last_error(None)?;
+                self.sync_status()
+            }
+            Err(error) => {
+                self.store.set_sync_last_error(Some(&error.to_string()))?;
+                Err(error)
+            }
+        }
+    }
+
+    /// 冲突解决：local=保留本机，remote=用远端覆盖，rename=远端改名保存。
+    pub fn sync_resolve_conflict(
+        &self,
+        skill_id: &str,
+        choice: SyncConflictChoice,
+    ) -> AppResult<SyncStatus> {
+        let _guard = self.sync_manager.lock();
+        let conflicts = self.store.sync_conflicts()?;
+        let conflict = conflicts
+            .iter()
+            .find(|conflict| conflict.skill_id == skill_id)
+            .cloned()
+            .ok_or_else(|| AppError::Message(format!("找不到冲突: {skill_id}")))?;
+
+        let hub = self.ensure_hub_agent()?;
+        let config = self.store.sync_config()?;
+        let transport = self.build_transport(&config)?;
+        let crypto = self.build_crypto(transport.as_ref(), &config)?;
+        let runtime = SyncRuntime::new(
+            self.store.as_ref(),
+            transport.as_ref(),
+            crypto.as_ref(),
+            PathBuf::from(&hub.skills_path),
+        )?;
+
+        match choice {
+            SyncConflictChoice::Local => {
+                runtime.update_baseline(skill_id, conflict.local_hash.clone())?;
+            }
+            SyncConflictChoice::Remote => {
+                if let Some(hash) = &conflict.remote_hash {
+                    runtime.apply_remote_blob(&conflict.dir_name, hash)?;
+                    runtime.update_baseline(skill_id, Some(hash.clone()))?;
+                    let _ = self.reconcile_from_hub(&[conflict.dir_name.clone()]);
+                }
+            }
+            SyncConflictChoice::Rename => {
+                let renamed = format!(
+                    "{}-remote-{}",
+                    conflict.dir_name,
+                    chrono::Utc::now().format("%Y%m%d%H%M%S%3f")
+                );
+                if let Some(hash) = &conflict.remote_hash {
+                    runtime.apply_remote_blob(&renamed, hash)?;
+                }
+                runtime.update_baseline(skill_id, conflict.local_hash.clone())?;
+            }
+        }
+
+        let remaining: Vec<_> = conflicts
+            .into_iter()
+            .filter(|current| current.skill_id != skill_id)
+            .collect();
+        self.store.set_sync_conflicts(remaining)?;
+        self.sync_status()
+    }
+
+    /// 清理未被任何设备清单引用的 blob，返回删除数量。
+    pub fn sync_gc(&self) -> AppResult<usize> {
+        let _guard = self.sync_manager.lock();
+        let config = self.store.sync_config()?;
+        ensure_sync_transport_ready(&config)?;
+        let transport = self.build_transport(&config)?;
+        let crypto = self.build_crypto(transport.as_ref(), &config)?;
+        let hub = self.ensure_hub_agent()?;
+        let runtime = SyncRuntime::new(
+            self.store.as_ref(),
+            transport.as_ref(),
+            crypto.as_ref(),
+            PathBuf::from(&hub.skills_path),
+        )?;
+        let outcome = runtime.gc()?;
+        Ok(outcome.removed)
+    }
+
+    /// 拉取落中枢后，把新落地的 skill fanout 到各 agent（逐 skill 失败隔离）。
+    fn reconcile_from_hub(&self, dir_names: &[String]) -> AppResult<()> {
+        if dir_names.is_empty() {
+            return Ok(());
+        }
+        let agents = self.list_agents()?;
+        let Some(hub) = Self::find_hub_agent(&agents).cloned() else {
+            return Ok(());
+        };
+        let target_ids: Vec<String> = agents
+            .iter()
+            .filter(|agent| agent.id != hub.id)
+            .map(|agent| agent.id.clone())
+            .collect();
+        if target_ids.is_empty() {
+            return Ok(());
+        }
+        let hub_skills = Path::new(&hub.skills_path);
+        for dir in dir_names {
+            let path = hub_skills.join(dir);
+            if !path.exists() {
+                continue;
+            }
+            let (title, _version, _description, _readme) = read_agent_skill_info(&path, false);
+            let label = if title.trim().is_empty() {
+                dir.clone()
+            } else {
+                title
+            };
+            let _ = self.fanout_from_hub(
+                &hub,
+                &path,
+                &label,
+                dir,
+                &target_ids,
+                &ConflictPolicy::BackupOverwrite,
+                None,
+            );
+        }
+        Ok(())
     }
 }
 
@@ -1473,7 +2073,7 @@ mod tests {
 
         let files = collect_upload_files(upload.path());
         let result = service
-            .import_uploaded_files("demo", &files, &["test-agent".into()], ConflictPolicy::Skip)
+            .import_uploaded_files("demo", &files, &["test-agent".into()], ConflictPolicy::Skip, true)
             .unwrap();
         assert_eq!(result.imported, 1);
         assert_eq!(result.skipped, 0);
@@ -1489,10 +2089,10 @@ mod tests {
 
         let files = collect_upload_files(upload.path());
         service
-            .import_uploaded_files("demo", &files, &["test-agent".into()], ConflictPolicy::Skip)
+            .import_uploaded_files("demo", &files, &["test-agent".into()], ConflictPolicy::Skip, true)
             .unwrap();
         let result = service
-            .import_uploaded_files("demo", &files, &["test-agent".into()], ConflictPolicy::Skip)
+            .import_uploaded_files("demo", &files, &["test-agent".into()], ConflictPolicy::Skip, true)
             .unwrap();
         assert_eq!(result.imported, 0);
         assert_eq!(result.skipped, 1);
@@ -1560,6 +2160,7 @@ mod tests {
             &[],
             &["test-agent".into()],
             ConflictPolicy::Skip,
+            true,
         );
         assert!(result.is_err());
     }
@@ -1595,6 +2196,7 @@ mod tests {
                 &files,
                 &["test-agent".into()],
                 ConflictPolicy::Skip,
+                true,
             )
             .unwrap();
         assert_eq!(result.imported, 1);
@@ -1685,6 +2287,7 @@ mod tests {
                 None,
                 vec!["target".into()],
                 ConflictPolicy::BackupOverwrite,
+                true,
             )
             .unwrap();
 
@@ -1746,6 +2349,7 @@ mod tests {
                 Some("source"),
                 vec!["ok-agent".into(), "bad-agent".into()],
                 ConflictPolicy::BackupOverwrite,
+                true,
             )
             .unwrap();
 
@@ -1789,6 +2393,7 @@ mod tests {
                 Some("source"),
                 vec![cowork.id.clone()],
                 ConflictPolicy::BackupOverwrite,
+                true,
             )
             .unwrap();
         let second = service
@@ -1797,6 +2402,7 @@ mod tests {
                 Some("source"),
                 vec![cowork.id.clone()],
                 ConflictPolicy::BackupOverwrite,
+                true,
             )
             .unwrap();
 
@@ -1972,6 +2578,7 @@ mod tests {
                 Some("source"),
                 vec!["target".into()],
                 ConflictPolicy::BackupOverwrite,
+                true,
             )
             .unwrap();
 
@@ -2040,6 +2647,7 @@ mod tests {
                 Some("source"),
                 vec!["native".into()],
                 ConflictPolicy::BackupOverwrite,
+                true,
             )
             .unwrap();
 
@@ -2048,6 +2656,197 @@ mod tests {
         assert!(results[0].message.contains("原生兼容"));
         assert!(!native_root.path().join("demo").exists());
         assert!(hub_root.path().join("demo").join("SKILL.md").exists());
+    }
+
+    #[test]
+    fn to_hub_false_copies_directly_and_leaves_hub_untouched() {
+        let service = AppService::in_memory().unwrap();
+        let hub_root = tempfile::tempdir().unwrap();
+        let source_root = tempfile::tempdir().unwrap();
+        let target_root = tempfile::tempdir().unwrap();
+        write_agent_skill(
+            source_root.path(),
+            "demo",
+            Some("Demo Skill"),
+            Some("1.0.0"),
+            "# Demo Skill",
+        );
+        service
+            .add_agent(AgentProfile {
+                id: "hub".into(),
+                name: "Universal Hub".into(),
+                agent_type: AgentType::Universal,
+                skills_path: hub_root.path().to_string_lossy().to_string(),
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: true,
+            })
+            .unwrap();
+        service
+            .add_agent(AgentProfile {
+                id: "source".into(),
+                name: "Source".into(),
+                agent_type: AgentType::Custom,
+                skills_path: source_root.path().to_string_lossy().to_string(),
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: false,
+            })
+            .unwrap();
+        service
+            .add_agent(AgentProfile {
+                id: "target".into(),
+                name: "Target".into(),
+                agent_type: AgentType::Custom,
+                skills_path: target_root.path().to_string_lossy().to_string(),
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: false,
+            })
+            .unwrap();
+
+        let results = service
+            .sync_grouped_skill(
+                "Demo Skill",
+                Some("source"),
+                vec!["target".into()],
+                ConflictPolicy::BackupOverwrite,
+                false,
+            )
+            .unwrap();
+
+        assert_eq!(results[0].action, "installed");
+        let target_demo = target_root.path().join("demo");
+        assert!(target_demo.join("SKILL.md").exists());
+        // 仅本机 = 实体复制，不是软链
+        assert!(!is_symlink_path(&target_demo));
+        // 不进中枢
+        assert!(!hub_root.path().join("demo").exists());
+    }
+
+    #[test]
+    fn to_hub_false_import_does_not_create_hub() {
+        // 仅本机导入在没有任何中枢时也应成功
+        let service = AppService::in_memory().unwrap();
+        let agent_dir = tempfile::tempdir().unwrap();
+        service
+            .add_agent(AgentProfile {
+                id: "test-agent".into(),
+                name: "Test Agent".into(),
+                agent_type: AgentType::Custom,
+                skills_path: agent_dir.path().to_string_lossy().to_string(),
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: false,
+            })
+            .unwrap();
+        let upload = tempfile::tempdir().unwrap();
+        write_demo_skill(upload.path(), "demo");
+        let files = collect_upload_files(upload.path());
+
+        let result = service
+            .import_uploaded_files(
+                "demo",
+                &files,
+                &["test-agent".into()],
+                ConflictPolicy::Skip,
+                false,
+            )
+            .unwrap();
+
+        assert_eq!(result.imported, 1);
+        assert!(agent_dir.path().join("demo").join("skill.json").exists());
+    }
+
+    fn register_hub(service: &AppService, hub: &Path) {
+        service
+            .add_agent(AgentProfile {
+                id: format!("universal:{}", hub.to_string_lossy()),
+                name: "Universal Hub".into(),
+                agent_type: AgentType::Universal,
+                skills_path: hub.to_string_lossy().to_string(),
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: true,
+            })
+            .unwrap();
+    }
+
+    fn test_sync_config() -> SyncConfig {
+        SyncConfig {
+            enabled: true,
+            endpoint: "local".into(),
+            bucket: "bucket".into(),
+            access_key_id: "key".into(),
+            encrypt: true,
+            ..SyncConfig::default()
+        }
+    }
+
+    #[test]
+    fn sync_round_trip_persists_hub_and_fans_out() {
+        let bucket_dir = tempfile::tempdir().unwrap();
+        let transport = crate::sync::LocalDirTransport::new(bucket_dir.path()).unwrap();
+
+        // 设备 A：中枢里有 demo
+        let hub_a = tempfile::tempdir().unwrap();
+        let service_a = AppService::in_memory().unwrap();
+        register_hub(&service_a, hub_a.path());
+        write_agent_skill(
+            hub_a.path(),
+            "demo",
+            Some("Demo Skill"),
+            Some("1.0.0"),
+            "# Demo Skill",
+        );
+        service_a
+            .sync_set_config(test_sync_config(), Some("secret".into()), Some("pw".into()))
+            .unwrap();
+        let status_a = service_a
+            .sync_run_with(&transport, &service_a.sync_get_config().unwrap())
+            .unwrap();
+        assert!(status_a.last_error.is_none());
+
+        // 设备 B：空中枢 + 一个自定义 agent
+        let hub_b = tempfile::tempdir().unwrap();
+        let agent_b = tempfile::tempdir().unwrap();
+        let service_b = AppService::in_memory().unwrap();
+        register_hub(&service_b, hub_b.path());
+        service_b
+            .add_agent(AgentProfile {
+                id: "target".into(),
+                name: "Target".into(),
+                agent_type: AgentType::Custom,
+                skills_path: agent_b.path().to_string_lossy().to_string(),
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: false,
+            })
+            .unwrap();
+        service_b
+            .sync_set_config(test_sync_config(), Some("secret".into()), Some("pw".into()))
+            .unwrap();
+
+        let status_b = service_b
+            .sync_run_with(&transport, &service_b.sync_get_config().unwrap())
+            .unwrap();
+        assert!(status_b.last_error.is_none());
+        assert!(hub_b.path().join("demo").join("SKILL.md").exists());
+        // reconcile 已 fanout 到 target agent
+        assert!(agent_b.path().join("demo").exists());
+    }
+
+    #[test]
+    fn sync_status_reports_configured_and_conflicts() {
+        let service = AppService::in_memory().unwrap();
+        assert!(!service.sync_status().unwrap().configured);
+        service
+            .sync_set_config(test_sync_config(), Some("secret".into()), Some("pw".into()))
+            .unwrap();
+        let status = service.sync_status().unwrap();
+        assert!(status.configured);
+        assert!(status.enabled);
+        assert_eq!(status.pending_conflicts, 0);
     }
 
     #[test]
@@ -2110,6 +2909,7 @@ mod tests {
                 Some("source"),
                 vec!["target".into()],
                 ConflictPolicy::BackupOverwrite,
+                true,
             )
             .unwrap();
 
@@ -2252,5 +3052,184 @@ mod tests {
             supports_universal: false,
         });
         assert!(result.is_err());
+    }
+
+    fn local_sync_config(bucket: &Path) -> SyncConfig {
+        SyncConfig {
+            enabled: true,
+            endpoint: format!("local://{}", bucket.display()),
+            bucket: String::new(),
+            access_key_id: String::new(),
+            encrypt: true,
+            poll_secs: 3600,
+            ..SyncConfig::default()
+        }
+    }
+
+    fn make_device(
+        data_dir: &Path,
+        hub: &Path,
+        secrets: Arc<crate::sync::MemorySecretStore>,
+        bucket: &Path,
+    ) -> AppService {
+        secrets
+            .set(crate::sync::ENCRYPT_PASSWORD, "same-password")
+            .unwrap();
+        let service =
+            AppService::from_store(Arc::new(AppStore::with_data_dir(data_dir.to_path_buf()).unwrap()), secrets)
+                .unwrap();
+        register_hub(&service, hub);
+        service
+            .sync_set_config(local_sync_config(bucket), None, Some("same-password".into()))
+            .unwrap();
+        service
+    }
+
+    #[test]
+    fn local_endpoint_builds_dir_transport_and_skips_s3_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = SyncConfig {
+            enabled: true,
+            endpoint: format!("local://{}", dir.path().display()),
+            bucket: "nested".into(),
+            encrypt: false,
+            ..SyncConfig::default()
+        };
+        let secrets = crate::sync::MemorySecretStore::new();
+        let transport = build_transport_from(&config, &secrets).unwrap();
+        transport.test_connection().unwrap();
+        assert!(dir.path().join("nested").exists());
+
+        let service = AppService::in_memory().unwrap();
+        service
+            .sync_set_config(
+                SyncConfig {
+                    encrypt: false,
+                    ..config.clone()
+                },
+                None,
+                None,
+            )
+            .unwrap();
+        // 本地目录不要求 Access Key / Secret
+        assert!(service.sync_status().unwrap().configured);
+        let message = service.sync_test_connection(config).unwrap();
+        assert!(message.contains("本地目录可用"));
+    }
+
+    #[test]
+    fn sync_now_local_dir_round_trip_between_two_devices() {
+        let bucket = tempfile::tempdir().unwrap();
+        let data_a = tempfile::tempdir().unwrap();
+        let data_b = tempfile::tempdir().unwrap();
+        let hub_a = tempfile::tempdir().unwrap();
+        let hub_b = tempfile::tempdir().unwrap();
+        let agent_b = tempfile::tempdir().unwrap();
+
+        let secrets_a = Arc::new(crate::sync::MemorySecretStore::new());
+        let secrets_b = Arc::new(crate::sync::MemorySecretStore::new());
+        let service_a = make_device(data_a.path(), hub_a.path(), secrets_a, bucket.path());
+        let service_b = make_device(data_b.path(), hub_b.path(), secrets_b, bucket.path());
+
+        service_b
+            .add_agent(AgentProfile {
+                id: "target-b".into(),
+                name: "Target B".into(),
+                agent_type: AgentType::Custom,
+                skills_path: agent_b.path().to_string_lossy().to_string(),
+                adapter_config: None,
+                user_tags: Vec::new(),
+                supports_universal: false,
+            })
+            .unwrap();
+
+        write_agent_skill(
+            hub_a.path(),
+            "demo-local",
+            Some("Demo Local"),
+            Some("1.0.0"),
+            "# Demo Local\n\nfrom device A",
+        );
+
+        let status_a = service_a.sync_now().unwrap();
+        assert!(status_a.last_error.is_none(), "{:?}", status_a.last_error);
+        let status_b = service_b.sync_now().unwrap();
+        assert!(status_b.last_error.is_none(), "{:?}", status_b.last_error);
+
+        assert!(hub_b.path().join("demo-local").join("SKILL.md").exists());
+        assert!(agent_b.path().join("demo-local").exists());
+        // 设备身份应不同
+        assert_ne!(
+            service_a.sync_status().unwrap().device_id,
+            service_b.sync_status().unwrap().device_id
+        );
+    }
+
+    #[test]
+    fn sync_now_local_dir_reports_conflict_when_both_edit() {
+        let bucket = tempfile::tempdir().unwrap();
+        let data_a = tempfile::tempdir().unwrap();
+        let data_b = tempfile::tempdir().unwrap();
+        let hub_a = tempfile::tempdir().unwrap();
+        let hub_b = tempfile::tempdir().unwrap();
+
+        let service_a = make_device(
+            data_a.path(),
+            hub_a.path(),
+            Arc::new(crate::sync::MemorySecretStore::new()),
+            bucket.path(),
+        );
+        let service_b = make_device(
+            data_b.path(),
+            hub_b.path(),
+            Arc::new(crate::sync::MemorySecretStore::new()),
+            bucket.path(),
+        );
+
+        write_agent_skill(
+            hub_a.path(),
+            "demo-conflict",
+            Some("Demo Conflict"),
+            Some("1.0.0"),
+            "# v1",
+        );
+        service_a.sync_now().unwrap();
+        service_b.sync_now().unwrap();
+        assert_eq!(
+            fs::read_to_string(hub_b.path().join("demo-conflict").join("SKILL.md")).unwrap(),
+            "# v1"
+        );
+
+        // A/B 各自改内容后同步 → 双端修改冲突
+        write_agent_skill(
+            hub_a.path(),
+            "demo-conflict",
+            Some("Demo Conflict"),
+            Some("1.0.0"),
+            "# v2-from-A",
+        );
+        service_a.sync_now().unwrap();
+        write_agent_skill(
+            hub_b.path(),
+            "demo-conflict",
+            Some("Demo Conflict"),
+            Some("1.0.0"),
+            "# v2-from-B",
+        );
+        let status_b = service_b.sync_now().unwrap();
+        let conflicts = service_b.sync_list_conflicts().unwrap();
+        assert!(
+            !conflicts.is_empty() || status_b.pending_conflicts > 0,
+            "expected conflict after both sides edit, status={status_b:?} conflicts={conflicts:?}"
+        );
+
+        if !conflicts.is_empty() {
+            let skill_id = conflicts[0].skill_id.clone();
+            service_b
+                .sync_resolve_conflict(&skill_id, SyncConflictChoice::Remote)
+                .unwrap();
+            let after = service_b.sync_list_conflicts().unwrap();
+            assert!(after.iter().all(|c| c.skill_id != skill_id));
+        }
     }
 }

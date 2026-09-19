@@ -18,6 +18,7 @@ pub mod models;
 pub mod service;
 pub mod skill_scan;
 pub mod store;
+pub mod sync;
 pub mod util;
 
 use commands::*;
@@ -65,6 +66,14 @@ pub fn run() {
             cancel_catalog_refresh,
             search_catalog_skills,
             install_catalog_skill,
+            sync_get_config,
+            sync_set_config,
+            sync_now,
+            sync_status,
+            sync_list_conflicts,
+            sync_resolve_conflict,
+            sync_test_connection,
+            sync_gc,
             scan_mcp_servers,
             add_mcp_server,
             update_mcp_server,

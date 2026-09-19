@@ -202,3 +202,41 @@ export interface McpOperationResult {
   action: string;
   message: string;
 }
+
+// ── Skills 同步类型 ──────────────────────────────────────────────────
+
+export interface SyncConfig {
+  enabled: boolean;
+  endpoint: string;
+  bucket: string;
+  region: string;
+  pathStyle: boolean;
+  accessKeyId: string;
+  pollSecs: number;
+  encrypt: boolean;
+}
+
+export interface SyncStatus {
+  configured: boolean;
+  enabled: boolean;
+  running: boolean;
+  lastRunAt?: string | null;
+  lastError?: string | null;
+  pendingConflicts: number;
+  deviceId: string;
+  deviceName: string;
+}
+
+export type SyncConflictKind = "bothModified" | "deleteVsModify";
+export type SyncConflictChoice = "local" | "remote" | "rename";
+
+export interface SyncConflict {
+  skillId: string;
+  name: string;
+  dirName: string;
+  localHash?: string | null;
+  remoteHash?: string | null;
+  remoteDeviceId: string;
+  kind: SyncConflictKind;
+  detectedAt: string;
+}

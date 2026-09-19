@@ -4,7 +4,8 @@ use crate::{
         AgentProfile, CatalogFilters, CatalogRefreshResult, CatalogRefreshStatus,
         CatalogSafetyMode, CatalogSearchResult, CatalogSort, CatalogSource, ConflictPolicy,
         GroupedMcpServer, GroupedSkill, ImportSkillFile, ImportSkillResult, InitialData,
-        InstallResult, McpOperationResult, McpServerConfig,
+        InstallResult, McpOperationResult, McpServerConfig, SyncConfig, SyncConflict,
+        SyncConflictChoice, SyncStatus,
     },
     service::AppService,
 };
@@ -32,11 +33,18 @@ pub async fn import_skill_upload(
     files: Vec<ImportSkillFile>,
     target_agent_ids: Vec<String>,
     conflict_policy: ConflictPolicy,
+    to_hub: Option<bool>,
     service: State<'_, AppService>,
 ) -> AppResult<ImportSkillResult> {
     let service = service.inner().clone();
     run_blocking(move || {
-        service.import_uploaded_files(&file_name, &files, &target_agent_ids, conflict_policy)
+        service.import_uploaded_files(
+            &file_name,
+            &files,
+            &target_agent_ids,
+            conflict_policy,
+            to_hub.unwrap_or(true),
+        )
     })
     .await
 }
@@ -81,6 +89,7 @@ pub async fn sync_grouped_skill(
     source_agent_id: Option<String>,
     target_agent_ids: Vec<String>,
     conflict_policy: ConflictPolicy,
+    to_hub: Option<bool>,
     service: State<'_, AppService>,
 ) -> AppResult<Vec<InstallResult>> {
     let service = service.inner().clone();
@@ -90,6 +99,7 @@ pub async fn sync_grouped_skill(
             source_agent_id.as_deref(),
             target_agent_ids,
             conflict_policy,
+            to_hub.unwrap_or(true),
         )
     })
     .await
@@ -229,13 +239,75 @@ pub async fn install_catalog_skill(
     catalog_skill_id: String,
     target_agent_ids: Vec<String>,
     conflict_policy: ConflictPolicy,
+    to_hub: Option<bool>,
     service: State<'_, AppService>,
 ) -> AppResult<Vec<InstallResult>> {
     let service = service.inner().clone();
     run_blocking(move || {
-        service.install_catalog_skill(&catalog_skill_id, target_agent_ids, conflict_policy)
+        service.install_catalog_skill(
+            &catalog_skill_id,
+            target_agent_ids,
+            conflict_policy,
+            to_hub.unwrap_or(true),
+        )
     })
     .await
+}
+
+// ── Skills 同步 Commands ──────────────────────────────────────────────
+
+#[tauri::command]
+pub fn sync_get_config(service: State<AppService>) -> AppResult<SyncConfig> {
+    service.sync_get_config()
+}
+
+#[tauri::command]
+pub fn sync_set_config(
+    config: SyncConfig,
+    secret_access_key: Option<String>,
+    encrypt_password: Option<String>,
+    service: State<AppService>,
+) -> AppResult<SyncConfig> {
+    service.sync_set_config(config, secret_access_key, encrypt_password)
+}
+
+#[tauri::command]
+pub async fn sync_now(service: State<'_, AppService>) -> AppResult<SyncStatus> {
+    let service = service.inner().clone();
+    run_blocking(move || service.sync_now()).await
+}
+
+#[tauri::command]
+pub fn sync_status(service: State<AppService>) -> AppResult<SyncStatus> {
+    service.sync_status()
+}
+
+#[tauri::command]
+pub fn sync_list_conflicts(service: State<AppService>) -> AppResult<Vec<SyncConflict>> {
+    service.sync_list_conflicts()
+}
+
+#[tauri::command]
+pub fn sync_resolve_conflict(
+    skill_id: String,
+    choice: SyncConflictChoice,
+    service: State<AppService>,
+) -> AppResult<SyncStatus> {
+    service.sync_resolve_conflict(&skill_id, choice)
+}
+
+#[tauri::command]
+pub fn sync_test_connection(
+    config: SyncConfig,
+    service: State<AppService>,
+) -> AppResult<String> {
+    service.sync_test_connection(config)
+}
+
+#[tauri::command]
+pub async fn sync_gc(service: State<'_, AppService>) -> AppResult<usize> {
+    let service = service.inner().clone();
+    run_blocking(move || service.sync_gc()).await
 }
 
 // ── MCP Commands ──────────────────────────────────────────────────────

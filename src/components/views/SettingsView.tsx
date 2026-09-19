@@ -1,4 +1,7 @@
+import { useEffect, useState } from "react";
 import type { Palette, ResolvedTheme, ThemeMode } from "../../hooks/useTheme";
+import type { SyncConfig, SyncConflict, SyncConflictChoice, SyncStatus } from "../../types";
+import { ConflictDialog } from "./ConflictDialog";
 
 interface SettingsViewProps {
   palette: Palette;
@@ -6,7 +9,29 @@ interface SettingsViewProps {
   resolvedTheme: ResolvedTheme;
   onPaletteChange: (palette: Palette) => void;
   onThemeChange: (mode: ThemeMode) => void;
+  syncConfig: SyncConfig | null;
+  syncStatus: SyncStatus | null;
+  syncConflicts: SyncConflict[];
+  syncBusy: boolean;
+  installToHub: boolean;
+  onSaveSyncConfig: (config: SyncConfig, secretAccessKey?: string, encryptPassword?: string) => Promise<void>;
+  onTestSyncConnection: (config: SyncConfig) => Promise<void>;
+  onSyncNow: () => Promise<void>;
+  onResolveSyncConflict: (skillId: string, choice: SyncConflictChoice) => Promise<void>;
+  onSyncGc: () => Promise<void>;
+  onInstallToHubChange: (value: boolean) => void;
 }
+
+const emptySyncConfig: SyncConfig = {
+  enabled: false,
+  endpoint: "",
+  bucket: "",
+  region: "us-east-1",
+  pathStyle: true,
+  accessKeyId: "",
+  pollSecs: 60,
+  encrypt: true,
+};
 
 // 主题风格选项：value / 名称 / 描述 / 迷你预览色（表面、次级表面、强调色）
 const paletteOptions: Array<{
@@ -41,7 +66,48 @@ export function SettingsView({
   resolvedTheme,
   onPaletteChange,
   onThemeChange,
+  syncConfig,
+  syncStatus,
+  syncConflicts,
+  syncBusy,
+  installToHub,
+  onSaveSyncConfig,
+  onTestSyncConnection,
+  onSyncNow,
+  onResolveSyncConflict,
+  onSyncGc,
+  onInstallToHubChange,
 }: SettingsViewProps) {
+  const [draft, setDraft] = useState<SyncConfig>(syncConfig ?? emptySyncConfig);
+  const [secretKey, setSecretKey] = useState("");
+  const [password, setPassword] = useState("");
+  const [conflictOpen, setConflictOpen] = useState(false);
+
+  useEffect(() => {
+    if (syncConfig) setDraft(syncConfig);
+  }, [syncConfig]);
+
+  function updateDraft<K extends keyof SyncConfig>(key: K, value: SyncConfig[K]) {
+    setDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  async function handleSave() {
+    await onSaveSyncConfig(draft, secretKey || undefined, password || undefined);
+    setSecretKey("");
+    setPassword("");
+  }
+
+  const conflictCount = syncConflicts.length;
+  const statusText = !syncStatus
+    ? "未加载"
+    : !syncStatus.configured
+      ? "未配置"
+      : syncStatus.enabled
+        ? syncStatus.running
+          ? "自动同步中"
+          : "已启用"
+        : "已停用";
+
   return (
     <>
       <div className="view-header">
@@ -52,7 +118,7 @@ export function SettingsView({
       </div>
 
       {/* 外观 */}
-      <div className="card">
+      <div className="card" style={{ flexShrink: 0, marginBottom: 20 }}>
         <div className="card-header">
           <div>
             <div className="card-title">外观</div>
@@ -147,8 +213,120 @@ export function SettingsView({
         </div>
       </div>
 
+      {/* 同步 */}
+      <div className="card" style={{ flexShrink: 0, marginBottom: 20 }}>
+        <div className="card-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <div>
+            <div className="card-title">Skills 同步</div>
+            <div className="card-desc">通过 S3 兼容网关或本地目录，在多设备间同步中枢 skills（客户端加密）</div>
+          </div>
+          <span className={`badge ${syncStatus?.lastError ? "badge-warning" : syncStatus?.enabled ? "badge-success" : ""}`}>
+            {statusText}
+          </span>
+        </div>
+        <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 14 }}>
+            <div className="input-group">
+              <label className="input-label">Endpoint</label>
+              <input className="input" value={draft.endpoint} placeholder="http://192.168.1.10:5246 或 local://D:/sync-bucket" onChange={(e) => updateDraft("endpoint", e.target.value)} />
+              <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>
+                单机测试可填 <code>local://绝对路径</code>；S3 填 http(s) 地址。本地目录时 Bucket 可留空或作子目录名。
+              </div>
+            </div>
+            <div className="input-group">
+              <label className="input-label">Bucket</label>
+              <input className="input" value={draft.bucket} placeholder="test" onChange={(e) => updateDraft("bucket", e.target.value)} />
+            </div>
+            <div className="input-group">
+              <label className="input-label">Region</label>
+              <input className="input" value={draft.region} placeholder="us-east-1" onChange={(e) => updateDraft("region", e.target.value)} />
+            </div>
+            <div className="input-group">
+              <label className="input-label">Access Key ID</label>
+              <input className="input" value={draft.accessKeyId} onChange={(e) => updateDraft("accessKeyId", e.target.value)} />
+            </div>
+            <div className="input-group">
+              <label className="input-label">Secret Access Key</label>
+              <input className="input" type="password" value={secretKey} placeholder="留空则保持不变" onChange={(e) => setSecretKey(e.target.value)} />
+            </div>
+            <div className="input-group">
+              <label className="input-label">加密口令</label>
+              <input className="input" type="password" value={password} placeholder="留空则保持不变" onChange={(e) => setPassword(e.target.value)} />
+            </div>
+            <div className="input-group">
+              <label className="input-label">兜底轮询间隔（秒）</label>
+              <input className="input" type="number" min={5} value={draft.pollSecs} onChange={(e) => updateDraft("pollSecs", Number(e.target.value) || 60)} />
+            </div>
+            <div className="input-group" style={{ display: "flex", flexDirection: "column", justifyContent: "flex-end", gap: 10 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--text)" }}>
+                <input type="checkbox" checked={draft.enabled} onChange={(e) => updateDraft("enabled", e.target.checked)} />
+                启用自动同步
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--text)" }}>
+                <input type="checkbox" checked={draft.encrypt} onChange={(e) => updateDraft("encrypt", e.target.checked)} />
+                客户端加密
+              </label>
+            </div>
+          </div>
+
+          <div className="separator" />
+
+          <div>
+            <div className="input-label" style={{ marginBottom: 8 }}>新安装默认范围</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className={`btn ${installToHub ? "btn-primary" : "btn-secondary"}`}
+                onClick={() => onInstallToHubChange(true)}
+              >
+                同步到中枢
+              </button>
+              <button
+                type="button"
+                className={`btn ${!installToHub ? "btn-primary" : "btn-secondary"}`}
+                onClick={() => onInstallToHubChange(false)}
+              >
+                仅本机
+              </button>
+            </div>
+            <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-tertiary)" }}>
+              「同步到中枢」会把 skill 复制进 <code style={{ fontFamily: "var(--font-mono)" }}>~/.agents/skills</code> 并随之同步；「仅本机」只安装到目标 agent，不参与同步。
+            </div>
+          </div>
+
+          <div className="separator" />
+
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.7 }}>
+              <div>设备：{syncStatus?.deviceName || syncStatus?.deviceId || "—"}</div>
+              <div>上次同步：{syncStatus?.lastRunAt ? new Date(syncStatus.lastRunAt).toLocaleString() : "从未"}</div>
+              {syncStatus?.lastError && <div style={{ color: "var(--danger, #dc2626)" }}>错误：{syncStatus.lastError}</div>}
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {conflictCount > 0 && (
+                <button className="btn btn-secondary" type="button" onClick={() => setConflictOpen(true)}>
+                  处理冲突 ({conflictCount})
+                </button>
+              )}
+              <button className="btn btn-secondary" type="button" disabled={syncBusy} onClick={() => void onTestSyncConnection(draft)}>
+                测试连接
+              </button>
+              <button className="btn btn-secondary" type="button" disabled={syncBusy} onClick={() => void onSyncGc()}>
+                清理未引用对象
+              </button>
+              <button className="btn btn-secondary" type="button" disabled={syncBusy} onClick={handleSave}>
+                保存配置
+              </button>
+              <button className="btn btn-primary" type="button" disabled={syncBusy} onClick={() => void onSyncNow()}>
+                立即同步
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* 关于 */}
-      <div className="card">
+      <div className="card" style={{ flexShrink: 0, marginBottom: 20 }}>
         <div className="card-header">
           <div>
             <div className="card-title">关于</div>
@@ -187,6 +365,15 @@ export function SettingsView({
           </div>
         </div>
       </div>
+
+      {conflictOpen && (
+        <ConflictDialog
+          conflicts={syncConflicts}
+          busy={syncBusy}
+          onClose={() => setConflictOpen(false)}
+          onResolve={(skillId, choice) => { void onResolveSyncConflict(skillId, choice); }}
+        />
+      )}
     </>
   );
 }
