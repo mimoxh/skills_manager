@@ -196,7 +196,7 @@ export function CatalogView({
   function openSkill(skill: CatalogSkill) {
     const localSkill = findLocalSkill(skill, localSkillLookup, defaultSourceId);
     setSelectedSkill(skill);
-    setSelectedAgents(localSkill?.installedAgentIds ?? []);
+    setSelectedAgents(localSkill?.copies.filter((copy) => copy.managedByHub && copy.agentId !== localSkill.universalAgentId).map((copy) => copy.agentId) ?? []);
     setConflictPolicy("backupOverwrite");
   }
 
@@ -208,15 +208,7 @@ export function CatalogView({
 
   async function installSelectedSkill() {
     if (!selectedSkill) return;
-    const deselectedIds = selectedLocalSkill
-      ? selectedLocalSkill.installedAgentIds.filter((id) => !selectedAgents.includes(id))
-      : [];
-    if (deselectedIds.length > 0 && selectedLocalSkill) {
-      await onUninstallSkill(selectedLocalSkill.title, deselectedIds);
-    }
-    if (selectedAgents.length > 0) {
-      await onInstallSkill(selectedSkill.id, selectedAgents, conflictPolicy);
-    }
+    await onInstallSkill(selectedSkill.id, selectedAgents, conflictPolicy);
     setSelectedSkill(null);
     setSelectedAgents([]);
   }
@@ -479,12 +471,13 @@ export function CatalogView({
 
       {selectedSkill && (
         <SkillInstallDialog
-          allowNoTargets={Boolean(selectedLocalSkill)}
-          agents={agents}
+          allowNoTargets
+          agents={agents.filter((agent) => agent.type !== "universal")}
           busy={busy}
           conflictPolicy={conflictPolicy}
           description={selectedSkill.description}
           installedAgentIds={selectedLocalSkill?.installedAgentIds ?? []}
+          managedAgentIds={selectedLocalSkill?.copies.filter((copy) => copy.managedByHub).map((copy) => copy.agentId) ?? []}
           metadata={[
             { label: "来源", value: selectedSkill.sourceName },
             { label: "仓库路径", value: selectedSkill.relativePath || selectedSkill.sourcePath },
@@ -605,8 +598,6 @@ function clawhubCatalogSlug(skill: CatalogSkill) {
 }
 
 function catalogPrimaryLabel(selectedAgentIds: string[], localSkill: GroupedSkill | null) {
-  if (!localSkill) return "安装到 Agents";
-  if (selectedAgentIds.length === 0) return "全部删除";
-  if (selectedAgentIds.length < localSkill.installedAgentIds.length) return "同步并清理";
-  return "安装/更新";
+  if (selectedAgentIds.length === 0) return "只保存到中枢";
+  return localSkill ? "安装/更新所选 Agent" : "安装到所选 Agent";
 }

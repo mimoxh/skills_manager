@@ -45,7 +45,8 @@ fn make_device(
         ),
         secrets,
     )
-    .expect("build service");
+    .expect("build service")
+    .with_demo_hub_path(hub.to_path_buf());
     service
         .add_agent(AgentProfile {
             id: format!("universal:{}", hub.display()),

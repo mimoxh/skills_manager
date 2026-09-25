@@ -33,6 +33,7 @@ export interface AgentSkillCopy {
   sourceUrl?: string | null;
   installedAt?: string | null;
   isSymlink?: boolean;
+  managedByHub?: boolean;
 }
 
 export interface GroupedSkill {
@@ -74,10 +75,11 @@ export interface AgentProfile {
 export interface InstallResult {
   agentId: string;
   skillId: string;
-  action: "installed" | "updated" | "skipped" | "renamed";
+  action: "installed" | "updated" | "skipped" | "renamed" | "linked" | "unlinked" | "error";
   targetPath: string;
   backupPath?: string | null;
   message: string;
+  distributionMethod?: "symlink" | "junction" | "copy" | "special" | "link" | null;
 }
 
 export interface InitialData {
@@ -239,4 +241,75 @@ export interface SyncConflict {
   remoteDeviceId: string;
   kind: SyncConflictKind;
   detectedAt: string;
+}
+
+// ── 远程源码与外部 Agent 集成类型 ─────────────────────────────────────
+
+export type RemoteSourceType = "singleSkill" | "multiSkill" | "mcpServer" | "both" | "unknown";
+
+export interface DetectedSkillInfo {
+  name: string;
+  title: string;
+  description: string;
+  version?: string;
+  relativePath: string;
+}
+
+export interface DetectedMcpInfo {
+  name: string;
+  description: string;
+  transport: McpTransport;
+  command?: string;
+  args: string[];
+  env: Record<string, string>;
+}
+
+export interface AgentChoice {
+  id: string;
+  name: string;
+  agentType: AgentType;
+  skillsDir: string;
+  isHub: boolean;
+  supportsUniversal: boolean;
+  supportsMcp: boolean;
+}
+
+export interface RemoteSourceInspection {
+  url: string;
+  repoName: string;
+  branch?: string;
+  subpath?: string;
+  detectedType: RemoteSourceType;
+  skills: DetectedSkillInfo[];
+  mcpServers: DetectedMcpInfo[];
+  availableAgents: AgentChoice[];
+  recommendedAgentIds: string[];
+}
+
+export interface RemoteInstallOptions {
+  url: string;
+  targetAgentIds: string[];
+  conflictPolicy: ConflictPolicy;
+  toHub?: boolean;
+  selectedSkills?: string[];
+}
+
+export interface RemoteInstallResult {
+  url: string;
+  results: InstallResult[];
+  message: string;
+}
+
+export interface RemoteMcpInstallOptions {
+  config: McpServerConfig;
+  targetAgentIds: string[];
+  conflictPolicy: ConflictPolicy;
+}
+
+export interface PendingHubSkill {
+  skillKey: string;
+  title: string;
+  dirName: string;
+  notified: boolean;
+  message?: string | null;
 }

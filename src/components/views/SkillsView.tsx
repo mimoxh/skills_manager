@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { handleCardActivation, matchesTags } from "../../lib/utils";
 import type { AgentProfile, AgentSkillCopy, ConflictPolicy, GroupedSkill, InstallResult, SkillsFilter } from "../../types";
 import { SkillInstallDialog } from "./SkillInstallDialog";
+import { InstallUrlDialog } from "./InstallUrlDialog";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 
 interface SkillsViewProps {
@@ -10,6 +11,8 @@ interface SkillsViewProps {
   busy: boolean;
   noFullCoverageTitles: Set<string>;
   initialFilter?: SkillsFilter;
+  focusSkillTitle?: string | null;
+  onFocusedSkill?: () => void;
   onDrop: (event: React.DragEvent<HTMLElement>) => void;
   onFolder: () => void;
   onArchive: () => void;
@@ -21,18 +24,26 @@ interface SkillsViewProps {
   onSetSkillTags: (title: string, tags: string[]) => Promise<string[]>;
 }
 
-export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initialFilter = "all", onDrop, onFolder, onArchive, onSync, onUninstall, onLoadReadme, onRefresh, onToggleNoFullCoverage, onSetSkillTags }: SkillsViewProps) {
+export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initialFilter = "all", focusSkillTitle, onFocusedSkill, onDrop, onFolder, onArchive, onSync, onUninstall, onLoadReadme, onRefresh, onToggleNoFullCoverage, onSetSkillTags }: SkillsViewProps) {
   const [selectedSkill, setSelectedSkill] = useState<GroupedSkill | null>(null);
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [selectedSourceAgentId, setSelectedSourceAgentId] = useState<string | null>(null);
   const [conflictPolicy, setConflictPolicy] = useState<ConflictPolicy>("backupOverwrite");
   const [lastResults, setLastResults] = useState<InstallResult[]>([]);
+
+  useEffect(() => {
+    if (!focusSkillTitle) return;
+    const found = skills.find((skill) => skill.title === focusSkillTitle);
+    if (found) { void openSync(found); onFocusedSkill?.(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusSkillTitle, skills]);
   const [dragging, setDragging] = useState(false);
   const [filter, setFilter] = useState<SkillsFilter>(initialFilter);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTagFilters, setSelectedTagFilters] = useState<string[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<GroupedSkill | null>(null);
   const [discardConfirm, setDiscardConfirm] = useState(false);
+  const [showUrlDialog, setShowUrlDialog] = useState(false);
 
   const statusFilteredSkills = useMemo(() => {
     if (filter === "covered") return skills.filter((s) => s.missingAgentIds.length === 0);
@@ -74,7 +85,7 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
     const sourceCopy = preferredSourceCopy(skill);
     setSelectedSkill(skill);
     setSelectedSourceAgentId(sourceCopy.agentId);
-    setSelectedAgents(skill.installedAgentIds);
+    setSelectedAgents(skill.copies.filter((copy) => copy.managedByHub && copy.agentId !== skill.universalAgentId).map((copy) => copy.agentId));
     setConflictPolicy("backupOverwrite");
     setLastResults([]);
     if (!sourceCopy.readme) {
@@ -122,14 +133,8 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
 
   async function executeSync() {
     if (!selectedSkill) return;
-    const deselectedIds = selectedSkill.installedAgentIds.filter((id) => !selectedAgents.includes(id));
-    if (deselectedIds.length > 0) {
-      await onUninstall(selectedSkill.title, deselectedIds);
-    }
-    if (selectedAgents.length > 0) {
-      const results = await onSync(selectedSkill.title, selectedAgents, conflictPolicy, selectedSourceAgentId);
-      setLastResults(results);
-    }
+    const results = await onSync(selectedSkill.title, selectedAgents, conflictPolicy, selectedSourceAgentId);
+    setLastResults(results);
     setSelectedSkill(null);
     setSelectedSourceAgentId(null);
   }
@@ -161,7 +166,7 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
 
   const hasSyncChanges = useMemo(() => {
     if (!selectedSkill) return false;
-    const initial = selectedSkill.installedAgentIds;
+    const initial = selectedSkill.copies.filter((copy) => copy.managedByHub && copy.agentId !== selectedSkill.universalAgentId).map((copy) => copy.agentId);
     if (selectedAgents.length !== initial.length || selectedAgents.some((id) => !initial.includes(id))) return true;
     if (selectedSourceAgentId && selectedSourceAgentId !== preferredSourceCopy(selectedSkill).agentId) return true;
     if (conflictPolicy !== "backupOverwrite") return true;
@@ -237,6 +242,12 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
         <button className="btn btn-secondary btn-sm" onClick={onArchive} disabled={busy} type="button">
           <svg className="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
           zip
+        </button>
+        <button className="btn btn-secondary btn-sm" onClick={() => setShowUrlDialog(true)} disabled={busy} type="button">
+          <svg className="icon icon-sm" viewBox="0 0 24 24">
+            <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" />
+          </svg>
+          Git / URL
         </button>
       </div>
 
@@ -400,7 +411,8 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
       {/* Last results */}
       {lastResults.length > 0 && (
         <div style={{ flexShrink: 0, padding: "12px 16px", background: "var(--surface-raised)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: 12, color: "var(--text-secondary)" }}>
-          最近同步完成 {lastResults.length} 个任务
+          <div>最近分发结果</div>
+          {lastResults.map((result, index) => <div key={`${result.agentId}-${index}`}>{result.message}</div>)}
         </div>
       )}
 
@@ -408,13 +420,14 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
       {selectedSkill && (
         <SkillInstallDialog
           allowNoTargets
-          agents={agents}
+          agents={agents.filter((agent) => agent.type !== "universal")}
           availableUserTags={allUserTags}
           busy={busy}
           conflictPolicy={conflictPolicy}
           description={selectedSourceCopy(selectedSkill, selectedSourceAgentId).description || selectedSkill.description}
           enableAgentTagFilter
           installedAgentIds={selectedSkill.installedAgentIds}
+          managedAgentIds={selectedSkill.copies.filter((copy) => copy.managedByHub).map((copy) => copy.agentId)}
           selectedAgentIds={selectedAgents}
           selectedSourceAgentId={selectedSourceAgentId}
           sourceCopies={selectedSkill.copies}
@@ -428,7 +441,7 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
             ...(selectedSkill.installedAt ? [{ label: "安装时间", value: selectedSkill.installedAt }] : []),
             { label: "副本数量", value: selectedSkill.copies.length },
           ]}
-          primaryLabel={selectedAgents.length === 0 ? "全部删除" : selectedAgents.length < selectedSkill.installedAgentIds.length ? "同步并清理" : "同步"}
+          primaryLabel={selectedAgents.length === 0 ? "只保存到中枢" : "同步所选 Agent"}
           readme={selectedSourceCopy(selectedSkill, selectedSourceAgentId).readme || selectedSkill.readme || selectedSkill.bestCopy.readme}
           tags={selectedSkill.userTags ?? []}
           title={selectedSkill.title}
@@ -464,6 +477,15 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
           busy={busy}
           onClose={() => setDiscardConfirm(false)}
           onConfirm={() => { setDiscardConfirm(false); setSelectedSkill(null); setSelectedSourceAgentId(null); }}
+        />
+      )}
+
+      {showUrlDialog && (
+        <InstallUrlDialog
+          agents={agents.filter((agent) => agent.type !== "universal")}
+          busy={busy}
+          onClose={() => setShowUrlDialog(false)}
+          onSuccess={onRefresh}
         />
       )}
     </div>

@@ -13,7 +13,8 @@ export function ImportAgentDialog({
   onClose: () => void;
   onImport: (targetAgentIds: string[], conflictPolicy: ConflictPolicy) => void;
 }) {
-  const [selectedAgents, setSelectedAgents] = useState<string[]>(agents.map((a) => a.id));
+  const targetAgents = agents.filter((agent) => agent.type !== "universal");
+  const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [conflictPolicy, setConflictPolicy] = useState<ConflictPolicy>("backupOverwrite");
 
   function toggleAgent(agentId: string) {
@@ -23,10 +24,10 @@ export function ImportAgentDialog({
   }
 
   function toggleAll() {
-    if (selectedAgents.length === agents.length) {
+    if (selectedAgents.length === targetAgents.length) {
       setSelectedAgents([]);
     } else {
-      setSelectedAgents(agents.map((a) => a.id));
+      setSelectedAgents(targetAgents.map((a) => a.id));
     }
   }
 
@@ -48,17 +49,17 @@ export function ImportAgentDialog({
         <div style={{ flex: 1, overflow: "auto", padding: "20px 24px", display: "flex", flexDirection: "column", gap: 20 }}>
           <div>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-              <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)" }}>目标 Agent</p>
+              <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)" }}>分发目标（可不选，仅保存到中枢）</p>
               <button className="btn btn-secondary btn-sm" onClick={toggleAll} type="button" style={{ fontSize: 11, padding: "2px 8px" }}>
-                {selectedAgents.length === agents.length ? "取消全选" : "全选"}
+                {selectedAgents.length === targetAgents.length ? "取消全选" : "全选"}
               </button>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {agents.length === 0 ? (
+              {targetAgents.length === 0 ? (
                 <p style={{ fontSize: 13, color: "var(--text-tertiary)", padding: "12px 0", textAlign: "center" }}>
                   暂无可用 Agent，请先在「Agent 管理」中添加至少一个 Agent。
                 </p>
-              ) : agents.map((agent) => {
+              ) : targetAgents.map((agent) => {
                 const checked = selectedAgents.includes(agent.id);
                 return (
                   <button
@@ -109,7 +110,7 @@ export function ImportAgentDialog({
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, borderTop: "1px solid var(--border)", background: "var(--surface-raised)", padding: "16px 24px" }}>
           <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>已选择 {selectedAgents.length} 个 Agent</p>
           <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn btn-primary" onClick={() => onImport(selectedAgents, conflictPolicy)} disabled={busy || selectedAgents.length === 0} type="button" title={selectedAgents.length === 0 ? "请先选择至少一个 Agent" : undefined}>
+            <button className="btn btn-primary" onClick={() => onImport(selectedAgents, conflictPolicy)} disabled={busy} type="button">
               <svg className="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
               导入
             </button>

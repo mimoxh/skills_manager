@@ -25,11 +25,9 @@ interface Props {
   setBusy: (busy: boolean) => void;
   setMcpServers: (servers: GroupedMcpServer[]) => void;
   setNoFullCoverageMcpTitles: (titles: Set<string>) => void;
-  /** 新安装默认范围：true = 写入中枢并同步，false = 仅本机。 */
-  getInstallToHub?: () => boolean;
 }
 
-export function useSkillsData({ showToast, setBusy, setMcpServers, setNoFullCoverageMcpTitles, getInstallToHub }: Props) {
+export function useSkillsData({ showToast, setBusy, setMcpServers, setNoFullCoverageMcpTitles }: Props) {
   const [skills, setSkills] = useState<GroupedSkill[]>([]);
   const [agents, setAgents] = useState<AgentProfile[]>([]);
   const [customAgent, setCustomAgent] = useState<AgentProfile>(emptyCustom);
@@ -168,13 +166,9 @@ export function useSkillsData({ showToast, setBusy, setMcpServers, setNoFullCove
     conflictPolicy: ConflictPolicy,
     sourceAgentId?: string | null,
   ): Promise<InstallResult[]> {
-    if (!targetAgentIds.length) {
-      showToast("请至少选择一个目标 Agent。", "error");
-      return [];
-    }
     setBusy(true);
     try {
-      const results = await api.syncGroupedSkill(title, sourceAgentId, targetAgentIds, conflictPolicy, getInstallToHub?.() ?? true);
+      const results = await api.syncGroupedSkill(title, sourceAgentId, targetAgentIds, conflictPolicy);
       await refreshAll();
       showToast(`已完成 ${results.length} 个同步任务。`, "success");
       return results;
@@ -184,6 +178,14 @@ export function useSkillsData({ showToast, setBusy, setMcpServers, setNoFullCove
     } finally {
       setBusy(false);
     }
+  }
+
+  async function setHubSkillTargets(title: string, targetAgentIds: string[]) {
+    const results = await api.setHubSkillTargets(title, targetAgentIds);
+    await refreshAll();
+    const skipped = results.filter((result) => result.action === "skipped" || result.action === "error");
+    showToast(skipped.length ? `${skipped.length} 个目标已保留原目录，详见操作结果。` : "已更新中枢分发目标。", skipped.length ? "info" : "success");
+    return results;
   }
 
   async function collectEntryFiles(entry: FileSystemEntry, prefix = ""): Promise<ImportSkillFile[]> {
@@ -221,7 +223,7 @@ export function useSkillsData({ showToast, setBusy, setMcpServers, setNoFullCove
     if (!pendingImport) return;
     setBusy(true);
     try {
-      const result = await api.importSkillUpload(pendingImport.fileName, pendingImport.files, targetAgentIds, conflictPolicy, getInstallToHub?.() ?? true);
+      const result = await api.importSkillUpload(pendingImport.fileName, pendingImport.files, targetAgentIds, conflictPolicy);
       await refreshAll();
       showToast(result.message, "success");
     } catch (error) {
@@ -315,6 +317,7 @@ export function useSkillsData({ showToast, setBusy, setMcpServers, setNoFullCove
     refreshAll,
     loadSkillReadme,
     syncSkillToAgents,
+    setHubSkillTargets,
     deleteAgent,
     uninstallSkill,
     uninstallSkillFromAgents,

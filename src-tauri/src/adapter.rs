@@ -1,7 +1,7 @@
 use crate::{
     error::{AppError, AppResult},
     models::{AgentProfile, AgentType},
-    util::effective_supports_universal,
+    util::{effective_supports_universal, program_skills_path},
 };
 use std::{
     env, fs,
@@ -109,8 +109,7 @@ impl AgentAdapter for DirectoryAdapter {
                     skills_path,
                     adapter_config: None,
                     user_tags: Vec::new(),
-                    // OpenCode 原生扫描全局 `~/.agents/skills`，无需重复安装
-                    supports_universal: true,
+                    supports_universal: false,
                 }];
             }
             return vec![];
@@ -128,7 +127,7 @@ impl AgentAdapter for DirectoryAdapter {
         }
 
         let candidates = match self.agent_type {
-            AgentType::Universal => vec![Self::home_path(&[".agents", "skills"])],
+            AgentType::Universal => vec![program_skills_path().ok()],
             AgentType::Codex => vec![Self::home_path(&[".codex", "skills"])],
             AgentType::Claude => vec![
                 env::var_os("APPDATA")
@@ -158,7 +157,7 @@ impl AgentAdapter for DirectoryAdapter {
                 AgentProfile {
                     id: format!("{}:{}", type_name, path_str),
                     name: match self.agent_type {
-                        AgentType::Universal => "Universal (.agents/skills)".to_string(),
+                        AgentType::Universal => "Skills Manager 中枢".to_string(),
                         AgentType::Codex => "Codex".to_string(),
                         AgentType::Claude => "Claude".to_string(),
                         AgentType::ClaudeCode => "Claude Code".to_string(),
@@ -235,7 +234,7 @@ fn opencode_config_dir() -> Option<PathBuf> {
 /// `Custom` 与 `ClaudeCowork` 没有可推断的默认目录，返回 `None`。
 pub fn default_skills_path(agent_type: &AgentType) -> Option<PathBuf> {
     match agent_type {
-        AgentType::Universal => home_dir_path(&[".agents", "skills"]),
+        AgentType::Universal => program_skills_path().ok(),
         AgentType::Codex => home_dir_path(&[".codex", "skills"]),
         AgentType::ClaudeCode => home_dir_path(&[".claude", "skills"]),
         AgentType::Cursor => home_dir_path(&[".cursor", "skills"]),

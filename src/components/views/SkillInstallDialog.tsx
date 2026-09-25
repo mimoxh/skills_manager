@@ -15,6 +15,7 @@ interface SkillInstallDialogProps {
   description?: string | null;
   enableAgentTagFilter?: boolean;
   installedAgentIds?: string[];
+  managedAgentIds?: string[];
   isNoFullCoverage?: boolean;
   metadata?: Array<{ label: string; value?: string | number | null }>;
   primaryLabel: string;
@@ -44,6 +45,7 @@ export function SkillInstallDialog({
   description,
   enableAgentTagFilter = false,
   installedAgentIds = [],
+  managedAgentIds = [],
   isNoFullCoverage = false,
   metadata = [],
   primaryLabel,
@@ -226,11 +228,6 @@ export function SkillInstallDialog({
                               ★ 基准中枢
                             </span>
                           )}
-                          {agent.supportsUniversal && agent.type !== "universal" && (
-                            <span className="badge" style={{ fontSize: 10, background: "rgba(16, 185, 129, 0.1)", color: "#059669" }}>
-                              原生兼容中枢
-                            </span>
-                          )}
                         </span>
                         <span style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{agent.skillsPath}</span>
                         {(agent.userTags ?? []).length > 0 && (
@@ -241,7 +238,7 @@ export function SkillInstallDialog({
                           </span>
                         )}
                       </span>
-                      {installed && <span className="badge badge-success">已安装</span>}
+                      {installed && <span className="badge badge-success">{managedAgentIds.includes(agent.id) ? "中枢托管" : "Agent 自装"}</span>}
                     </button>
                   );
                 })}

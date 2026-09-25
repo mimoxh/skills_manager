@@ -1,22 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { ToastType } from "../components/ui/Toast";
-import type { SyncConfig, SyncConflict, SyncConflictChoice, SyncStatus } from "../types";
-
-const INSTALL_SCOPE_KEY = "skills-manager.installToHub";
-
-/** 新安装默认范围：true = 同步到中枢，false = 仅本机。localStorage 持久化。 */
-export function useInstallScope() {
-  const [installToHub, setInstallToHubState] = useState<boolean>(() => {
-    const stored = localStorage.getItem(INSTALL_SCOPE_KEY);
-    return stored === null ? true : stored === "true";
-  });
-  const setInstallToHub = useCallback((value: boolean) => {
-    setInstallToHubState(value);
-    localStorage.setItem(INSTALL_SCOPE_KEY, String(value));
-  }, []);
-  return { installToHub, setInstallToHub };
-}
+import type { PendingHubSkill, SyncConfig, SyncConflict, SyncConflictChoice, SyncStatus } from "../types";
 
 interface Props {
   showToast: (text: string, type?: ToastType) => void;
@@ -27,6 +12,25 @@ export function useSync({ showToast }: Props) {
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [syncConflicts, setSyncConflicts] = useState<SyncConflict[]>([]);
   const [syncBusy, setSyncBusy] = useState(false);
+  const [pendingHubSkills, setPendingHubSkills] = useState<PendingHubSkill[]>([]);
+
+  async function refreshPendingHubSkills() {
+    const pending = await api.listPendingHubSkills();
+    setPendingHubSkills(pending);
+    const unread = pending.filter((skill) => !skill.notified);
+    if (unread.length > 0) {
+      showToast(unread[0].message ?? `已同步 ${unread.length} 个新 Skill 到中枢，可选择要分发的 Agent。`, "info");
+      await api.acknowledgePendingHubSkills(unread.map((skill) => skill.skillKey));
+      setPendingHubSkills(pending.map((skill) => ({ ...skill, notified: true })));
+    }
+  }
+
+  useEffect(() => {
+    void refreshPendingHubSkills();
+    const timer = setInterval(() => { void refreshPendingHubSkills(); }, 15000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function refreshSync() {
     try {
@@ -54,6 +58,7 @@ export function useSync({ showToast }: Props) {
       const saved = await api.syncSetConfig(config, secretAccessKey, encryptPassword);
       setSyncConfig(saved);
       await refreshSync();
+      await refreshPendingHubSkills();
       showToast("已保存同步配置。", "success");
     } catch (error) {
       showToast(String(error), "error");
@@ -81,6 +86,7 @@ export function useSync({ showToast }: Props) {
       const status = await api.syncNow();
       setSyncStatus(status);
       await refreshSync();
+      await refreshPendingHubSkills();
       showToast(
         status.pendingConflicts > 0
           ? `同步完成，有 ${status.pendingConflicts} 个冲突待处理。`
@@ -132,5 +138,7 @@ export function useSync({ showToast }: Props) {
     syncNow,
     resolveSyncConflict,
     runSyncGc,
+    pendingHubSkills,
+    refreshPendingHubSkills,
   };
 }

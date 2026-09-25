@@ -37,3 +37,6 @@ Users16617Documentssunsetholmescodeprojectskills_manager.tmp-opencode/
 temp/
 
 open-design-ui/
+
+# 程序运行时的中枢 Skills 数据，不纳入源码仓库
+/skills/

@@ -14,7 +14,10 @@ pub mod mcp_codex;
 pub mod mcp_opencode;
 pub mod mcp_service;
 pub mod mcp_trae;
+pub mod cli;
+pub mod mcp_server;
 pub mod models;
+pub mod remote_source;
 pub mod service;
 pub mod skill_scan;
 pub mod store;
@@ -50,6 +53,9 @@ pub fn run() {
             scan_agent_skills,
             read_agent_skill_readme,
             sync_grouped_skill,
+            set_hub_skill_targets,
+            list_pending_hub_skills,
+            acknowledge_pending_hub_skills,
             uninstall_skill,
             uninstall_skill_from_agents,
             rollback_last,
@@ -80,7 +86,12 @@ pub fn run() {
             remove_mcp_server,
             toggle_mcp_server,
             sync_mcp_server,
-            remove_mcp_server_from_agents
+            remove_mcp_server_from_agents,
+            inspect_remote_source,
+            install_remote_source,
+            install_remote_mcp,
+            get_self_executable_path,
+            register_self_as_mcp
         ])
         .run(tauri::generate_context!())
         .expect("error while running Skills Manager");

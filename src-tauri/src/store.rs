@@ -19,6 +19,10 @@ struct AppState {
     #[serde(default)]
     installs: Vec<InstallRecord>,
     #[serde(default)]
+    managed_targets: Vec<ManagedTargetRecord>,
+    #[serde(default)]
+    pending_hub_skills: Vec<PendingHubSkill>,
+    #[serde(default)]
     discovery_paths: Vec<DiscoveryPathEntry>,
     #[serde(default)]
     operations: Vec<OperationRecord>,
@@ -90,6 +94,30 @@ pub struct InstallRecordInput {
     pub target_path: String,
     pub action: String,
     pub backup_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedTargetRecord {
+    pub skill_key: String,
+    pub dir_name: String,
+    pub agent_id: String,
+    pub target_path: String,
+    /// symlink, junction, copy, special, or legacy link.
+    pub method: String,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingHubSkill {
+    pub skill_key: String,
+    pub title: String,
+    pub dir_name: String,
+    #[serde(default)]
+    pub notified: bool,
+    #[serde(default)]
+    pub message: Option<String>,
 }
 
 pub struct AppStore {
@@ -212,6 +240,7 @@ impl AppStore {
             .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
         state.agents.retain(|a| a.id != agent_id);
         state.installs.retain(|i| i.agent_id != agent_id);
+        state.managed_targets.retain(|target| target.agent_id != agent_id);
         state.agent_tags.remove(agent_id);
         drop(state);
         self.save()
@@ -225,6 +254,75 @@ impl AppStore {
         let mut agents = state.agents.clone();
         agents.sort_by(|a, b| a.name.cmp(&b.name).then(a.skills_path.cmp(&b.skills_path)));
         Ok(agents)
+    }
+
+    pub fn list_install_records(&self) -> AppResult<Vec<(String, String, String, String)>> {
+        let state = self.state.lock().map_err(|_| AppError::Message("Store lock poisoned".into()))?;
+        Ok(state.installs.iter().map(|record| (
+            record.agent_id.clone(), record.skill_id.clone(), record.target_path.clone(), record.fingerprint.clone()
+        )).collect())
+    }
+
+    pub fn list_managed_targets(&self) -> AppResult<Vec<ManagedTargetRecord>> {
+        let state = self.state.lock().map_err(|_| AppError::Message("Store lock poisoned".into()))?;
+        Ok(state.managed_targets.clone())
+    }
+
+    pub fn upsert_managed_target(&self, record: ManagedTargetRecord) -> AppResult<()> {
+        {
+            let mut state = self.state.lock().map_err(|_| AppError::Message("Store lock poisoned".into()))?;
+            state.managed_targets.retain(|item| !(item.skill_key == record.skill_key && item.agent_id == record.agent_id));
+            state.managed_targets.push(record);
+        }
+        self.save()
+    }
+
+    pub fn remove_managed_target(&self, skill_key: &str, agent_id: &str) -> AppResult<()> {
+        {
+            let mut state = self.state.lock().map_err(|_| AppError::Message("Store lock poisoned".into()))?;
+            state.managed_targets.retain(|item| !(item.skill_key == skill_key && item.agent_id == agent_id));
+        }
+        self.save()
+    }
+
+    pub fn list_pending_hub_skills(&self) -> AppResult<Vec<PendingHubSkill>> {
+        let state = self.state.lock().map_err(|_| AppError::Message("Store lock poisoned".into()))?;
+        Ok(state.pending_hub_skills.clone())
+    }
+
+    pub fn add_pending_hub_skill(&self, skill: PendingHubSkill) -> AppResult<()> {
+        {
+            let mut state = self.state.lock().map_err(|_| AppError::Message("Store lock poisoned".into()))?;
+            if let Some(existing) = state.pending_hub_skills.iter_mut().find(|item| item.skill_key == skill.skill_key) {
+                if skill.message.is_some() && existing.message != skill.message {
+                    existing.message = skill.message;
+                    existing.notified = false;
+                    drop(state);
+                    return self.save();
+                }
+                return Ok(());
+            }
+            state.pending_hub_skills.push(skill);
+        }
+        self.save()
+    }
+
+    pub fn acknowledge_pending_hub_skills(&self, keys: &[String]) -> AppResult<()> {
+        {
+            let mut state = self.state.lock().map_err(|_| AppError::Message("Store lock poisoned".into()))?;
+            for item in &mut state.pending_hub_skills {
+                if keys.contains(&item.skill_key) { item.notified = true; }
+            }
+        }
+        self.save()
+    }
+
+    pub fn dismiss_pending_hub_skill(&self, skill_key: &str) -> AppResult<()> {
+        {
+            let mut state = self.state.lock().map_err(|_| AppError::Message("Store lock poisoned".into()))?;
+            state.pending_hub_skills.retain(|item| item.skill_key != skill_key);
+        }
+        self.save()
     }
 
     pub fn installed_fingerprint(

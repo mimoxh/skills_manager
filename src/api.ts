@@ -15,8 +15,13 @@ import type {
   ImportSkillResult,
   InitialData,
   InstallResult,
+  PendingHubSkill,
   McpOperationResult,
   McpServerConfig,
+  RemoteInstallOptions,
+  RemoteInstallResult,
+  RemoteMcpInstallOptions,
+  RemoteSourceInspection,
   SyncConfig,
   SyncConflict,
   SyncConflictChoice,
@@ -65,6 +70,15 @@ export const api = {
       { title, sourceAgentId, targetAgentIds, conflictPolicy, toHub },
       () => [],
     );
+  },
+  setHubSkillTargets(title: string, targetAgentIds: string[]) {
+    return command<InstallResult[]>("set_hub_skill_targets", { title, targetAgentIds }, () => []);
+  },
+  listPendingHubSkills() {
+    return command<PendingHubSkill[]>("list_pending_hub_skills", {}, () => []);
+  },
+  acknowledgePendingHubSkills(keys: string[]) {
+    return command<void>("acknowledge_pending_hub_skills", { keys }, () => undefined);
   },
   uninstallSkill(skillId: string, agentId: string) {
     return command<void>("uninstall_skill", { skillId, agentId }, () => undefined);
@@ -281,5 +295,33 @@ export const api = {
   },
   removeMcpServerFromAgents(serverName: string, agentIds: string[]) {
     return command<McpOperationResult[]>("remove_mcp_server_from_agents", { serverName, agentIds }, () => []);
+  },
+  // ── 远程源码与外部 Agent 集成 API ──
+  inspectRemoteSource(url: string) {
+    return command<RemoteSourceInspection>("inspect_remote_source", { url }, () => ({
+      url,
+      repoName: "demo",
+      detectedType: "singleSkill",
+      skills: [],
+      mcpServers: [],
+      availableAgents: [],
+      recommendedAgentIds: [],
+    }));
+  },
+  installRemoteSource(options: RemoteInstallOptions) {
+    return command<RemoteInstallResult>("install_remote_source", { options }, () => ({
+      url: options.url,
+      results: [],
+      message: "Desktop only",
+    }));
+  },
+  installRemoteMcp(options: RemoteMcpInstallOptions) {
+    return command<McpOperationResult[]>("install_remote_mcp", { options }, () => []);
+  },
+  getSelfExecutablePath() {
+    return command<string>("get_self_executable_path", {}, () => "SkillsManager.exe");
+  },
+  registerSelfAsMcp(targetAgentIds: string[]) {
+    return command<McpOperationResult[]>("register_self_as_mcp", { targetAgentIds }, () => []);
   },
 };

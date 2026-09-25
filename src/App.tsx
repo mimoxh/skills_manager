@@ -34,6 +34,7 @@ export default function App() {
 
   const state = useAppState();
   const theme = useTheme();
+  const [focusSkillTitle, setFocusSkillTitle] = useState<string | null>(null);
 
   useEffect(() => {
     if ("__TAURI_INTERNALS__" in window) {
@@ -73,6 +74,8 @@ export default function App() {
               busy={state.busy}
               noFullCoverageTitles={state.noFullCoverageTitles}
               initialFilter={skillsFilter}
+              focusSkillTitle={focusSkillTitle}
+              onFocusedSkill={() => setFocusSkillTitle(null)}
               onDrop={state.handleSkillDrop}
               onFolder={() => folderInputRef.current?.click()}
               onArchive={() => archiveInputRef.current?.click()}
@@ -167,13 +170,12 @@ export default function App() {
             syncStatus={state.syncStatus}
             syncConflicts={state.syncConflicts}
             syncBusy={state.syncBusy}
-            installToHub={state.installToHub}
             onSaveSyncConfig={state.saveSyncConfig}
             onTestSyncConnection={state.testSyncConnection}
             onSyncNow={state.syncNow}
             onResolveSyncConflict={state.resolveSyncConflict}
             onSyncGc={state.runSyncGc}
-            onInstallToHubChange={state.setInstallToHub}
+            agents={state.agents}
           />
         );
       default:
@@ -203,6 +205,12 @@ export default function App() {
         />
         <div className="main">
           <Titlebar />
+          {state.pendingHubSkills.length > 0 && (
+            <div style={{ padding: "8px 16px", background: "var(--accent-light)", display: "flex", alignItems: "center", gap: 12, fontSize: 12 }}>
+              <span style={{ flex: 1 }}>{state.pendingHubSkills[0].message ?? `新 Skill「${state.pendingHubSkills[0].title}」已同步到中枢，尚未选择本机 Agent。`}{state.pendingHubSkills.length > 1 ? `（另有 ${state.pendingHubSkills.length - 1} 个待处理）` : ""}</span>
+              {state.skills.some((skill) => skill.title === state.pendingHubSkills[0].title) && <button className="btn btn-primary btn-sm" type="button" onClick={() => { setView("skills"); setFocusSkillTitle(state.pendingHubSkills[0].title); void state.refreshAll(); }}>查看 Skill</button>}
+            </div>
+          )}
           <div className="content">
             {state.isInitialLoading ? (
               <div style={{ display: "flex", height: "100%", alignItems: "center", justifyContent: "center" }}>

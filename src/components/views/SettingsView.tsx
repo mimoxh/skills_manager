@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
+import { api } from "../../api";
 import type { Palette, ResolvedTheme, ThemeMode } from "../../hooks/useTheme";
-import type { SyncConfig, SyncConflict, SyncConflictChoice, SyncStatus } from "../../types";
+import type { AgentProfile, SyncConfig, SyncConflict, SyncConflictChoice, SyncStatus } from "../../types";
 import { ConflictDialog } from "./ConflictDialog";
 
 interface SettingsViewProps {
@@ -13,13 +14,12 @@ interface SettingsViewProps {
   syncStatus: SyncStatus | null;
   syncConflicts: SyncConflict[];
   syncBusy: boolean;
-  installToHub: boolean;
   onSaveSyncConfig: (config: SyncConfig, secretAccessKey?: string, encryptPassword?: string) => Promise<void>;
   onTestSyncConnection: (config: SyncConfig) => Promise<void>;
   onSyncNow: () => Promise<void>;
   onResolveSyncConflict: (skillId: string, choice: SyncConflictChoice) => Promise<void>;
   onSyncGc: () => Promise<void>;
-  onInstallToHubChange: (value: boolean) => void;
+  agents?: AgentProfile[];
 }
 
 const emptySyncConfig: SyncConfig = {
@@ -70,18 +70,58 @@ export function SettingsView({
   syncStatus,
   syncConflicts,
   syncBusy,
-  installToHub,
   onSaveSyncConfig,
   onTestSyncConnection,
   onSyncNow,
   onResolveSyncConflict,
   onSyncGc,
-  onInstallToHubChange,
+  agents = [],
 }: SettingsViewProps) {
   const [draft, setDraft] = useState<SyncConfig>(syncConfig ?? emptySyncConfig);
   const [secretKey, setSecretKey] = useState("");
   const [password, setPassword] = useState("");
   const [conflictOpen, setConflictOpen] = useState(false);
+
+  const [exePath, setExePath] = useState<string>("SkillsManager.exe");
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [registering, setRegistering] = useState(false);
+  const [registerResult, setRegisterResult] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.getSelfExecutablePath().then(setExePath).catch(() => {});
+  }, []);
+
+  function copyText(key: string, text: string) {
+    navigator.clipboard.writeText(text);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2000);
+  }
+
+  async function handleRegisterSelf() {
+    const mcpAgentIds = (agents || [])
+      .filter((a) =>
+        ["codex", "claudeCode", "opencode", "trae"].includes(a.type) ||
+        (a.type === "custom" && a.adapterConfig?.mcpFormat)
+      )
+      .map((a) => a.id);
+
+    if (mcpAgentIds.length === 0) {
+      setRegisterResult("未检测到支持 MCP 的本地 Agent (Claude Code / Codex / OpenCode / Trae)。");
+      return;
+    }
+
+    setRegistering(true);
+    setRegisterResult(null);
+    try {
+      const results = await api.registerSelfAsMcp(mcpAgentIds);
+      const successful = results.filter((r) => r.action !== "error").length;
+      setRegisterResult(`已成功将 Skills Manager 写入 ${successful} 个 Agent 的 MCP 配置中！`);
+    } catch (e: unknown) {
+      setRegisterResult(`写入失败: ${String(e)}`);
+    } finally {
+      setRegistering(false);
+    }
+  }
 
   useEffect(() => {
     if (syncConfig) setDraft(syncConfig);
@@ -272,25 +312,9 @@ export function SettingsView({
           <div className="separator" />
 
           <div>
-            <div className="input-label" style={{ marginBottom: 8 }}>新安装默认范围</div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button
-                type="button"
-                className={`btn ${installToHub ? "btn-primary" : "btn-secondary"}`}
-                onClick={() => onInstallToHubChange(true)}
-              >
-                同步到中枢
-              </button>
-              <button
-                type="button"
-                className={`btn ${!installToHub ? "btn-primary" : "btn-secondary"}`}
-                onClick={() => onInstallToHubChange(false)}
-              >
-                仅本机
-              </button>
-            </div>
+            <div className="input-label" style={{ marginBottom: 8 }}>Skills 中枢</div>
             <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-tertiary)" }}>
-              「同步到中枢」会把 skill 复制进 <code style={{ fontFamily: "var(--font-mono)" }}>~/.agents/skills</code> 并随之同步；「仅本机」只安装到目标 agent，不参与同步。
+              Skills Manager 添加的 Skill 保存在 <code style={{ fontFamily: "var(--font-mono)" }}>{agents.find((agent) => agent.type === "universal")?.skillsPath ?? "<程序目录>\\skills"}</code>；仅向选中的 Agent 分发，已有独立 Skill 保持不变。
             </div>
           </div>
 
@@ -321,6 +345,113 @@ export function SettingsView({
                 立即同步
               </button>
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 外部 Agent 接入 (MCP / CLI) */}
+      <div className="card" style={{ flexShrink: 0, marginBottom: 20 }}>
+        <div className="card-header">
+          <div>
+            <div className="card-title">外部 Agent 接入 (MCP Server / CLI)</div>
+            <div className="card-desc">
+              让 Claude Code、Cursor、Windsurf、Claude Desktop 等外部智能体直接调用管理技能与 MCP
+            </div>
+          </div>
+        </div>
+        <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>
+              当前程序物理路径
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input className="input" readOnly value={exePath} style={{ flex: 1, fontSize: 12 }} />
+              <button
+                className="btn btn-secondary btn-sm"
+                type="button"
+                onClick={() => copyText("exe", exePath)}
+              >
+                {copiedKey === "exe" ? "已复制" : "复制路径"}
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>快速接入配置</div>
+
+            {/* Claude Code */}
+            <div style={{ padding: "12px 14px", background: "var(--surface-raised)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text)" }}>Claude Code 命令行接入</span>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  type="button"
+                  style={{ fontSize: 11, padding: "2px 8px" }}
+                  onClick={() => copyText("claudeCode", `claude mcp add skills-manager -- "${exePath}" mcp`)}
+                >
+                  {copiedKey === "claudeCode" ? "已复制" : "复制代码"}
+                </button>
+              </div>
+              <code style={{ fontSize: 11, display: "block", background: "var(--surface)", padding: "6px 8px", borderRadius: 4, color: "var(--text-secondary)", wordBreak: "break-all" }}>
+                claude mcp add skills-manager -- "{exePath}" mcp
+              </code>
+            </div>
+
+            {/* Cursor / Claude Desktop */}
+            <div style={{ padding: "12px 14px", background: "var(--surface-raised)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text)" }}>Cursor / Claude Desktop 配置片段 (mcp.json)</span>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  type="button"
+                  style={{ fontSize: 11, padding: "2px 8px" }}
+                  onClick={() => {
+                    const jsonSnippet = JSON.stringify({
+                      mcpServers: {
+                        "skills-manager": {
+                          command: exePath,
+                          args: ["mcp"],
+                        },
+                      },
+                    }, null, 2);
+                    copyText("mcpJson", jsonSnippet);
+                  }}
+                >
+                  {copiedKey === "mcpJson" ? "已复制" : "复制 JSON"}
+                </button>
+              </div>
+              <pre style={{ margin: 0, fontSize: 11, background: "var(--surface)", padding: "8px 10px", borderRadius: 4, color: "var(--text-secondary)", overflowX: "auto" }}>
+{`{
+  "mcpServers": {
+    "skills-manager": {
+      "command": "${exePath.replace(/\\/g, "\\\\")}",
+      "args": ["mcp"]
+    }
+  }
+}`}
+              </pre>
+            </div>
+          </div>
+
+          <div style={{ borderTop: "1px solid var(--border)", paddingTop: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                一键自动将自身配置为本机检测到的 Claude Code / Codex / OpenCode / Trae 的 MCP Server
+              </div>
+              <button
+                className="btn btn-primary btn-sm"
+                type="button"
+                disabled={registering}
+                onClick={handleRegisterSelf}
+              >
+                {registering ? "正在配置..." : "一键注入到本机 Agent"}
+              </button>
+            </div>
+            {registerResult && (
+              <div style={{ fontSize: 12, color: registerResult.includes("成功") ? "var(--success)" : "var(--danger, #dc2626)" }}>
+                {registerResult}
+              </div>
+            )}
           </div>
         </div>
       </div>

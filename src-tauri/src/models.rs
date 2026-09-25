@@ -48,6 +48,8 @@ pub struct AgentSkillCopy {
     pub installed_at: Option<String>,
     #[serde(default)]
     pub is_symlink: bool,
+    #[serde(default)]
+    pub managed_by_hub: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -123,7 +125,7 @@ impl AgentType {
     /// 内置 Agent 类型的默认展示名；自定义类型没有默认名称。
     pub fn default_name(&self) -> Option<&'static str> {
         match self {
-            AgentType::Universal => Some("Universal (.agents/skills)"),
+            AgentType::Universal => Some("Skills Manager 中枢"),
             AgentType::Codex => Some("Codex"),
             AgentType::Claude => Some("Claude"),
             AgentType::ClaudeCode => Some("Claude Code"),
@@ -170,7 +172,7 @@ pub enum ConflictPolicy {
     Rename,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallResult {
     pub agent_id: String,
@@ -179,6 +181,8 @@ pub struct InstallResult {
     pub target_path: String,
     pub backup_path: Option<String>,
     pub message: String,
+    #[serde(default)]
+    pub distribution_method: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -557,4 +561,102 @@ fn default_region() -> String {
 
 fn default_poll_secs() -> u64 {
     60
+}
+
+// ── 远程源码与外部 Agent 集成 ───────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteSourceType {
+    SingleSkill,
+    MultiSkill,
+    McpServer,
+    Both,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedSkillInfo {
+    pub name: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub version: Option<String>,
+    pub relative_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedMcpInfo {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub transport: McpTransport,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentChoice {
+    pub id: String,
+    pub name: String,
+    pub agent_type: AgentType,
+    pub skills_dir: String,
+    pub is_hub: bool,
+    pub supports_universal: bool,
+    pub supports_mcp: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteSourceInspection {
+    pub url: String,
+    pub repo_name: String,
+    pub branch: Option<String>,
+    pub subpath: Option<String>,
+    pub detected_type: RemoteSourceType,
+    #[serde(default)]
+    pub skills: Vec<DetectedSkillInfo>,
+    #[serde(default)]
+    pub mcp_servers: Vec<DetectedMcpInfo>,
+    #[serde(default)]
+    pub available_agents: Vec<AgentChoice>,
+    #[serde(default)]
+    pub recommended_agent_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteInstallOptions {
+    pub url: String,
+    pub target_agent_ids: Vec<String>,
+    pub conflict_policy: ConflictPolicy,
+    #[serde(default)]
+    pub to_hub: Option<bool>,
+    /// 如果是多技能仓库，指定要安装的技能 relative_path 或 name
+    #[serde(default)]
+    pub selected_skills: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteInstallResult {
+    pub url: String,
+    pub results: Vec<InstallResult>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteMcpInstallOptions {
+    pub config: McpServerConfig,
+    pub target_agent_ids: Vec<String>,
+    pub conflict_policy: ConflictPolicy,
 }

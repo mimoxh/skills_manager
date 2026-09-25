@@ -23,16 +23,32 @@ pub(crate) fn expand_user_path(path: &str) -> String {
     trimmed.to_string()
 }
 
-/// 判断 skills 路径是否指向 Universal 中枢 `~/.agents/skills`（兼容 Windows 反斜杠）。
-pub fn is_universal_skills_path(path: &str) -> bool {
+/// 程序所在目录中的统一 Skills 仓库。
+pub fn program_skills_path() -> AppResult<PathBuf> {
+    let exe = std::env::current_exe()?;
+    let parent = exe.parent().ok_or_else(|| AppError::Message("无法定位程序所在目录".to_string()))?;
+    Ok(parent.join("skills"))
+}
+
+pub fn is_legacy_universal_skills_path(path: &str) -> bool {
     let normalized = path.trim().replace('\\', "/");
     let trimmed = normalized.trim_end_matches('/');
     trimmed.ends_with("/.agents/skills") || trimmed == ".agents/skills"
 }
 
-/// Agent 是否原生扫描 Universal 中枢（路径本身为中枢，或用户显式标记）。
-pub fn effective_supports_universal(agent_type_is_universal: bool, skills_path: &str, flagged: bool) -> bool {
-    agent_type_is_universal || is_universal_skills_path(skills_path) || flagged
+/// 判断路径是否指向程序目录中的 Skills 中枢。
+pub fn is_universal_skills_path(path: &str) -> bool {
+    let Ok(hub) = program_skills_path() else { return false; };
+    let candidate = Path::new(path.trim());
+    match (std::fs::canonicalize(candidate), std::fs::canonicalize(&hub)) {
+        (Ok(candidate), Ok(hub)) => candidate == hub,
+        _ => candidate == hub,
+    }
+}
+
+/// 仅程序中枢本身直接读取中枢目录；旧版保存的兼容标记不再影响覆盖判定。
+pub fn effective_supports_universal(agent_type_is_universal: bool, skills_path: &str, _flagged: bool) -> bool {
+    agent_type_is_universal || is_universal_skills_path(skills_path)
 }
 
 /// 校验相对路径不含目录穿越与绝对路径，防止文件操作逃逸出预期目录。

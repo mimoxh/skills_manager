@@ -4,10 +4,12 @@ use crate::{
         AgentProfile, CatalogFilters, CatalogRefreshResult, CatalogRefreshStatus,
         CatalogSafetyMode, CatalogSearchResult, CatalogSort, CatalogSource, ConflictPolicy,
         GroupedMcpServer, GroupedSkill, ImportSkillFile, ImportSkillResult, InitialData,
-        InstallResult, McpOperationResult, McpServerConfig, SyncConfig, SyncConflict,
-        SyncConflictChoice, SyncStatus,
+        InstallResult, McpOperationResult, McpServerConfig, RemoteInstallOptions,
+        RemoteInstallResult, RemoteMcpInstallOptions, RemoteSourceInspection, SyncConfig,
+        SyncConflict, SyncConflictChoice, SyncStatus,
     },
     service::AppService,
+    store::PendingHubSkill,
 };
 use tauri::State;
 
@@ -103,6 +105,24 @@ pub async fn sync_grouped_skill(
         )
     })
     .await
+}
+
+#[tauri::command]
+pub async fn set_hub_skill_targets(
+    title: String, target_agent_ids: Vec<String>, service: State<'_, AppService>,
+) -> AppResult<Vec<InstallResult>> {
+    let service = service.inner().clone();
+    run_blocking(move || service.set_hub_skill_targets(&title, &target_agent_ids)).await
+}
+
+#[tauri::command]
+pub fn list_pending_hub_skills(service: State<AppService>) -> AppResult<Vec<PendingHubSkill>> {
+    service.list_pending_hub_skills()
+}
+
+#[tauri::command]
+pub fn acknowledge_pending_hub_skills(keys: Vec<String>, service: State<AppService>) -> AppResult<()> {
+    service.acknowledge_pending_hub_skills(&keys)
 }
 
 #[tauri::command]
@@ -397,4 +417,47 @@ pub fn remove_mcp_server_from_agents(
     service
         .mcp()
         .remove_mcp_server_from_agents(&agents, &server_name, &agent_ids)
+}
+
+// ── 远程源码与外部 Agent 集成 Commands ─────────────────────────────────────
+
+#[tauri::command]
+pub async fn inspect_remote_source(
+    url: String,
+    service: State<'_, AppService>,
+) -> AppResult<RemoteSourceInspection> {
+    let service = service.inner().clone();
+    run_blocking(move || service.inspect_remote_source(&url)).await
+}
+
+#[tauri::command]
+pub async fn install_remote_source(
+    options: RemoteInstallOptions,
+    service: State<'_, AppService>,
+) -> AppResult<RemoteInstallResult> {
+    let service = service.inner().clone();
+    run_blocking(move || service.install_remote_source(options)).await
+}
+
+#[tauri::command]
+pub fn install_remote_mcp(
+    options: RemoteMcpInstallOptions,
+    service: State<AppService>,
+) -> AppResult<Vec<McpOperationResult>> {
+    service.install_remote_mcp(options)
+}
+
+#[tauri::command]
+pub fn get_self_executable_path() -> AppResult<String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| AppError::Message(format!("获取程序路径失败: {}", e)))?;
+    Ok(exe.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn register_self_as_mcp(
+    target_agent_ids: Vec<String>,
+    service: State<AppService>,
+) -> AppResult<Vec<McpOperationResult>> {
+    service.register_self_as_mcp(&target_agent_ids)
 }

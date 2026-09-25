@@ -202,6 +202,7 @@ pub(crate) fn scan_agent_skill_copies_with_lock(
             source_url,
             installed_at: lock_installed_at,
             is_symlink,
+            managed_by_hub: false,
         });
     }
     Ok(copies)
@@ -230,10 +231,6 @@ pub(crate) fn group_agent_skills(agents: &[AgentProfile], copies: Vec<AgentSkill
             })
             .unwrap_or(false)
             || copy.agent_id.starts_with("universal:")
-            || copy
-                .skill_path
-                .replace('\\', "/")
-                .contains("/.agents/skills/")
     };
 
     let mut values = grouped
@@ -257,18 +254,10 @@ pub(crate) fn group_agent_skills(agents: &[AgentProfile], copies: Vec<AgentSkill
                 .and_then(|c| c.installed_at.clone())
                 .or_else(|| best_copy.installed_at.clone());
 
-            // 智能免冗余覆盖计算：若已在 Universal Hub 中存在，所有原生支持通用目录的 Agent 均已覆盖，不计入缺失！
+            // 程序目录中的中枢不是 Agent 原生扫描路径；只有实际安装/链接才算覆盖。
             let missing_agent_ids = agents
                 .iter()
-                .filter(|agent| {
-                    if installed_set.contains(&agent.id) {
-                        return false;
-                    }
-                    if is_universal && agent.supports_universal {
-                        return false;
-                    }
-                    true
-                })
+                .filter(|agent| !installed_set.contains(&agent.id))
                 .map(|agent| agent.id.clone())
                 .collect::<Vec<_>>();
 
@@ -425,8 +414,12 @@ fn read_markdown_heading(text: &str) -> Option<String> {
 pub(crate) fn compare_skill_copy(a: &AgentSkillCopy, b: &AgentSkillCopy) -> Ordering {
     compare_versions(b.version.as_deref(), a.version.as_deref())
         .then_with(|| {
-            let a_is_uni = a.agent_id.starts_with("universal:") || a.skill_path.replace('\\', "/").contains("/.agents/skills/");
-            let b_is_uni = b.agent_id.starts_with("universal:") || b.skill_path.replace('\\', "/").contains("/.agents/skills/");
+            let a_is_uni = a.agent_id.starts_with("universal:")
+                || a.skill_path.as_str().rsplit_once(['/', '\\'])
+                    .map(|(parent, _)| crate::util::is_universal_skills_path(parent)).unwrap_or(false);
+            let b_is_uni = b.agent_id.starts_with("universal:")
+                || b.skill_path.as_str().rsplit_once(['/', '\\'])
+                    .map(|(parent, _)| crate::util::is_universal_skills_path(parent)).unwrap_or(false);
             b_is_uni.cmp(&a_is_uni)
         })
         .then_with(|| b.updated_at.cmp(&a.updated_at))

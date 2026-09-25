@@ -63,6 +63,10 @@ pub struct PullOutcome {
     pub conflicts: usize,
     /// 本次落中枢的 skill 目录名（用于上层 fanout / reconcile）。
     pub applied_dirs: Vec<String>,
+    /// 本机首次获得的中枢 Skill；由上层提示用户选择本机目标。
+    pub new_dirs: Vec<String>,
+    /// 已从中枢删除的 (skill key, 目录名)，供上层安全移除管理器链接。
+    pub deleted_dirs: Vec<(String, String)>,
 }
 
 pub struct SyncRuntime<'a> {
@@ -293,15 +297,18 @@ impl<'a> SyncRuntime<'a> {
                 }
                 MergeDecision::ApplyRemote { device_id, hash, .. } => {
                     if let Some(entry) = remote_entries.get(&device_id).copied() {
+                        let is_new = !local_by_key.contains_key(&key);
                         self.apply_remote_entry(entry)?;
                         self.update_baseline(&key, Some(hash))?;
                         outcome.applied += 1;
                         outcome.applied_dirs.push(entry.dir_name.clone());
+                        if is_new { outcome.new_dirs.push(entry.dir_name.clone()); }
                     }
                 }
                 MergeDecision::ApplyDelete { .. } => {
                     if let Some(local) = local_by_key.get(&key) {
                         remove_dir_or_symlink(&local.dir_path)?;
+                        outcome.deleted_dirs.push((key.clone(), local.dir_name.clone()));
                     }
                     self.update_baseline(&key, None)?;
                     outcome.deleted += 1;
