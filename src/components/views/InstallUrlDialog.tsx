@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import { policyOptions } from "../../lib/policyOptions";
 import type { AgentProfile, ConflictPolicy, RemoteSourceInspection } from "../../types";
@@ -23,6 +23,15 @@ export function InstallUrlDialog({
   const [inspection, setInspection] = useState<RemoteSourceInspection | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const closeTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current !== null) {
+        window.clearTimeout(closeTimerRef.current);
+      }
+    };
+  }, []);
 
   const targetAgents = agents.filter((agent) => agent.type !== "universal");
   const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>([]);
@@ -121,7 +130,11 @@ export function InstallUrlDialog({
       }
       setSuccessMessage(messages.join("；"));
 
-      setTimeout(() => {
+      if (closeTimerRef.current !== null) {
+        window.clearTimeout(closeTimerRef.current);
+      }
+      closeTimerRef.current = window.setTimeout(() => {
+        closeTimerRef.current = null;
         onSuccess();
         onClose();
       }, 1200);
@@ -386,13 +399,13 @@ export function InstallUrlDialog({
       </div>
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10, borderTop: "1px solid var(--border)", padding: "16px 24px" }}>
-        <button className="btn btn-secondary" onClick={onClose} disabled={installing} type="button">
+        <button className="btn btn-secondary" onClick={onClose} disabled={installing || Boolean(successMessage)} type="button">
           取消
         </button>
         <button
           className="btn btn-primary"
           onClick={handleInstall}
-          disabled={!inspection || installing || (selectedSkillPaths.length === 0 && selectedMcpNames.length === 0)}
+          disabled={!inspection || installing || Boolean(successMessage) || (selectedSkillPaths.length === 0 && selectedMcpNames.length === 0)}
           type="button"
         >
           {installing ? "正在安装..." : "确认安装"}

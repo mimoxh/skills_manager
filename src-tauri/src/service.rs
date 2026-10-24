@@ -618,7 +618,7 @@ impl AppService {
             let existing = scan_agent_skill_copies(agent)?;
             let other_same_title = existing.iter().any(|copy| {
                 normalize_title(&copy.title) == skill_key
-                    && Path::new(&copy.skill_path) != target
+                    && !Self::same_path(Path::new(&copy.skill_path), &target)
             });
             let target_exists = fs::symlink_metadata(&target).is_ok();
             let owned = target_exists && self.is_managed_target(agent_id, &skill_key, &target, hub_skill_path)?;
@@ -697,6 +697,7 @@ impl AppService {
         Ok(results)
     }
 
+    #[cfg_attr(test, allow(dead_code))]
     fn known_managed_legacy_names(&self, old_root: &Path) -> AppResult<HashSet<String>> {
         let mut names = HashSet::new();
         for (_, _, target, fingerprint) in self.store.list_install_records()? {
@@ -749,15 +750,23 @@ impl AppService {
             let Some(dir_name) = entry.file_name().to_str().map(str::to_string) else { continue; };
             let (title, _, _, _) = read_agent_skill_info(&skill, false);
             let key = normalize_title(if title.is_empty() { &dir_name } else { &title });
-            let fingerprint = hash_dir(&skill)?;
+            let mut fingerprint: Option<String> = None;
             for agent in agents.iter().filter(|agent| agent.id != hub.id) {
                 let target = Path::new(&agent.skills_path).join(&dir_name);
                 if known.iter().any(|item| item.agent_id == agent.id && item.skill_key == key) { continue; }
                 if is_symlink_path(&target) && Self::same_path(&target, &skill) {
+                    let fp = match &fingerprint {
+                        Some(fp) => fp.clone(),
+                        None => {
+                            let computed = hash_dir(&skill)?;
+                            fingerprint = Some(computed.clone());
+                            computed
+                        }
+                    };
                     self.store.upsert_managed_target(ManagedTargetRecord {
                         skill_key: key.clone(), dir_name: dir_name.clone(), agent_id: agent.id.clone(),
                         target_path: target.to_string_lossy().to_string(), method: "link".into(),
-                        fingerprint: fingerprint.clone(),
+                        fingerprint: fp,
                     })?;
                 }
             }
@@ -814,7 +823,7 @@ impl AppService {
 
         let distribution_method;
         if agent.agent_type == AgentType::CherryStudio {
-            let cs = CherryStudioAdapter::new().ok_or_else(|| {
+            let cs = CherryStudioAdapter::from_profile(agent).ok_or_else(|| {
                 AppError::Message(
                     "未找到 Cherry Studio 安装目录（%APPDATA%\\CherryStudio 缺失），无法安装。"
                         .to_string(),
@@ -895,6 +904,11 @@ impl AppService {
     }
 
     pub fn save_catalog_source(&self, mut source: CatalogSource) -> AppResult<CatalogSource> {
+        let trimmed_url = source.url.trim();
+        if trimmed_url.is_empty() || trimmed_url.starts_with('-') {
+            return Err(AppError::Message(format!("无效的仓库源地址: {}", source.url)));
+        }
+        source.url = trimmed_url.to_string();
         if source.id.trim().is_empty() {
             source.id = format!("custom-{}", chrono::Utc::now().timestamp_millis());
         }
@@ -945,11 +959,19 @@ impl AppService {
             }
             scan_catalog_repository(&cache_path, &source)?.len()
         } else {
+            let trimmed_url = source.url.trim();
+            if trimmed_url.is_empty() || trimmed_url.starts_with('-') {
+                return Err(AppError::Message(format!(
+                    "无效的仓库源地址: {}",
+                    source.url
+                )));
+            }
             let output = command_no_window("git")
                 .arg("clone")
                 .arg("--depth")
                 .arg("1")
-                .arg(&source.url)
+                .arg("--")
+                .arg(trimmed_url)
                 .arg(&cache_path)
                 .output()?;
             if !output.status.success() {
@@ -1184,13 +1206,14 @@ impl AppService {
             .ok_or_else(|| {
                 AppError::Message(format!("找不到 catalog skill: {}", catalog_skill_id))
             })?;
-        let materialized_source;
-        let source_path = if skill.source_path.starts_with("clawhub://") {
-            materialized_source = self.materialize_clawhub_skill(&skill)?;
-            materialized_source.as_path()
+        let materialized_source = if skill.source_path.starts_with("clawhub://") {
+            Some(self.materialize_clawhub_skill(&skill)?)
         } else {
-            Path::new(&skill.source_path)
+            None
         };
+        let source_path = materialized_source
+            .as_deref()
+            .unwrap_or_else(|| Path::new(&skill.source_path));
         let source_dir_name = source_path
             .file_name()
             .and_then(|value| value.to_str())
@@ -1199,19 +1222,32 @@ impl AppService {
         let agents = self.list_agents()?;
         for agent_id in &target_agent_ids {
             if !agents.iter().any(|agent| &agent.id == agent_id) {
+                if let Some(ref temp_dir) = materialized_source {
+                    let _ = fs::remove_dir_all(temp_dir);
+                }
                 return Err(AppError::Message(format!("找不到 Agent: {}", agent_id)));
             }
         }
 
-        self.materialize_into_hub(
+        let hub_skill_path = self.materialize_into_hub(
             source_path,
             source_dir_name,
             &skill.name,
             &conflict_policy,
             Some(&skill.source_id),
             None,
-        )?;
-        self.set_hub_skill_targets(&skill.name, &target_agent_ids)
+        );
+        if let Some(ref temp_dir) = materialized_source {
+            let _ = fs::remove_dir_all(temp_dir);
+        }
+        let hub_skill_path = hub_skill_path?;
+        let (scanned_title, _, _, _) = read_agent_skill_info(&hub_skill_path, false);
+        let canonical_title = if !scanned_title.trim().is_empty() {
+            scanned_title
+        } else {
+            skill.name.clone()
+        };
+        self.set_hub_skill_targets(&canonical_title, &target_agent_ids)
     }
 
     pub fn scan_agent_skills(&self) -> AppResult<Vec<GroupedSkill>> {
@@ -1227,7 +1263,7 @@ impl AppService {
                 if copy.agent_id == hub.id { copy.managed_by_hub = true; continue; }
                 let key = normalize_title(&copy.title);
                 if let Some(record) = managed.iter().find(|record| record.agent_id == copy.agent_id
-                    && record.skill_key == key && Path::new(&record.target_path) == Path::new(&copy.skill_path)) {
+                    && record.skill_key == key && Self::same_path(Path::new(&record.target_path), Path::new(&copy.skill_path))) {
                     let hub_skill = Path::new(&hub.skills_path).join(&record.dir_name);
                     copy.managed_by_hub = self.is_managed_target(&copy.agent_id, &key, Path::new(&copy.skill_path), &hub_skill)?;
                 } else if copy.is_symlink {
@@ -1304,10 +1340,19 @@ impl AppService {
             .find(|agent| agent.id == agent_id)
             .ok_or_else(|| AppError::Message(format!("找不到 Agent: {}", agent_id)))?;
 
+        let norm_key = normalize_title(skill_id);
         let matched_path = scan_agent_skill_copies(&agent)?
             .into_iter()
-            .find(|copy| normalize_title(&copy.title) == normalize_title(skill_id))
-            .map(|copy| PathBuf::from(copy.skill_path));
+            .find(|copy| normalize_title(&copy.title) == norm_key)
+            .map(|copy| PathBuf::from(copy.skill_path))
+            .or_else(|| {
+                self.store
+                    .list_managed_targets()
+                    .ok()?
+                    .into_iter()
+                    .find(|record| record.agent_id == agent_id && record.skill_key == norm_key)
+                    .map(|record| PathBuf::from(record.target_path))
+            });
         let target_path = match matched_path {
             Some(path) => path,
             None => {
@@ -1323,7 +1368,7 @@ impl AppService {
             .unwrap_or(skill_id);
 
         if agent.agent_type == AgentType::CherryStudio {
-            let cs = CherryStudioAdapter::new().ok_or_else(|| {
+            let cs = CherryStudioAdapter::from_profile(&agent).ok_or_else(|| {
                 AppError::Message(
                     "未找到 Cherry Studio 安装目录（%APPDATA%\\CherryStudio 缺失），无法卸载。"
                         .to_string(),
@@ -1338,10 +1383,10 @@ impl AppService {
         self.store
             .record_uninstall(agent_id, skill_id, &target_path.to_string_lossy(), None)?;
         if self.store.list_managed_targets()?.iter().any(|record| {
-            record.agent_id == agent_id && record.skill_key == normalize_title(skill_id)
-                && Path::new(&record.target_path) == target_path
+            record.agent_id == agent_id && record.skill_key == norm_key
+                && Self::same_path(Path::new(&record.target_path), &target_path)
         }) {
-            self.store.remove_managed_target(&normalize_title(skill_id), agent_id)?;
+            self.store.remove_managed_target(&norm_key, agent_id)?;
         }
         self.invalidate_installed_cache();
         Ok(())
@@ -1352,7 +1397,10 @@ impl AppService {
         skill_id: &str,
         agent_ids: &[String],
     ) -> AppResult<()> {
-        for agent_id in agent_ids {
+        let mut ordered: Vec<&String> = agent_ids.iter().collect();
+        // 先卸载普通 Agent 链接/副本，最后再卸载 Universal 中枢原件，防止中枢先删导致普通 Agent 软链断链漏删
+        ordered.sort_by_key(|id| id.starts_with("universal:"));
+        for agent_id in ordered {
             self.uninstall_skill(skill_id, agent_id)?;
         }
         Ok(())
@@ -1364,12 +1412,22 @@ impl AppService {
             .last_backup(agent_id, skill_id)?
             .ok_or_else(|| AppError::Message("没有可回滚的备份".to_string()))?;
         let target_path = Path::new(&target);
-        if target_path.exists() {
+        if fs::symlink_metadata(target_path).is_ok() {
             return Err(AppError::Message(
                 "目标目录已存在。为避免批量删除，请先手动处理目标目录后再回滚。".to_string(),
             ));
         }
-        copy_dir_all(Path::new(&backup), target_path)?;
+        let backup_path = Path::new(&backup);
+        let symlink_marker = backup_path.join(".symlink-target");
+        if symlink_marker.is_file() {
+            let dest = fs::read_to_string(&symlink_marker)?.trim().to_string();
+            if dest.is_empty() {
+                return Err(AppError::Message("备份的软链接目标路径为空，无法回滚".to_string()));
+            }
+            symlink_or_copy_dir(Path::new(&dest), target_path)?;
+        } else {
+            copy_dir_all(backup_path, target_path)?;
+        }
         self.invalidate_installed_cache();
         Ok(())
     }
@@ -1429,7 +1487,9 @@ impl AppService {
             self.write_uploaded_files(files)?
         };
 
-        self.import_from_source_dir(&source_root, target_agent_ids, conflict_policy)
+        let res = self.import_from_source_dir(&source_root, target_agent_ids, conflict_policy);
+        let _ = fs::remove_dir_all(&source_root);
+        res
     }
 
     fn import_from_source_dir(
@@ -1505,10 +1565,15 @@ impl AppService {
                 .ok_or_else(|| AppError::Message("skill 目录名无效".to_string()))?;
 
             // 先入中枢再扇出
+            let initial_label = if !skill.manifest.name.trim().is_empty() {
+                skill.manifest.name.as_str()
+            } else {
+                skill.manifest.id.as_str()
+            };
             let hub_skill_path = match self.materialize_into_hub(
                 source,
                 skill_dir_name,
-                &skill.manifest.id,
+                initial_label,
                 &conflict_policy,
                 Some("import"),
                 None,
@@ -1526,10 +1591,16 @@ impl AppService {
                     continue;
                 }
             };
+            let (scanned_title, _, _, _) = read_agent_skill_info(&hub_skill_path, false);
+            let canonical_label = if !scanned_title.trim().is_empty() {
+                scanned_title
+            } else {
+                initial_label.to_string()
+            };
             let results = self.fanout_from_hub(
                 &hub,
                 &hub_skill_path,
-                &skill.manifest.id,
+                &canonical_label,
                 skill_dir_name,
                 &target_agent_ids,
                 &conflict_policy,
@@ -1992,7 +2063,7 @@ impl AppService {
             if safe {
                 if let Some(agent) = agents.iter().find(|agent| agent.id == record.agent_id) {
                     if agent.agent_type == AgentType::CherryStudio {
-                        if let Some(adapter) = CherryStudioAdapter::new() { adapter.uninstall_skill(&record.dir_name)?; }
+                        if let Some(adapter) = CherryStudioAdapter::from_profile(agent) { adapter.uninstall_skill(&record.dir_name)?; }
                     } else if agent.agent_type == AgentType::ClaudeCowork {
                         adapter_for(agent).uninstall(&record.dir_name, agent)?;
                     } else { remove_dir_or_symlink(path)?; }
@@ -2024,6 +2095,7 @@ impl AppService {
 
     fn remove_deleted_managed(&self, deleted: &[(String, String)], hub_root: &Path) -> AppResult<()> {
         let records = self.store.list_managed_targets()?;
+        let agents = self.list_agents().unwrap_or_default();
         for (key, dir_name) in deleted {
             let expected = hub_root.join(dir_name);
             for record in records.iter().filter(|record| &record.skill_key == key) {
@@ -2034,7 +2106,22 @@ impl AppService {
                     target.is_dir() && hash_dir(target).ok().as_deref() == Some(record.fingerprint.as_str())
                 };
                 if safe {
-                    remove_dir_or_symlink(target)?;
+                    if let Some(agent) = agents.iter().find(|agent| agent.id == record.agent_id) {
+                        if agent.agent_type == AgentType::CherryStudio {
+                            if let Some(adapter) = CherryStudioAdapter::from_profile(agent) {
+                                let _ = adapter.uninstall_skill(&record.dir_name);
+                            }
+                            if fs::symlink_metadata(target).is_ok() {
+                                remove_dir_or_symlink(target)?;
+                            }
+                        } else if agent.agent_type == AgentType::ClaudeCowork {
+                            adapter_for(agent).uninstall(&record.dir_name, agent)?;
+                        } else {
+                            remove_dir_or_symlink(target)?;
+                        }
+                    } else {
+                        remove_dir_or_symlink(target)?;
+                    }
                     self.store.remove_managed_target(key, &record.agent_id)?;
                 } else {
                     self.store.remove_managed_target(key, &record.agent_id)?;
@@ -2201,11 +2288,17 @@ impl AppService {
                 .and_then(|v| v.to_str())
                 .unwrap_or(&skill_info.name);
 
+            let initial_label = if !skill_info.title.trim().is_empty() {
+                skill_info.title.as_str()
+            } else {
+                skill_info.name.as_str()
+            };
+
             // 先入中枢再扇出
             let hub_skill_path = self.materialize_into_hub(
                 &skill_source_dir,
                 skill_dir_name,
-                &skill_info.name,
+                initial_label,
                 &options.conflict_policy,
                 Some("git"),
                 None,
@@ -2220,11 +2313,18 @@ impl AppService {
                 &hub_skill_path,
             );
 
+            let (scanned_title, _, _, _) = read_agent_skill_info(&hub_skill_path, false);
+            let canonical_label = if !scanned_title.trim().is_empty() {
+                scanned_title
+            } else {
+                initial_label.to_string()
+            };
+
             let hub = self.ensure_hub_agent()?;
             let fanout_res = self.fanout_from_hub(
                 &hub,
                 &hub_skill_path,
-                &skill_info.name,
+                &canonical_label,
                 skill_dir_name,
                 &options.target_agent_ids,
                 &options.conflict_policy,

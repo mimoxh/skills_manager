@@ -11,7 +11,7 @@ use crate::error::{AppError, AppResult};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{Cursor, Write};
+use std::io::{Cursor, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, DateTime, ZipWriter};
@@ -133,7 +133,21 @@ pub fn unpack_zip_to_dir(bytes: &[u8], target: &Path) -> AppResult<()> {
             fs::create_dir_all(parent)?;
         }
         let mut out = fs::File::create(&destination)?;
-        std::io::copy(&mut file, &mut out)?;
+        let mut limited = (&mut file).take(MAX_ZIP_FILE_SIZE + 1);
+        let written = std::io::copy(&mut limited, &mut out)?;
+        if written > MAX_ZIP_FILE_SIZE {
+            let _ = fs::remove_file(&destination);
+            return Err(AppError::Message(format!(
+                "zip 中文件 {} 实际解压大小超过单文件上限，疑似 zip bomb。",
+                relative.display()
+            )));
+        }
+        // 用实际解压字节数修正 total（防 zip header 伪造 size=0）
+        total = total.saturating_sub(file_size).saturating_add(written);
+        if total > MAX_ZIP_TOTAL_SIZE {
+            let _ = fs::remove_file(&destination);
+            return Err(AppError::Message("zip 解压总大小超过上限，疑似 zip bomb。".to_string()));
+        }
 
         // 还原规范化权限：仅 Unix 生效（Windows 无 exec 位）。
         #[cfg(unix)]
@@ -185,7 +199,16 @@ fn collect_dir(
         let file_type = metadata.file_type();
 
         if file_type.is_symlink() {
-            // 中枢应为实体目录；遇到软链按复制内容处理。
+            // 仅允许指向当前 skill 根目录树内部的软链，防止将宿主机外部敏感文件打包上传。
+            let Ok(canonical_root) = fs::canonicalize(root) else {
+                continue;
+            };
+            let Ok(canonical_target) = fs::canonicalize(&child) else {
+                continue;
+            };
+            if !canonical_target.starts_with(&canonical_root) {
+                continue;
+            }
             let real = fs::metadata(&child)?;
             if real.is_dir() {
                 entries.insert(relative.clone(), dir_entry());

@@ -108,13 +108,22 @@ impl<'a> SyncRuntime<'a> {
         let existing_blobs: HashSet<String> =
             self.transport.list(BLOBS_PREFIX)?.into_iter().collect();
         // 读取本设备上一次发布的清单，用于识别"已删除"的 skill 并写墓碑。
-        let previous_entries: HashMap<String, ManifestSkillEntry> = self
+        let previous_manifest: Option<DeviceManifest> = self
             .transport
             .get(&self.manifest_key())?
             .and_then(|bytes| self.unseal(&bytes, &self.device_id).ok())
-            .and_then(|plain| serde_json::from_slice::<DeviceManifest>(&plain).ok())
-            .map(|manifest| manifest.skills)
+            .and_then(|plain| serde_json::from_slice::<DeviceManifest>(&plain).ok());
+        let previous_entries: HashMap<String, ManifestSkillEntry> = previous_manifest
+            .as_ref()
+            .map(|manifest| manifest.skills.clone())
             .unwrap_or_default();
+        let conflict_keys: HashSet<String> = self
+            .store
+            .sync_conflicts()?
+            .into_iter()
+            .map(|c| c.skill_id)
+            .collect();
+        let baseline_map = self.store.list_sync_skill_state()?;
         let snapshots = self.local_snapshots()?;
         let now = chrono::Utc::now().to_rfc3339();
         let mut entries: HashMap<String, ManifestSkillEntry> = HashMap::new();
@@ -129,12 +138,22 @@ impl<'a> SyncRuntime<'a> {
                 self.transport.put(&blob_key, &bytes)?;
                 outcome.blobs_uploaded += 1;
             }
+            let entry_updated_at = previous_entries
+                .get(&skill.key)
+                .filter(|prev| {
+                    !prev.deleted
+                        && prev.hash == hash
+                        && prev.tags == skill.tags
+                        && prev.no_full_coverage == skill.no_full_coverage
+                })
+                .map(|prev| prev.updated_at.clone())
+                .unwrap_or_else(|| now.clone());
             entries.insert(
                 skill.key.clone(),
                 ManifestSkillEntry {
                     name: skill.name.clone(),
                     dir_name: skill.dir_name.clone(),
-                    hash,
+                    hash: hash.clone(),
                     blob: blob_key,
                     version: skill.version.clone(),
                     source_url: skill.source_url.clone(),
@@ -143,15 +162,28 @@ impl<'a> SyncRuntime<'a> {
                     category: None,
                     no_full_coverage: skill.no_full_coverage,
                     deleted: false,
-                    updated_at: now.clone(),
+                    updated_at: entry_updated_at,
                 },
             );
+            // 首次在本机发布的无冲突技能，初始化 baseline，避免对端修改后本机拉取误报冲突
+            if !conflict_keys.contains(&skill.key)
+                && baseline_map
+                    .get(&skill.key)
+                    .and_then(|s| s.last_merged_hash.as_ref())
+                    .is_none()
+            {
+                self.update_baseline(&skill.key, Some(hash))?;
+            }
         }
         outcome.skills = entries.len();
 
-        // 墓碑：上次发布过、本次中枢已不存在的 skill。
+        // 墓碑：上次发布过、本次中枢已不存在的 skill；已存在的墓碑继续保留，避免跨端删除信号丢失。
         for (key, previous) in &previous_entries {
-            if previous.deleted || entries.contains_key(key) {
+            if entries.contains_key(key) {
+                continue;
+            }
+            if previous.deleted {
+                entries.insert(key.clone(), previous.clone());
                 continue;
             }
             entries.insert(
@@ -171,7 +203,36 @@ impl<'a> SyncRuntime<'a> {
                     updated_at: now.clone(),
                 },
             );
+            self.update_baseline(key, None)?;
             outcome.tombstones += 1;
+        }
+
+        // 补充墓碑：曾通过 pull 拉取落盘（有 baseline）但在首次 publish 前即被本机删除的 skill。
+        for (key, state) in &baseline_map {
+            if state.last_merged_hash.is_some()
+                && !entries.contains_key(key)
+                && !previous_entries.contains_key(key)
+            {
+                entries.insert(
+                    key.clone(),
+                    ManifestSkillEntry {
+                        name: key.clone(),
+                        dir_name: key.clone(),
+                        hash: String::new(),
+                        blob: String::new(),
+                        version: None,
+                        source_url: None,
+                        installed_at: None,
+                        tags: Vec::new(),
+                        category: None,
+                        no_full_coverage: false,
+                        deleted: true,
+                        updated_at: now.clone(),
+                    },
+                );
+                self.update_baseline(key, None)?;
+                outcome.tombstones += 1;
+            }
         }
 
         let mut agents: HashMap<String, ManifestAgentMeta> = HashMap::new();
@@ -184,16 +245,32 @@ impl<'a> SyncRuntime<'a> {
             agents.insert(key, ManifestAgentMeta { user_tags: tags });
         }
 
+        let manifest_updated_at = previous_manifest
+            .as_ref()
+            .filter(|prev| prev.agents == agents && outcome.tombstones == 0 && outcome.blobs_uploaded == 0)
+            .and_then(|prev| {
+                // 若所有条目与上次完全一致且 agent 标签未变，保留清单时间戳；否则刷新为 now
+                let entries_unchanged = prev.skills.len() == entries.len()
+                    && entries.iter().all(|(k, v)| {
+                        prev.skills
+                            .get(k)
+                            .map(|p| p.updated_at == v.updated_at && p.deleted == v.deleted)
+                            .unwrap_or(false)
+                    });
+                entries_unchanged.then(|| prev.updated_at.clone())
+            })
+            .unwrap_or_else(|| now.clone());
+
         let manifest = DeviceManifest {
             schema_version: SCHEMA_VERSION,
             device_id: self.device_id.clone(),
             device_name: self.device_name.clone(),
-            updated_at: now,
+            updated_at: manifest_updated_at,
             skills: entries,
             agents,
         };
         let json = serde_json::to_vec(&manifest)?;
-        let bytes = self.seal(&json, &self.device_id)?;
+        let bytes = self.seal_manifest(&json, &self.device_id)?;
         self.transport.put(&self.manifest_key(), &bytes)?;
         Ok(outcome)
     }
@@ -216,7 +293,9 @@ impl<'a> SyncRuntime<'a> {
             let Some(file) = key.strip_prefix(DEVICES_PREFIX) else {
                 continue;
             };
-            let device_id = file.trim_end_matches(".json");
+            let Some(device_id) = file.strip_suffix(".json") else {
+                continue;
+            };
             if device_id.is_empty() || device_id == self.device_id {
                 continue;
             }
@@ -380,6 +459,8 @@ impl<'a> SyncRuntime<'a> {
 
     /// 按 hash 下载 blob、校验并落中枢指定目录（覆盖）。冲突解决复用。
     pub fn apply_remote_blob(&self, dir_name: &str, hash: &str) -> AppResult<()> {
+        validate_skill_dir_name(dir_name)?;
+        validate_sha256_hex(hash)?;
         let blob_key = format!("{BLOBS_PREFIX}{hash}.bin");
         let blob = self.transport.get(&blob_key)?.ok_or_else(|| {
             AppError::Message(format!("缺少远端 blob: {blob_key}"))
@@ -407,6 +488,7 @@ impl<'a> SyncRuntime<'a> {
     /// 清理未被任何设备清单引用的 blob（GC）。
     ///
     /// 仅手动调用：若另一设备刚上传 blob 但尚未写清单，可能被误删；因此不做自动 GC。
+    /// 若任何设备清单读取、解密或解析失败，立即中止并返回错误，绝不误删对象。
     pub fn gc(&self) -> AppResult<GcOutcome> {
         let blobs = self.transport.list(BLOBS_PREFIX)?;
         if blobs.is_empty() {
@@ -414,21 +496,27 @@ impl<'a> SyncRuntime<'a> {
         }
         let mut referenced: HashSet<String> = HashSet::new();
         for key in self.transport.list(DEVICES_PREFIX)? {
-            let Some(bytes) = self.transport.get(&key)? else {
+            let Some(file) = key.strip_prefix(DEVICES_PREFIX) else {
                 continue;
             };
-            let device_id = key
-                .strip_prefix(DEVICES_PREFIX)
-                .unwrap_or("")
-                .trim_end_matches(".json");
-            let Ok(plain) = self.unseal(&bytes, device_id) else {
+            let Some(device_id) = file.strip_suffix(".json") else {
                 continue;
             };
-            if let Ok(manifest) = serde_json::from_slice::<DeviceManifest>(&plain) {
-                for entry in manifest.skills.values() {
-                    if !entry.deleted && !entry.blob.is_empty() {
-                        referenced.insert(entry.blob.clone());
-                    }
+            if device_id.is_empty() {
+                continue;
+            }
+            let bytes = self.transport.get(&key)?.ok_or_else(|| {
+                AppError::Message(format!("GC 中止：无法读取设备清单 {key}"))
+            })?;
+            let plain = self.unseal(&bytes, device_id).map_err(|err| {
+                AppError::Message(format!("GC 中止：设备清单 {key} 解密失败: {err}"))
+            })?;
+            let manifest = serde_json::from_slice::<DeviceManifest>(&plain).map_err(|err| {
+                AppError::Message(format!("GC 中止：设备清单 {key} 解析失败: {err}"))
+            })?;
+            for entry in manifest.skills.values() {
+                if !entry.deleted && !entry.blob.is_empty() {
+                    referenced.insert(entry.blob.clone());
                 }
             }
         }
@@ -463,6 +551,13 @@ impl<'a> SyncRuntime<'a> {
     fn seal(&self, bytes: &[u8], nonce_id: &str) -> AppResult<Vec<u8>> {
         match self.crypto {
             Some(crypto) => crypto.encrypt(bytes, nonce_id),
+            None => Ok(bytes.to_vec()),
+        }
+    }
+
+    fn seal_manifest(&self, bytes: &[u8], aad_id: &str) -> AppResult<Vec<u8>> {
+        match self.crypto {
+            Some(crypto) => crypto.encrypt_random_nonce(bytes, aad_id),
             None => Ok(bytes.to_vec()),
         }
     }
@@ -535,73 +630,131 @@ impl<'a> SyncRuntime<'a> {
         local: &HashMap<String, LocalSkill>,
         remotes: &[(String, DeviceManifest)],
     ) -> AppResult<()> {
-        // skill 标签：远端并集 + 本机，按小写去重排序
-        let mut per_key: HashMap<String, Vec<&ManifestSkillEntry>> = HashMap::new();
-        for (_, manifest) in remotes {
-            for (key, entry) in &manifest.skills {
-                if !entry.deleted {
-                    per_key.entry(key.clone()).or_default().push(entry);
-                }
-            }
+        if remotes.is_empty() {
+            return Ok(());
         }
-        for (key, entries) in per_key {
-            let name = local
-                .get(&key)
-                .map(|skill| skill.name.clone())
-                .or_else(|| entries.first().map(|entry| entry.name.clone()))
-                .unwrap_or_else(|| key.clone());
-            let mut merged: Vec<String> = Vec::new();
-            let mut seen: HashSet<String> = HashSet::new();
-            let push = |tags: &[String], merged: &mut Vec<String>, seen: &mut HashSet<String>| {
-                for tag in tags {
-                    let trimmed = tag.trim();
-                    if trimmed.is_empty() {
-                        continue;
-                    }
-                    if seen.insert(trimmed.to_lowercase()) {
-                        merged.push(trimmed.to_string());
-                    }
-                }
-            };
-            for entry in &entries {
-                push(&entry.tags, &mut merged, &mut seen);
-            }
-            let local_tags = self.store.list_skill_tags(&name)?;
-            push(&local_tags, &mut merged, &mut seen);
-            merged.sort_by_key(|value| value.to_lowercase());
-            if local_tags != merged {
-                self.store.set_skill_tags(&name, merged)?;
-            }
-        }
+        // 读取本机已发布的清单（用于比较最新时间戳 LWW）
+        let self_manifest: Option<DeviceManifest> = self
+            .transport
+            .get(&self.manifest_key())?
+            .and_then(|bytes| self.unseal(&bytes, &self.device_id).ok())
+            .and_then(|plain| serde_json::from_slice::<DeviceManifest>(&plain).ok());
 
-        // agent 标签：按便携键合并
-        for agent in self.store.list_agents()? {
-            let key = portable_agent_key(&agent);
+        let normalize_tags = |tags: &[String]| -> Vec<String> {
             let mut merged: Vec<String> = Vec::new();
             let mut seen: HashSet<String> = HashSet::new();
-            for (_, manifest) in remotes {
-                if let Some(meta) = manifest.agents.get(&key) {
-                    for tag in &meta.user_tags {
-                        let trimmed = tag.trim();
-                        if !trimmed.is_empty() && seen.insert(trimmed.to_lowercase()) {
-                            merged.push(trimmed.to_string());
-                        }
-                    }
-                }
-            }
-            for tag in self.store.list_agent_tags(&agent.id)? {
+            for tag in tags {
                 let trimmed = tag.trim();
                 if !trimmed.is_empty() && seen.insert(trimmed.to_lowercase()) {
                     merged.push(trimmed.to_string());
                 }
             }
             merged.sort_by_key(|value| value.to_lowercase());
-            if self.store.list_agent_tags(&agent.id)? != merged {
-                self.store.set_agent_tags(&agent.id, merged)?;
+            merged
+        };
+
+        // 1. skill 标签与 no_full_coverage：按最新时间戳（LWW）覆盖
+        let mut latest_remote_per_key: HashMap<String, &ManifestSkillEntry> = HashMap::new();
+        for (_, manifest) in remotes {
+            for (key, entry) in &manifest.skills {
+                if entry.deleted {
+                    continue;
+                }
+                match latest_remote_per_key.get(key) {
+                    Some(existing) if existing.updated_at >= entry.updated_at => {}
+                    _ => {
+                        latest_remote_per_key.insert(key.clone(), entry);
+                    }
+                }
+            }
+        }
+
+        let current_no_cov: HashSet<String> = self
+            .store
+            .list_no_full_coverage()?
+            .into_iter()
+            .map(|t| normalize_title(&t))
+            .collect();
+
+        for (key, remote_entry) in latest_remote_per_key {
+            let name = local
+                .get(&key)
+                .map(|skill| skill.name.clone())
+                .unwrap_or_else(|| remote_entry.name.clone());
+            let self_entry = self_manifest
+                .as_ref()
+                .and_then(|m| m.skills.get(&key))
+                .filter(|e| !e.deleted);
+
+            let should_apply_remote = match self_entry {
+                Some(se) => remote_entry.updated_at >= se.updated_at,
+                None => true,
+            };
+            if should_apply_remote {
+                let target_tags = normalize_tags(&remote_entry.tags);
+                let local_tags = normalize_tags(&self.store.list_skill_tags(&name)?);
+                if local_tags != target_tags {
+                    self.store.set_skill_tags(&name, target_tags)?;
+                }
+                let is_marked = current_no_cov.contains(&key);
+                if is_marked != remote_entry.no_full_coverage {
+                    let _ = self.store.toggle_no_full_coverage(&name)?;
+                }
+            }
+        }
+
+        // 2. agent 标签：按便携键与清单 updated_at 最新时间戳（LWW）覆盖
+        let self_updated_at = self_manifest.as_ref().map(|m| m.updated_at.as_str());
+        for agent in self.store.list_agents()? {
+            let key = portable_agent_key(&agent);
+            let mut latest_remote: Option<(&str, &ManifestAgentMeta)> = None;
+            for (_, manifest) in remotes {
+                if let Some(meta) = manifest.agents.get(&key) {
+                    match latest_remote {
+                        Some((ts, _)) if ts >= manifest.updated_at.as_str() => {}
+                        _ => {
+                            latest_remote = Some((manifest.updated_at.as_str(), meta));
+                        }
+                    }
+                }
+            }
+            if let Some((remote_ts, meta)) = latest_remote {
+                let should_apply = match self_updated_at {
+                    Some(local_ts) => remote_ts >= local_ts,
+                    None => true,
+                };
+                if should_apply {
+                    let target_tags = normalize_tags(&meta.user_tags);
+                    let local_tags = normalize_tags(&self.store.list_agent_tags(&agent.id)?);
+                    if local_tags != target_tags {
+                        self.store.set_agent_tags(&agent.id, target_tags)?;
+                    }
+                }
             }
         }
         Ok(())
     }
+}
+
+fn validate_skill_dir_name(dir_name: &str) -> AppResult<()> {
+    let trimmed = dir_name.trim();
+    if trimmed.is_empty() || trimmed.starts_with('.') {
+        return Err(AppError::Message(format!("非法远端技能目录名: {dir_name}")));
+    }
+    let safe = crate::util::safe_relative_path(trimmed)?;
+    if safe.components().count() != 1 {
+        return Err(AppError::Message(format!(
+            "远端技能目录名必须是单层目录: {dir_name}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_sha256_hex(hash: &str) -> AppResult<()> {
+    if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(AppError::Message(format!("非法远端 blob 哈希: {hash}")));
+    }
+    Ok(())
 }
 
 /// agent 便携键：内置类型用 `AgentType::as_str()`，custom 用名称。
@@ -635,19 +788,22 @@ fn read_kdf_salt(transport: &dyn SyncTransport) -> AppResult<Option<[u8; SALT_LE
     let Some(bytes) = transport.get(FORMAT_KEY)? else {
         return Ok(None);
     };
-    let value = match serde_json::from_slice::<serde_json::Value>(&bytes) {
-        Ok(value) => value,
-        Err(_) => return Ok(None),
-    };
+    let value = serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|err| {
+        AppError::Message(format!("远端 _format.json 损坏，拒绝覆盖加密盐: {err}"))
+    })?;
     let Some(salt) = value
         .get("kdfSalt")
         .and_then(|value| value.as_str())
         .and_then(hex_decode)
     else {
-        return Ok(None);
+        return Err(AppError::Message(
+            "远端 _format.json 缺少有效的 kdfSalt 字段，拒绝覆盖加密盐".to_string(),
+        ));
     };
     if salt.len() != SALT_LEN {
-        return Ok(None);
+        return Err(AppError::Message(
+            "远端 _format.json 中 kdfSalt 长度无效，拒绝覆盖加密盐".to_string(),
+        ));
     }
     let mut out = [0u8; SALT_LEN];
     out.copy_from_slice(&salt);
@@ -820,9 +976,17 @@ mod tests {
         let runtime_b = SyncRuntime::new(&store_b, &transport, Some(&crypto), hub_b.path().to_path_buf()).unwrap();
         runtime_b.pull().unwrap();
 
-        let mut tags = store_b.list_skill_tags("demo").unwrap();
-        tags.sort();
-        assert_eq!(tags, vec!["AI".to_string(), "写作".to_string()]);
+        // 最新时间戳覆盖（LWW）：A 发布了 ["AI"]，B 拉取后以最新远端为准覆盖为 ["AI"]
+        let tags = store_b.list_skill_tags("demo").unwrap();
+        assert_eq!(tags, vec!["AI".to_string()]);
+
+        // B 随后修改标签为 ["写作"]（并清空 "AI"）且标记 no_full_coverage 后发布，A 拉取应被覆盖为 ["写作"]
+        store_b.set_skill_tags("demo", vec!["写作".into()]).unwrap();
+        store_b.toggle_no_full_coverage("demo").unwrap();
+        runtime_b.publish().unwrap();
+        runtime_a.pull().unwrap();
+        assert_eq!(store_a.list_skill_tags("demo").unwrap(), vec!["写作".to_string()]);
+        assert!(store_a.list_no_full_coverage().unwrap().contains(&"Demo".to_string()));
     }
 
     fn custom_agent(id: &str, name: &str) -> AgentProfile {
@@ -860,9 +1024,15 @@ mod tests {
         let runtime_b = SyncRuntime::new(&store_b, &transport, Some(&crypto), hub_b.path().to_path_buf()).unwrap();
         runtime_b.pull().unwrap();
 
-        let mut tags = store_b.list_agent_tags("b1").unwrap();
-        tags.sort();
-        assert_eq!(tags, vec!["AI".to_string(), "写作".to_string()]);
+        // 最新时间戳覆盖（LWW）：B 拉取后覆盖为 A 最新发布的 ["AI"]
+        let tags = store_b.list_agent_tags("b1").unwrap();
+        assert_eq!(tags, vec!["AI".to_string()]);
+
+        // B 更新为 ["写作"] 并发布后，A 拉取应更新为 ["写作"]
+        store_b.set_agent_tags("b1", vec!["写作".into()]).unwrap();
+        runtime_b.publish().unwrap();
+        runtime_a.pull().unwrap();
+        assert_eq!(store_a.list_agent_tags("a1").unwrap(), vec!["写作".to_string()]);
     }
 
     #[test]
@@ -938,5 +1108,74 @@ mod tests {
         // enclosed_name 会拒绝 ../，条目被跳过，不会逃逸到 target 根之外
         unpack_zip_to_dir(&buffer, &out).unwrap();
         assert!(!target.path().join("escape.txt").exists());
+    }
+
+    #[test]
+    fn tombstone_persists_across_multiple_publishes() {
+        let bucket_dir = tempfile::tempdir().unwrap();
+        let transport = LocalDirTransport::new(bucket_dir.path()).unwrap();
+        let salt = [21u8; SALT_LEN];
+        let crypto = crypto(&salt);
+
+        let state_a = tempfile::tempdir().unwrap();
+        let hub_a = tempfile::tempdir().unwrap();
+        let store_a = device(&transport, state_a.path(), hub_a.path());
+        write_skill(hub_a.path(), "demo", "# Demo");
+        let runtime_a = SyncRuntime::new(&store_a, &transport, Some(&crypto), hub_a.path().to_path_buf()).unwrap();
+        runtime_a.publish().unwrap();
+
+        let state_b = tempfile::tempdir().unwrap();
+        let hub_b = tempfile::tempdir().unwrap();
+        let store_b = device(&transport, state_b.path(), hub_b.path());
+        let runtime_b = SyncRuntime::new(&store_b, &transport, Some(&crypto), hub_b.path().to_path_buf()).unwrap();
+        runtime_b.pull().unwrap();
+
+        // A 删除技能并连续发布两次（模拟 60s 轮询再次触发 publish）
+        remove_dir_or_symlink(&hub_a.path().join("demo")).unwrap();
+        runtime_a.publish().unwrap();
+        runtime_a.publish().unwrap();
+
+        // B 此时上线 pull，仍应收到删除墓碑
+        let pulled = runtime_b.pull().unwrap();
+        assert_eq!(pulled.deleted, 1);
+        assert!(!hub_b.path().join("demo").exists());
+    }
+
+    #[test]
+    fn gc_aborts_when_any_device_manifest_fails_to_unseal() {
+        let bucket_dir = tempfile::tempdir().unwrap();
+        let transport = LocalDirTransport::new(bucket_dir.path()).unwrap();
+        let salt = [23u8; SALT_LEN];
+        let crypto = crypto(&salt);
+
+        let state_a = tempfile::tempdir().unwrap();
+        let hub_a = tempfile::tempdir().unwrap();
+        let store_a = device(&transport, state_a.path(), hub_a.path());
+        write_skill(hub_a.path(), "demo", "# Demo");
+        let runtime_a = SyncRuntime::new(&store_a, &transport, Some(&crypto), hub_a.path().to_path_buf()).unwrap();
+        runtime_a.publish().unwrap();
+
+        // 写入一个损坏的设备清单
+        transport.put("devices/device-corrupt.json", b"corrupted-ciphertext").unwrap();
+        assert!(runtime_a.gc().is_err());
+        // 原有 blob 绝不能被误删
+        assert_eq!(transport.list("blobs/").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn apply_remote_blob_rejects_path_traversal_and_invalid_hash() {
+        let bucket_dir = tempfile::tempdir().unwrap();
+        let transport = LocalDirTransport::new(bucket_dir.path()).unwrap();
+        let state_a = tempfile::tempdir().unwrap();
+        let hub_a = tempfile::tempdir().unwrap();
+        let store_a = device(&transport, state_a.path(), hub_a.path());
+        let runtime = SyncRuntime::new(&store_a, &transport, None, hub_a.path().to_path_buf()).unwrap();
+
+        let valid_hash = "a".repeat(64);
+        assert!(runtime.apply_remote_blob("../escape", &valid_hash).is_err());
+        assert!(runtime.apply_remote_blob(".", &valid_hash).is_err());
+        assert!(runtime.apply_remote_blob("", &valid_hash).is_err());
+        assert!(runtime.apply_remote_blob("a/b", &valid_hash).is_err());
+        assert!(runtime.apply_remote_blob("demo", "not-a-valid-sha256").is_err());
     }
 }

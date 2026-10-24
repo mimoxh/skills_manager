@@ -7,12 +7,11 @@ use crate::{
 };
 use std::{
     collections::HashMap,
-    fs::{self, File},
-    io::{Cursor, Read},
+    fs,
+    io::Read,
     path::{Path, PathBuf},
     time::Duration,
 };
-use zip::ZipArchive;
 
 const MAX_REMOTE_ZIP_BYTES: u64 = 100 * 1024 * 1024; // 100 MB
 
@@ -35,20 +34,42 @@ pub struct ParsedGitUrl {
 /// - https://github.com/owner/repo/blob/branch/subpath/SKILL.md
 /// - git@github.com:owner/repo.git
 /// - owner/repo 或 owner/repo/tree/branch/subpath
+fn validate_git_segment(value: &str, label: &str) -> AppResult<()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed == "."
+        || trimmed == ".."
+        || trimmed.starts_with('-')
+        || trimmed.contains("..")
+        || trimmed.contains('\\')
+        || trimmed.contains('/')
+        || trimmed.chars().any(|c| c.is_control() || c.is_whitespace())
+    {
+        return Err(AppError::Message(format!("非法的 Git {label}: {value}")));
+    }
+    Ok(())
+}
+
 pub fn parse_git_url(raw: &str) -> AppResult<ParsedGitUrl> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(AppError::Message("Git URL 不能为空".to_string()));
     }
+    if trimmed.starts_with('-') || trimmed.contains('\\') {
+        return Err(AppError::Message(format!("非法的 Git 仓库地址: '{trimmed}'")));
+    }
 
     // 格式 1: git@github.com:owner/repo.git
     if let Some(ssh_part) = trimmed.strip_prefix("git@") {
         if let Some((host, path)) = ssh_part.split_once(':') {
+            validate_git_segment(host, "host")?;
             let path = path.trim_end_matches(".git").trim_matches('/');
             let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
             if segments.len() >= 2 {
                 let owner = segments[0].to_string();
                 let repo = segments[1].to_string();
+                validate_git_segment(&owner, "owner")?;
+                validate_git_segment(&repo, "repo")?;
                 let clone_url = format!("https://{}/{}/{}.git", host, owner, repo);
                 return Ok(ParsedGitUrl {
                     raw_url: trimmed.to_string(),
@@ -71,6 +92,10 @@ pub fn parse_git_url(raw: &str) -> AppResult<ParsedGitUrl> {
 
     // 格式 2: HTTP(S) URL
     let without_scheme = if let Some(idx) = url_str.find("://") {
+        let scheme = &url_str[..idx];
+        if !matches!(scheme, "https" | "http" | "ssh" | "git") {
+            return Err(AppError::Message(format!("不支持的 Git URL 协议: {scheme}")));
+        }
         &url_str[idx + 3..]
     } else {
         &url_str
@@ -89,26 +114,37 @@ pub fn parse_git_url(raw: &str) -> AppResult<ParsedGitUrl> {
     }
 
     let host = segments[0];
+    validate_git_segment(host, "host")?;
     let is_github = host.contains("github.com");
     let owner = segments[1].to_string();
     let repo = segments[2].trim_end_matches(".git").to_string();
+    validate_git_segment(&owner, "owner")?;
+    validate_git_segment(&repo, "repo")?;
 
     let mut branch = None;
     let mut subpath = None;
 
     // 解析 /tree/{branch}/... 或 /blob/{branch}/...
     if segments.len() >= 5 && (segments[3] == "tree" || segments[3] == "blob") {
-        branch = Some(segments[4].to_string());
+        let branch_val = segments[4].to_string();
+        validate_git_segment(&branch_val, "branch")?;
+        branch = Some(branch_val);
         if segments.len() > 5 {
             let sub_segments = &segments[5..];
             let joined = sub_segments.join("/");
             // 如果末尾是具体文件如 SKILL.md 或 skill.json，截取其所在目录
-            if joined.ends_with(".md") || joined.ends_with(".json") || joined.ends_with(".yaml") || joined.ends_with(".yml") {
-                if let Some((dir, _)) = joined.rsplit_once('/') {
-                    subpath = Some(dir.to_string());
-                }
+            let raw_sub = if joined.ends_with(".md")
+                || joined.ends_with(".json")
+                || joined.ends_with(".yaml")
+                || joined.ends_with(".yml")
+            {
+                joined.rsplit_once('/').map(|(dir, _)| dir.to_string())
             } else {
-                subpath = Some(joined);
+                Some(joined)
+            };
+            if let Some(raw_sub) = raw_sub {
+                let safe = crate::util::safe_relative_path(&raw_sub)?;
+                subpath = Some(safe.to_string_lossy().replace('\\', "/"));
             }
         }
     }
@@ -139,7 +175,7 @@ impl RemoteFetcher {
     /// 拉取远端源码到本地临时/缓存目录。
     /// 策略：优先使用系统 git clone --depth 1；若失败或无 git，且为 GitHub，回退到 Zip Archive 下载。
     pub fn fetch(&self, parsed: &ParsedGitUrl) -> AppResult<PathBuf> {
-        let repo_dir_name = format!("{}_{}", parsed.owner, parsed.repo);
+        let repo_dir_name = crate::util::safe_label(&format!("{}_{}", parsed.owner, parsed.repo));
         let target_dir = self.cache_root.join(&repo_dir_name);
 
         // 如果之前已经拉取过且有效，清理旧目录重新克隆以确保最新
@@ -175,7 +211,7 @@ impl RemoteFetcher {
         if let Some(branch) = &parsed.branch {
             cmd.arg("--branch").arg(branch);
         }
-        cmd.arg(&parsed.clone_url).arg(target_dir);
+        cmd.arg("--").arg(&parsed.clone_url).arg(target_dir);
 
         let output = cmd.output().map_err(|e| format!("执行 git 失败: {}", e))?;
         if output.status.success() {
@@ -226,34 +262,8 @@ impl RemoteFetcher {
             AppError::Message("通过 GitHub Archive Zip 下载仓库失败".to_string())
         })?;
 
-        // 解压 zip 包
-        let cursor = Cursor::new(bytes);
-        let mut archive = ZipArchive::new(cursor)
-            .map_err(|e| AppError::Message(format!("解析 Zip 失败: {}", e)))?;
-
-        for i in 0..archive.len() {
-            let mut file = archive
-                .by_index(i)
-                .map_err(|e| AppError::Message(format!("解压条目失败: {}", e)))?;
-            let enclosed = match file.enclosed_name() {
-                Some(name) => name.to_owned(),
-                None => continue,
-            };
-            let out_path = target_dir.join(enclosed);
-            if file.is_dir() {
-                fs::create_dir_all(&out_path)
-                    .map_err(|e| AppError::Message(format!("创建目录失败: {}", e)))?;
-            } else {
-                if let Some(parent) = out_path.parent() {
-                    fs::create_dir_all(parent)
-                        .map_err(|e| AppError::Message(format!("创建父目录失败: {}", e)))?;
-                }
-                let mut out_file = File::create(&out_path)
-                    .map_err(|e| AppError::Message(format!("写入文件失败: {}", e)))?;
-                std::io::copy(&mut file, &mut out_file)
-                    .map_err(|e| AppError::Message(format!("写入内容失败: {}", e)))?;
-            }
-        }
+        // 复用带 Zip Bomb / Zip Slip 防护的解压函数
+        crate::sync::unpack_zip_to_dir(&bytes, target_dir)?;
 
         // GitHub zip 包通常第一层为 {repo}-{branch} 目录，如果存在且唯一，返回该子目录
         if let Ok(entries) = fs::read_dir(target_dir) {
@@ -274,7 +284,8 @@ impl RemoteFetcher {
 /// 探测本地目录（通常为拉取下来的远端仓库）中的 Skills 与 MCP 配置
 pub fn inspect_directory(root: &Path, subpath: Option<&str>) -> AppResult<(Vec<DetectedSkillInfo>, Vec<DetectedMcpInfo>, RemoteSourceType)> {
     let target_root = if let Some(sub) = subpath {
-        let joined = root.join(sub);
+        let safe_sub = crate::util::safe_relative_path(sub)?;
+        let joined = root.join(safe_sub);
         if joined.exists() {
             joined
         } else {
@@ -596,5 +607,16 @@ mod tests {
         assert_eq!(mcps.len(), 1);
         assert_eq!(mcps[0].name, "mcp-test");
         assert_eq!(kind, RemoteSourceType::McpServer);
+    }
+
+    #[test]
+    fn parse_git_url_rejects_dash_prefix_and_traversal() {
+        assert!(parse_git_url("--upload-pack=evil/repo").is_err());
+        assert!(parse_git_url("https://github.com/-owner/repo").is_err());
+        assert!(parse_git_url("https://github.com/owner/-repo").is_err());
+        assert!(parse_git_url("https://github.com/owner/repo/tree/-branch/sub").is_err());
+        assert!(parse_git_url("https://github.com/owner/..").is_err());
+        assert!(parse_git_url("https://github.com/owner/repo/tree/main/../../etc").is_err());
+        assert!(parse_git_url(r"git@github.com:..\..\foo/bar.git").is_err());
     }
 }

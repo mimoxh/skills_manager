@@ -43,10 +43,18 @@ impl SyncTransport for LocalDirTransport {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        // 先写临时文件再原子替换，避免读到半写对象。
-        let tmp = path.with_extension("tmp-upload");
+        // 先写带唯一后缀的临时文件再原子替换，避免并发写入争用同一临时文件或读到半写对象。
+        let tmp_name = format!(
+            ".{}.{}.tmp-upload",
+            path.file_name().and_then(|n| n.to_str()).unwrap_or("obj"),
+            uuid::Uuid::new_v4().simple()
+        );
+        let tmp = path.with_file_name(tmp_name);
         fs::write(&tmp, bytes)?;
-        fs::rename(&tmp, &path)?;
+        if let Err(err) = fs::rename(&tmp, &path) {
+            let _ = fs::remove_file(&tmp);
+            return Err(AppError::Io(err));
+        }
         Ok(())
     }
 
@@ -64,6 +72,11 @@ impl SyncTransport for LocalDirTransport {
         for entry in WalkDir::new(&self.root).into_iter().filter_map(Result::ok) {
             if !entry.file_type().is_file() {
                 continue;
+            }
+            if let Some(name) = entry.file_name().to_str() {
+                if name.ends_with(".tmp-upload") {
+                    continue;
+                }
             }
             let relative = match entry.path().strip_prefix(&self.root) {
                 Ok(value) => value,

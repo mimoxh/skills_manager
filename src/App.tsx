@@ -45,9 +45,17 @@ export default function App() {
   }, []);
 
   async function handleUploadChange(event: ChangeEvent<HTMLInputElement>) {
-    const files = [...(event.target.files ?? [])];
+    const rawFiles = [...(event.target.files ?? [])];
+    if (!rawFiles.length) return;
+    const uploadName = rawFiles[0]?.webkitRelativePath
+      ? rawFiles[0].webkitRelativePath.split("/")[0]
+      : (rawFiles[0]?.name ?? "upload");
+    const files = rawFiles.filter((f) => {
+      const rel = `/${(f.webkitRelativePath || f.name).replace(/\\/g, "/")}`;
+      return !/\/(\.git|node_modules|target|\.venv|__pycache__|dist|build)\//.test(rel);
+    });
     try {
-      await state.importFiles(files[0]?.name ?? "upload", await Promise.all(files.map((f) => fileToUpload(f))));
+      await state.importFiles(uploadName, await Promise.all(files.map((f) => fileToUpload(f))));
     } catch (error) {
       state.showToast(String(error), "error");
     } finally {
@@ -58,8 +66,8 @@ export default function App() {
 
   function navigateTo(view: View, filter?: SkillsFilter) {
     setView(view);
-    if (view === "skills" && filter) {
-      setSkillsFilter(filter);
+    if (view === "skills") {
+      setSkillsFilter(filter ?? "all");
     }
   }
 
@@ -175,6 +183,7 @@ export default function App() {
             onSyncNow={state.syncNow}
             onResolveSyncConflict={state.resolveSyncConflict}
             onSyncGc={state.runSyncGc}
+            onRefreshMcp={state.refreshMcpServers}
             agents={state.agents}
           />
         );

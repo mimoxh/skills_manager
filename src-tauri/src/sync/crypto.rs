@@ -68,6 +68,7 @@ impl Crypto {
     fn nonce_for(&self, nonce_id: &str) -> Nonce {
         let mut mac = <HmacSha256 as Mac>::new_from_slice(self.key.as_ref())
             .expect("HMAC 接受任意长度密钥");
+        mac.update(b"skb1-deterministic-nonce\0");
         mac.update(nonce_id.as_bytes());
         let tag = mac.finalize().into_bytes();
         let mut nonce = [0u8; NONCE_LEN];
@@ -75,17 +76,15 @@ impl Crypto {
         Nonce::from(nonce)
     }
 
-    /// 加密。`nonce_id` 必须是两端都能确定的稳定标识（内容哈希 / deviceId）。
-    pub fn encrypt(&self, plaintext: &[u8], nonce_id: &str) -> AppResult<Vec<u8>> {
+    fn encrypt_with_nonce(&self, plaintext: &[u8], nonce: &Nonce, aad_id: &str) -> AppResult<Vec<u8>> {
         let cipher = ChaCha20Poly1305::new_from_slice(self.key.as_ref())
             .map_err(|_| AppError::Message("密钥长度无效".to_string()))?;
-        let nonce = self.nonce_for(nonce_id);
         let ciphertext = cipher
             .encrypt(
-                &nonce,
+                nonce,
                 Payload {
                     msg: plaintext,
-                    aad: nonce_id.as_bytes(),
+                    aad: aad_id.as_bytes(),
                 },
             )
             .map_err(|_| AppError::Message("加密失败".to_string()))?;
@@ -93,9 +92,24 @@ impl Crypto {
         let mut out = Vec::with_capacity(HEADER_LEN + ciphertext.len());
         out.extend_from_slice(MAGIC);
         out.push(VERSION);
-        out.extend_from_slice(&nonce);
+        out.extend_from_slice(nonce);
         out.extend_from_slice(&ciphertext);
         Ok(out)
+    }
+
+    /// 确定性加密（仅用于内容寻址的不可变对象，如 `blobs/<hash>.bin`）。
+    /// `nonce_id` 必须是内容哈希，保证同明文同密文，避免 Nonce 复用。
+    pub fn encrypt(&self, plaintext: &[u8], nonce_id: &str) -> AppResult<Vec<u8>> {
+        let nonce = self.nonce_for(nonce_id);
+        self.encrypt_with_nonce(plaintext, &nonce, nonce_id)
+    }
+
+    /// 随机 Nonce 加密（用于可变对象，如 `devices/<deviceId>.json`），防止同一 deviceId 下重用 Nonce。
+    /// `aad_id` 作为 AAD 绑定身份，`decrypt` 直接从密文头读取 Nonce，完全兼容。
+    pub fn encrypt_random_nonce(&self, plaintext: &[u8], aad_id: &str) -> AppResult<Vec<u8>> {
+        let mut raw_nonce = [0u8; NONCE_LEN];
+        rand::thread_rng().fill_bytes(&mut raw_nonce);
+        self.encrypt_with_nonce(plaintext, &Nonce::from(raw_nonce), aad_id)
     }
 
     /// 解密。篡改 / 口令错误 / `nonce_id` 不符都会失败。
@@ -197,5 +211,16 @@ mod tests {
     #[test]
     fn short_salt_rejected() {
         assert!(Crypto::from_password("pw", b"short").is_err());
+    }
+
+    #[test]
+    fn random_nonce_differs_across_encryptions_and_decrypts_cleanly() {
+        let crypto = crypto();
+        let a = crypto.encrypt_random_nonce(b"manifest-v1", "device-1").unwrap();
+        let b = crypto.encrypt_random_nonce(b"manifest-v1", "device-1").unwrap();
+        assert_ne!(a, b);
+        assert_eq!(crypto.decrypt(&a, "device-1").unwrap(), b"manifest-v1");
+        assert_eq!(crypto.decrypt(&b, "device-1").unwrap(), b"manifest-v1");
+        assert!(crypto.decrypt(&a, "device-2").is_err());
     }
 }

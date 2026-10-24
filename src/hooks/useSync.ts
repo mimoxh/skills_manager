@@ -1,27 +1,47 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { ToastType } from "../components/ui/Toast";
 import type { PendingHubSkill, SyncConfig, SyncConflict, SyncConflictChoice, SyncStatus } from "../types";
 
 interface Props {
   showToast: (text: string, type?: ToastType) => void;
+  onSynced?: () => Promise<void>;
 }
 
-export function useSync({ showToast }: Props) {
+export function useSync({ showToast, onSynced }: Props) {
   const [syncConfig, setSyncConfig] = useState<SyncConfig | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [syncConflicts, setSyncConflicts] = useState<SyncConflict[]>([]);
   const [syncBusy, setSyncBusy] = useState(false);
   const [pendingHubSkills, setPendingHubSkills] = useState<PendingHubSkill[]>([]);
+  const refreshingPendingRef = useRef(false);
+  const lastPendingKeysRef = useRef<string | null>(null);
 
-  async function refreshPendingHubSkills() {
-    const pending = await api.listPendingHubSkills();
-    setPendingHubSkills(pending);
-    const unread = pending.filter((skill) => !skill.notified);
-    if (unread.length > 0) {
-      showToast(unread[0].message ?? `已同步 ${unread.length} 个新 Skill 到中枢，可选择要分发的 Agent。`, "info");
-      await api.acknowledgePendingHubSkills(unread.map((skill) => skill.skillKey));
-      setPendingHubSkills(pending.map((skill) => ({ ...skill, notified: true })));
+  async function refreshPendingHubSkills(notifySynced = true) {
+    if (refreshingPendingRef.current) return;
+    refreshingPendingRef.current = true;
+    try {
+      const pending = await api.listPendingHubSkills();
+      const nextKeys = pending.map((skill) => `${skill.skillKey}:${skill.title}:${skill.dirName}`).join("|");
+      const changed = lastPendingKeysRef.current !== null && lastPendingKeysRef.current !== nextKeys;
+      lastPendingKeysRef.current = nextKeys;
+
+      const unread = pending.filter((skill) => !skill.notified);
+      if (unread.length > 0) {
+        showToast(unread[0].message ?? `已同步 ${unread.length} 个新 Skill 到中枢，可选择要分发的 Agent。`, "info");
+        await api.acknowledgePendingHubSkills(unread.map((skill) => skill.skillKey));
+        setPendingHubSkills(pending.map((skill) => ({ ...skill, notified: true })));
+      } else {
+        setPendingHubSkills(pending);
+      }
+
+      if (notifySynced && (unread.length > 0 || changed)) {
+        await onSynced?.();
+      }
+    } catch (error) {
+      console.warn("Failed to refresh pending hub skills:", error);
+    } finally {
+      refreshingPendingRef.current = false;
     }
   }
 
@@ -86,7 +106,8 @@ export function useSync({ showToast }: Props) {
       const status = await api.syncNow();
       setSyncStatus(status);
       await refreshSync();
-      await refreshPendingHubSkills();
+      await onSynced?.();
+      await refreshPendingHubSkills(false);
       showToast(
         status.pendingConflicts > 0
           ? `同步完成，有 ${status.pendingConflicts} 个冲突待处理。`
@@ -119,6 +140,8 @@ export function useSync({ showToast }: Props) {
       const status = await api.syncResolveConflict(skillId, choice);
       setSyncStatus(status);
       await refreshSync();
+      await onSynced?.();
+      await refreshPendingHubSkills(false);
       showToast("已处理冲突。", "success");
     } catch (error) {
       showToast(String(error), "error");

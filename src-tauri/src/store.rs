@@ -120,8 +120,11 @@ pub struct PendingHubSkill {
     pub message: Option<String>,
 }
 
+const MAX_OPERATION_RECORDS: usize = 500;
+
 pub struct AppStore {
     state: Mutex<AppState>,
+    last_disk_stamp: Mutex<Option<(std::time::SystemTime, u64)>>,
     state_path: PathBuf,
     data_dir: PathBuf,
 }
@@ -147,10 +150,16 @@ impl AppStore {
         )))
     }
 
+    fn disk_stamp(path: &std::path::Path) -> Option<(std::time::SystemTime, u64)> {
+        let meta = fs::metadata(path).ok()?;
+        Some((meta.modified().ok()?, meta.len()))
+    }
+
     /// 从指定数据目录加载状态；state.json 损坏时保留原文件并回退默认状态，绝不静默覆盖用户数据。
     fn load_from(data_dir: PathBuf) -> AppResult<Self> {
         fs::create_dir_all(&data_dir)?;
         let state_path = data_dir.join("state.json");
+        let stamp = Self::disk_stamp(&state_path);
         let state = if state_path.exists() {
             let text = fs::read_to_string(&state_path)?;
             match serde_json::from_str::<AppState>(&text) {
@@ -171,9 +180,33 @@ impl AppStore {
         };
         Ok(Self {
             state: Mutex::new(state),
+            last_disk_stamp: Mutex::new(stamp),
             state_path,
             data_dir,
         })
+    }
+
+    /// 获取状态锁并自动检测磁盘 `state.json` 是否被外部进程（如 MCP Server / CLI / GUI）更新。
+    fn lock_synced(&self) -> AppResult<std::sync::MutexGuard<'_, AppState>> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        if let Some(current_stamp) = Self::disk_stamp(&self.state_path) {
+            let mut last_stamp = self
+                .last_disk_stamp
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if *last_stamp != Some(current_stamp) {
+                if let Ok(text) = fs::read_to_string(&self.state_path) {
+                    if let Ok(disk_state) = serde_json::from_str::<AppState>(&text) {
+                        *state = disk_state;
+                        *last_stamp = Some(current_stamp);
+                    }
+                }
+            }
+        }
+        Ok(state)
     }
 
     /// 从指定数据目录加载（同机双开 / 便携实例 / 测试）。
@@ -192,18 +225,30 @@ impl AppStore {
     }
 
     fn save(&self) -> AppResult<()> {
-        let state = self
+        let mut state = self
             .state
             .lock()
             .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        if state.operations.len() > MAX_OPERATION_RECORDS {
+            let excess = state.operations.len() - MAX_OPERATION_RECORDS;
+            state.operations.drain(0..excess);
+        }
         if let Some(parent) = self.state_path.parent() {
             fs::create_dir_all(parent)?;
         }
         let json = serde_json::to_string_pretty(&*state)?;
-        // 先写临时文件再原子替换，避免崩溃时产生半写损坏的 state.json
-        let tmp_path = self.state_path.with_extension("json.tmp");
+        // 使用唯一临时文件名再原子替换，避免多进程/多线程并发写同一个 .tmp 冲突或产生半写损坏文件
+        let tmp_path = self
+            .state_path
+            .with_extension(format!("json.{}.tmp", uuid::Uuid::new_v4().simple()));
         fs::write(&tmp_path, json)?;
-        fs::rename(&tmp_path, &self.state_path)?;
+        if let Err(err) = fs::rename(&tmp_path, &self.state_path) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(AppError::Io(err));
+        }
+        if let Ok(mut last_stamp) = self.last_disk_stamp.lock() {
+            *last_stamp = Self::disk_stamp(&self.state_path);
+        }
         Ok(())
     }
 
@@ -220,10 +265,7 @@ impl AppStore {
     }
 
     pub fn save_agent(&self, profile: &AgentProfile) -> AppResult<()> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let mut state = self.lock_synced()?;
         if let Some(existing) = state.agents.iter_mut().find(|a| a.id == profile.id) {
             *existing = profile.clone();
         } else {
@@ -234,10 +276,7 @@ impl AppStore {
     }
 
     pub fn remove_agent(&self, agent_id: &str) -> AppResult<()> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let mut state = self.lock_synced()?;
         state.agents.retain(|a| a.id != agent_id);
         state.installs.retain(|i| i.agent_id != agent_id);
         state.managed_targets.retain(|target| target.agent_id != agent_id);
@@ -247,30 +286,27 @@ impl AppStore {
     }
 
     pub fn list_agents(&self) -> AppResult<Vec<AgentProfile>> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let state = self.lock_synced()?;
         let mut agents = state.agents.clone();
         agents.sort_by(|a, b| a.name.cmp(&b.name).then(a.skills_path.cmp(&b.skills_path)));
         Ok(agents)
     }
 
     pub fn list_install_records(&self) -> AppResult<Vec<(String, String, String, String)>> {
-        let state = self.state.lock().map_err(|_| AppError::Message("Store lock poisoned".into()))?;
+        let state = self.lock_synced()?;
         Ok(state.installs.iter().map(|record| (
             record.agent_id.clone(), record.skill_id.clone(), record.target_path.clone(), record.fingerprint.clone()
         )).collect())
     }
 
     pub fn list_managed_targets(&self) -> AppResult<Vec<ManagedTargetRecord>> {
-        let state = self.state.lock().map_err(|_| AppError::Message("Store lock poisoned".into()))?;
+        let state = self.lock_synced()?;
         Ok(state.managed_targets.clone())
     }
 
     pub fn upsert_managed_target(&self, record: ManagedTargetRecord) -> AppResult<()> {
         {
-            let mut state = self.state.lock().map_err(|_| AppError::Message("Store lock poisoned".into()))?;
+            let mut state = self.lock_synced()?;
             state.managed_targets.retain(|item| !(item.skill_key == record.skill_key && item.agent_id == record.agent_id));
             state.managed_targets.push(record);
         }
@@ -279,20 +315,20 @@ impl AppStore {
 
     pub fn remove_managed_target(&self, skill_key: &str, agent_id: &str) -> AppResult<()> {
         {
-            let mut state = self.state.lock().map_err(|_| AppError::Message("Store lock poisoned".into()))?;
+            let mut state = self.lock_synced()?;
             state.managed_targets.retain(|item| !(item.skill_key == skill_key && item.agent_id == agent_id));
         }
         self.save()
     }
 
     pub fn list_pending_hub_skills(&self) -> AppResult<Vec<PendingHubSkill>> {
-        let state = self.state.lock().map_err(|_| AppError::Message("Store lock poisoned".into()))?;
+        let state = self.lock_synced()?;
         Ok(state.pending_hub_skills.clone())
     }
 
     pub fn add_pending_hub_skill(&self, skill: PendingHubSkill) -> AppResult<()> {
         {
-            let mut state = self.state.lock().map_err(|_| AppError::Message("Store lock poisoned".into()))?;
+            let mut state = self.lock_synced()?;
             if let Some(existing) = state.pending_hub_skills.iter_mut().find(|item| item.skill_key == skill.skill_key) {
                 if skill.message.is_some() && existing.message != skill.message {
                     existing.message = skill.message;
@@ -309,7 +345,7 @@ impl AppStore {
 
     pub fn acknowledge_pending_hub_skills(&self, keys: &[String]) -> AppResult<()> {
         {
-            let mut state = self.state.lock().map_err(|_| AppError::Message("Store lock poisoned".into()))?;
+            let mut state = self.lock_synced()?;
             for item in &mut state.pending_hub_skills {
                 if keys.contains(&item.skill_key) { item.notified = true; }
             }
@@ -319,7 +355,7 @@ impl AppStore {
 
     pub fn dismiss_pending_hub_skill(&self, skill_key: &str) -> AppResult<()> {
         {
-            let mut state = self.state.lock().map_err(|_| AppError::Message("Store lock poisoned".into()))?;
+            let mut state = self.lock_synced()?;
             state.pending_hub_skills.retain(|item| item.skill_key != skill_key);
         }
         self.save()
@@ -330,10 +366,7 @@ impl AppStore {
         agent_id: &str,
         skill_id: &str,
     ) -> AppResult<Option<String>> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let state = self.lock_synced()?;
         Ok(state
             .installs
             .iter()
@@ -349,10 +382,7 @@ impl AppStore {
         target_path: &str,
         action: &str,
         backup_path: Option<&str>,
-    ) -> AppResult<()> {        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+    ) -> AppResult<()> {        let mut state = self.lock_synced()?;
         let now = chrono::Utc::now().to_rfc3339();
 
         if let Some(existing) = state
@@ -391,10 +421,7 @@ impl AppStore {
 
     /// 批量记录安装：一次锁内应用全部变更 + 一次 save，避免逐 agent 安装时 N 次全量重写 state.json。
     pub fn record_installs(&self, records: &[InstallRecordInput]) -> AppResult<()> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let mut state = self.lock_synced()?;
         let now = chrono::Utc::now().to_rfc3339();
         for record in records {
             if let Some(existing) = state
@@ -439,10 +466,7 @@ impl AppStore {
         backup_path: Option<&str>,
     ) -> AppResult<()> {
 
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let mut state = self.lock_synced()?;
         let now = chrono::Utc::now().to_rfc3339();
 
         state
@@ -470,10 +494,7 @@ impl AppStore {
         agent_id: &str,
         skill_id: &str,
     ) -> AppResult<Option<(String, String)>> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let state = self.lock_synced()?;
         Ok(state
             .operations
             .iter()
@@ -487,12 +508,15 @@ impl AppStore {
     }
 
     pub fn toggle_no_full_coverage(&self, title: &str) -> AppResult<bool> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
-        let is_now_marked = if state.no_full_coverage_titles.contains(title) {
-            state.no_full_coverage_titles.remove(title);
+        let mut state = self.lock_synced()?;
+        let norm = crate::util::normalize_title(title);
+        let existing = state
+            .no_full_coverage_titles
+            .iter()
+            .find(|t| crate::util::normalize_title(t) == norm)
+            .cloned();
+        let is_now_marked = if let Some(existing_key) = existing {
+            state.no_full_coverage_titles.remove(&existing_key);
             false
         } else {
             state.no_full_coverage_titles.insert(title.to_string());
@@ -504,18 +528,12 @@ impl AppStore {
     }
 
     pub fn list_no_full_coverage(&self) -> AppResult<Vec<String>> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let state = self.lock_synced()?;
         Ok(state.no_full_coverage_titles.iter().cloned().collect())
     }
 
     pub fn toggle_no_full_coverage_mcp(&self, title: &str) -> AppResult<bool> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let mut state = self.lock_synced()?;
         let is_now_marked = if state.no_full_coverage_mcp_titles.contains(title) {
             state.no_full_coverage_mcp_titles.remove(title);
             false
@@ -529,10 +547,7 @@ impl AppStore {
     }
 
     pub fn list_no_full_coverage_mcp(&self) -> AppResult<Vec<String>> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let state = self.lock_synced()?;
         Ok(state.no_full_coverage_mcp_titles.iter().cloned().collect())
     }
 
@@ -542,10 +557,7 @@ impl AppStore {
             return Err(AppError::Message("Skill 标题不能为空。".to_string()));
         }
         let tags = sanitize_tags(tags)?;
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let mut state = self.lock_synced()?;
         if tags.is_empty() {
             state.skill_tags.remove(&key);
         } else {
@@ -557,10 +569,7 @@ impl AppStore {
     }
 
     pub fn list_skill_tags(&self, title: &str) -> AppResult<Vec<String>> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let state = self.lock_synced()?;
         Ok(state
             .skill_tags
             .get(&crate::util::normalize_title(title))
@@ -574,10 +583,7 @@ impl AppStore {
             return Err(AppError::Message("Agent ID 不能为空。".to_string()));
         }
         let tags = sanitize_tags(tags)?;
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let mut state = self.lock_synced()?;
         if tags.is_empty() {
             state.agent_tags.remove(key);
         } else {
@@ -589,10 +595,7 @@ impl AppStore {
     }
 
     pub fn list_agent_tags(&self, agent_id: &str) -> AppResult<Vec<String>> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let state = self.lock_synced()?;
         Ok(state
             .agent_tags
             .get(agent_id.trim())
@@ -601,10 +604,7 @@ impl AppStore {
     }
 
     pub fn save_catalog_source(&self, source: &CatalogSource) -> AppResult<()> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let mut state = self.lock_synced()?;
         if let Some(existing) = state
             .catalog_sources
             .iter_mut()
@@ -619,10 +619,7 @@ impl AppStore {
     }
 
     pub fn list_catalog_sources(&self) -> AppResult<Vec<CatalogSource>> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let state = self.lock_synced()?;
         let mut sources = state.catalog_sources.clone();
         sources.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(sources)
@@ -633,10 +630,7 @@ impl AppStore {
     /// 返回本机设备 id；为空时生成并持久化。设备 id 一经生成不再变化。
     pub fn ensure_device_id(&self) -> AppResult<String> {
         let existing = {
-            let state = self
-                .state
-                .lock()
-                .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+            let state = self.lock_synced()?;
             state.device_id.clone()
         };
         if !existing.trim().is_empty() {
@@ -644,10 +638,7 @@ impl AppStore {
         }
         let generated = format!("device-{}", uuid::Uuid::new_v4().simple());
         {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+            let mut state = self.lock_synced()?;
             state.device_id = generated.clone();
         }
         self.save()?;
@@ -655,122 +646,83 @@ impl AppStore {
     }
 
     pub fn device_name(&self) -> AppResult<String> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let state = self.lock_synced()?;
         Ok(state.device_name.clone())
     }
 
     pub fn set_device_name(&self, name: &str) -> AppResult<()> {
         {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+            let mut state = self.lock_synced()?;
             state.device_name = name.trim().to_string();
         }
         self.save()
     }
 
     pub fn sync_config(&self) -> AppResult<SyncConfig> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let state = self.lock_synced()?;
         Ok(state.sync_config.clone())
     }
 
     pub fn set_sync_config(&self, config: &SyncConfig) -> AppResult<()> {
         {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+            let mut state = self.lock_synced()?;
             state.sync_config = config.clone();
         }
         self.save()
     }
 
     pub fn sync_skill_state(&self, key: &str) -> AppResult<Option<SyncSkillState>> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let state = self.lock_synced()?;
         Ok(state.sync_skill_state.get(key).cloned())
     }
 
     pub fn set_sync_skill_state(&self, key: &str, value: SyncSkillState) -> AppResult<()> {
         {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+            let mut state = self.lock_synced()?;
             state.sync_skill_state.insert(key.to_string(), value);
         }
         self.save()
     }
 
     pub fn list_sync_skill_state(&self) -> AppResult<HashMap<String, SyncSkillState>> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let state = self.lock_synced()?;
         Ok(state.sync_skill_state.clone())
     }
 
     pub fn sync_conflicts(&self) -> AppResult<Vec<SyncConflict>> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let state = self.lock_synced()?;
         Ok(state.sync_conflicts.clone())
     }
 
     pub fn set_sync_conflicts(&self, conflicts: Vec<SyncConflict>) -> AppResult<()> {
         {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+            let mut state = self.lock_synced()?;
             state.sync_conflicts = conflicts;
         }
         self.save()
     }
 
     pub fn sync_last_error(&self) -> AppResult<Option<String>> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let state = self.lock_synced()?;
         Ok(state.sync_last_error.clone())
     }
 
     pub fn set_sync_last_error(&self, error: Option<&str>) -> AppResult<()> {
         {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+            let mut state = self.lock_synced()?;
             state.sync_last_error = error.map(|value| value.to_string());
         }
         self.save()
     }
 
     pub fn sync_last_run_at(&self) -> AppResult<Option<String>> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+        let state = self.lock_synced()?;
         Ok(state.sync_last_run_at.clone())
     }
 
     pub fn set_sync_last_run_at(&self, value: Option<String>) -> AppResult<()> {
         {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| AppError::Message("Store lock poisoned".to_string()))?;
+            let mut state = self.lock_synced()?;
             state.sync_last_run_at = value;
         }
         self.save()

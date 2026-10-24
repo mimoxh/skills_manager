@@ -7,7 +7,6 @@ import { UserTagEditor } from "./UserTagEditor";
 
 const agentTypeOptions: Array<{ value: AgentType; label: string }> = [
   { value: "custom", label: "自定义" },
-  { value: "universal", label: "Universal 通用中枢" },
   { value: "opencode", label: "OpenCode" },
   { value: "codex", label: "Codex" },
   { value: "claudeCode", label: "Claude Code" },
@@ -52,8 +51,8 @@ interface AgentsViewProps {
   customAgent: AgentProfile;
   busy: boolean;
   onCustomChange: (agent: AgentProfile) => void;
-  onSaveCustom: () => void;
-  onSaveAgent?: (agent: AgentProfile) => Promise<void> | void;
+  onSaveCustom: () => Promise<boolean | void> | boolean | void;
+  onSaveAgent?: (agent: AgentProfile) => Promise<boolean | void> | boolean | void;
   onSetAgentTags: (agentId: string, tags: string[]) => Promise<string[]>;
   onDelete: (agentId: string) => void;
   onSync: (title: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) => Promise<InstallResult[]>;
@@ -105,16 +104,22 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
 
   async function handleSaveEdit() {
     if (!editAgent) return;
-    if (onSaveAgent) {
-      await onSaveAgent(editAgent);
-    } else {
-      onCustomChange(editAgent);
-      onSaveCustom();
+    try {
+      if (onSaveAgent) {
+        const ok = await onSaveAgent(editAgent);
+        if (ok === false) return;
+      } else {
+        onCustomChange(editAgent);
+        const ok = await onSaveCustom();
+        if (ok === false) return;
+      }
+      if (editAgent.id) {
+        await onSetAgentTags(editAgent.id, editAgent.userTags ?? []);
+      }
+      setEditAgent(null);
+    } catch {
+      // 保存失败时保持弹窗打开
     }
-    if (editAgent.id) {
-      await onSetAgentTags(editAgent.id, editAgent.userTags ?? []);
-    }
-    setEditAgent(null);
   }
 
   function toggleTagFilter(tag: string) {
@@ -132,7 +137,13 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
 
   async function handleAddMissing() {
     if (!previewAgent || !selectedMissing.length) return;
-    for (const title of selectedMissing) { await onSync(title, [previewAgent.id], "prompt"); }
+    for (const title of selectedMissing) {
+      try {
+        await onSync(title, [previewAgent.id], "backupOverwrite");
+      } catch {
+        // 单条失败已提示，继续处理后续项
+      }
+    }
     setSelectedMissing([]);
   }
 
@@ -222,9 +233,11 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
                       {missingCount > 0 && <span className="badge badge-warning">{missingCount} 缺失</span>}
                     </div>
                   </div>
-                  <button className="btn-icon" onClick={(e) => { e.stopPropagation(); setDeleteAgent(agent); }} disabled={busy} title="删除" type="button">
-                    <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
-                  </button>
+                  {agent.type !== "universal" && (
+                    <button className="btn-icon" onClick={(e) => { e.stopPropagation(); setDeleteAgent(agent); }} disabled={busy} title="删除" type="button">
+                      <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+                    </button>
+                  )}
                 </div>
               );
             })}
@@ -440,10 +453,12 @@ function AgentPreviewDialog({ agent, installedSkills, missingSkills, selectedMis
 
         {/* Footer */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, borderTop: "1px solid var(--border)", padding: "16px 24px" }}>
-          <button className="btn btn-secondary" onClick={onDelete} disabled={busy} type="button" style={{ color: "var(--danger)" }}>
-            <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
-            删除
-          </button>
+          {agent.type !== "universal" ? (
+            <button className="btn btn-secondary" onClick={onDelete} disabled={busy} type="button" style={{ color: "var(--danger)" }}>
+              <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+              删除
+            </button>
+          ) : <div />}
           <div style={{ display: "flex", gap: 8 }}>
             {agent.type === "claudeCowork" && unregisteredSkills.length > 0 && onRepairCowork && (
               <button className="btn btn-secondary" onClick={() => onRepairCowork(agent.id)} disabled={busy} type="button">
@@ -560,11 +575,12 @@ function AgentEditDialog({ agent, availableUserTags, busy, onChange, onClose, on
         <div style={{ flex: 1, overflow: "auto", padding: "20px 24px" }}>
           <div className="input-group">
             <label className="input-label">类型</label>
-            <select className="input" value={agent.type} onChange={(e) => {
+            <select className="input" value={agent.type} disabled={agent.type === "universal"} onChange={(e) => {
               const newType = e.target.value as AgentType;
               const newAdapterConfig: Record<string, unknown> = isMcpAgent(newType, {}) ? { mcpConfigPath: "" } : {};
               onChange({ ...agent, type: newType, adapterConfig: newAdapterConfig });
             }}>
+              {agent.type === "universal" && <option value="universal">Universal 通用中枢</option>}
               {agentTypeOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
             </select>
           </div>

@@ -25,9 +25,12 @@ interface Props {
   setBusy: (busy: boolean) => void;
   setMcpServers: (servers: GroupedMcpServer[]) => void;
   setNoFullCoverageMcpTitles: (titles: Set<string>) => void;
+  onSkillsChanged?: () => Promise<void>;
 }
 
-export function useSkillsData({ showToast, setBusy, setMcpServers, setNoFullCoverageMcpTitles }: Props) {
+const IGNORED_IMPORT_DIRS = new Set([".git", "node_modules", "target", ".venv", "__pycache__", "dist", "build"]);
+
+export function useSkillsData({ showToast, setBusy, setMcpServers, setNoFullCoverageMcpTitles, onSkillsChanged }: Props) {
   const [skills, setSkills] = useState<GroupedSkill[]>([]);
   const [agents, setAgents] = useState<AgentProfile[]>([]);
   const [customAgent, setCustomAgent] = useState<AgentProfile>(emptyCustom);
@@ -40,6 +43,7 @@ export function useSkillsData({ showToast, setBusy, setMcpServers, setNoFullCove
   async function refreshAll() {
     setBusy(true);
     try {
+      readmeCacheRef.current.clear();
       const data = await api.getInitialData();
       setSkills(data.skills);
       setAgents(data.agents);
@@ -57,6 +61,7 @@ export function useSkillsData({ showToast, setBusy, setMcpServers, setNoFullCove
       } catch {
         // MCP 扫描失败不影响主流程
       }
+      void onSkillsChanged?.();
     } catch (error) {
       showToast(String(error), "error");
     } finally {
@@ -79,7 +84,7 @@ export function useSkillsData({ showToast, setBusy, setMcpServers, setNoFullCove
     }
   }
 
-  async function saveCustomAgent(override?: AgentProfile) {
+  async function saveCustomAgent(override?: AgentProfile): Promise<boolean> {
     const source = override ?? customAgent;
     const agent = {
       ...source,
@@ -90,7 +95,7 @@ export function useSkillsData({ showToast, setBusy, setMcpServers, setNoFullCove
     };
     if (source.type === "custom" && (!agent.name || !agent.skillsPath)) {
       showToast("自定义 Agent 需要填写名称和 Skills 安装目录。", "error");
-      return;
+      return false;
     }
     setBusy(true);
     try {
@@ -98,8 +103,10 @@ export function useSkillsData({ showToast, setBusy, setMcpServers, setNoFullCove
       if (!override) setCustomAgent(emptyCustom);
       await refreshAll();
       showToast(`已保存 ${saved.name || agent.name}。`, "success");
+      return true;
     } catch (error) {
       showToast(String(error), "error");
+      return false;
     } finally {
       setBusy(false);
     }
@@ -170,7 +177,20 @@ export function useSkillsData({ showToast, setBusy, setMcpServers, setNoFullCove
     try {
       const results = await api.syncGroupedSkill(title, sourceAgentId, targetAgentIds, conflictPolicy);
       await refreshAll();
-      showToast(`已完成 ${results.length} 个同步任务。`, "success");
+      const errors = results.filter((r) => r.action === "error");
+      const skipped = results.filter((r) => r.action === "skipped");
+      const succeeded = results.length - errors.length - skipped.length;
+      if (errors.length > 0 || skipped.length > 0) {
+        const firstProblem = errors[0] ?? skipped[0];
+        const parts: string[] = [];
+        if (succeeded > 0) parts.push(`${succeeded} 个成功`);
+        if (errors.length > 0) parts.push(`${errors.length} 个失败`);
+        if (skipped.length > 0) parts.push(`${skipped.length} 个跳过`);
+        const detail = firstProblem?.message ? `：${firstProblem.message}` : "";
+        showToast(`同步结果：${parts.join("，")}${detail}`, errors.length > 0 ? "error" : "info");
+      } else {
+        showToast(`已完成 ${results.length} 个同步任务。`, "success");
+      }
       return results;
     } catch (error) {
       showToast(String(error), "error");
@@ -181,11 +201,20 @@ export function useSkillsData({ showToast, setBusy, setMcpServers, setNoFullCove
   }
 
   async function setHubSkillTargets(title: string, targetAgentIds: string[]) {
-    const results = await api.setHubSkillTargets(title, targetAgentIds);
-    await refreshAll();
-    const skipped = results.filter((result) => result.action === "skipped" || result.action === "error");
-    showToast(skipped.length ? `${skipped.length} 个目标已保留原目录，详见操作结果。` : "已更新中枢分发目标。", skipped.length ? "info" : "success");
-    return results;
+    setBusy(true);
+    try {
+      const results = await api.setHubSkillTargets(title, targetAgentIds);
+      await refreshAll();
+      await onSkillsChanged?.();
+      const skipped = results.filter((result) => result.action === "skipped" || result.action === "error");
+      showToast(skipped.length ? `${skipped.length} 个目标已保留原目录，详见操作结果。` : "已更新中枢分发目标。", skipped.length ? "info" : "success");
+      return results;
+    } catch (error) {
+      showToast(String(error), "error");
+      throw error;
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function collectEntryFiles(entry: FileSystemEntry, prefix = ""): Promise<ImportSkillFile[]> {
@@ -196,6 +225,7 @@ export function useSkillsData({ showToast, setBusy, setMcpServers, setNoFullCove
       return [await fileToUpload(file, `${prefix}${file.name}`)];
     }
     if (!entry.isDirectory) return [];
+    if (IGNORED_IMPORT_DIRS.has(entry.name)) return [];
     const directory = entry as FileSystemDirectoryEntry;
     const reader = directory.createReader();
     // readEntries 每批最多返回约 100 条，需循环读取直到返回空数组，避免大目录导入被静默截断

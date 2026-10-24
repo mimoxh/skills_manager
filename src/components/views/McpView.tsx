@@ -81,13 +81,13 @@ export function McpView({ servers, agents, busy, noFullCoverageMcpTitles, onAdd,
     setShowForm(true);
   }
 
+  useEffect(() => {
+    if (!selectedServer) return;
+    setSelectedServer(servers.find((s) => s.name === selectedServer.name) ?? null);
+  }, [servers, selectedServer?.name]);
+
   async function handleToggleFromDialog(agentId: string, name: string, currentlyDisabled: boolean) {
     await onToggle(agentId, name, !currentlyDisabled);
-    const updated = servers.find((s) => s.name === name);
-    if (updated) {
-      setSelectedServer(updated);
-      setSelectedAgentIds(updated.agentIds);
-    }
   }
 
   function toggleSyncAgent(agentId: string) {
@@ -151,8 +151,12 @@ export function McpView({ servers, agents, busy, noFullCoverageMcpTitles, onAdd,
     });
   }
 
-  function requestFormClose() {
-    setFormDiscardConfirm(true);
+  function requestFormClose(dirty = true) {
+    if (dirty) {
+      setFormDiscardConfirm(true);
+    } else {
+      setShowForm(false);
+    }
   }
 
   return (
@@ -242,10 +246,18 @@ export function McpView({ servers, agents, busy, noFullCoverageMcpTitles, onAdd,
           agents={mcpAgents}
           selectedAgentIds={selectedAgentIds}
           onClose={requestFormClose}
-          onSubmit={async (agentIds, config, policy) => {
+          onSubmit={async (agentIds, config, policy, meta) => {
             if (editingServer) {
               for (const agentId of agentIds) {
-                await onUpdate(agentId, editingServer.name, config);
+                const agentCopy = editingServer.copies.find((c) => c.agentId === agentId);
+                const agentDisabled = editingServer.disabledAgentIds?.includes(agentId) ?? agentCopy?.config.disabled ?? config.disabled ?? false;
+                const agentTimeoutSec = agentCopy?.config.timeoutSec ?? config.timeoutSec;
+                const mergedConfig: McpServerConfig = {
+                  ...config,
+                  disabled: meta?.hasExplicitDisabled ? config.disabled : agentDisabled,
+                  timeoutSec: meta?.hasExplicitTimeout ? config.timeoutSec : agentTimeoutSec,
+                };
+                await onUpdate(agentId, editingServer.name, mergedConfig);
               }
             } else {
               await onAdd(agentIds, config, policy);
@@ -309,7 +321,7 @@ function McpServerItem({ server, mcpAgents, noFullCoverageMcpTitles, onClick }: 
       <div className="skill-info">
         <div className="skill-name">{server.name}{server.copies[0] && transportBadge(server.copies[0].config.transport)}</div>
         <div className="skill-meta">{server.copies[0]?.config.command && `命令: ${server.copies[0].config.command}`}{server.copies[0]?.config.url && `URL: ${server.copies[0].config.url}`}</div>
-        {server.copies[0]?.config.args && server.copies[0].config.args.length > 0 && <div className="skill-desc">参数: {server.copies[0].config.args.join(" ")}</div>}
+        {server.copies[0]?.config.args && server.copies[0].config.args.length > 0 && <div className="skill-desc">参数: {formatArgs(server.copies[0].config.args)}</div>}
       </div>
       <span className={`badge ${server.agentIds.length === mcpAgents.length ? "badge-success" : "badge-warning"}`}>{server.agentIds.length}/{mcpAgents.length} Agent</span>
       <span className={`badge ${server.agentIds.length === mcpAgents.length ? "badge-synced" : noFullCoverageMcpTitles.has(server.name) ? "badge-muted" : "badge-syncable"}`}>
@@ -364,7 +376,7 @@ function McpSyncDialog({ server, mcpAgents, busy, selectedAgentIds, conflictPoli
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <div className="detail-item"><span style={{ fontSize: 12, color: "var(--text-secondary)", minWidth: 60 }}>类型</span><span className={`badge badge-${config?.transport}`}>{config?.transport.toUpperCase()}</span></div>
               {config?.command && <div className="detail-item"><span style={{ fontSize: 12, color: "var(--text-secondary)", minWidth: 60 }}>命令</span><code style={{ fontFamily: "var(--font-mono)", fontSize: 12, wordBreak: "break-all" }}>{config.command}</code></div>}
-              {config?.args && config.args.length > 0 && <div className="detail-item"><span style={{ fontSize: 12, color: "var(--text-secondary)", minWidth: 60 }}>参数</span><code style={{ fontFamily: "var(--font-mono)", fontSize: 12, wordBreak: "break-all" }}>{config.args.join(" ")}</code></div>}
+              {config?.args && config.args.length > 0 && <div className="detail-item"><span style={{ fontSize: 12, color: "var(--text-secondary)", minWidth: 60 }}>参数</span><code style={{ fontFamily: "var(--font-mono)", fontSize: 12, wordBreak: "break-all" }}>{formatArgs(config.args)}</code></div>}
               {config?.url && <div className="detail-item"><span style={{ fontSize: 12, color: "var(--text-secondary)", minWidth: 60 }}>URL</span><code style={{ fontFamily: "var(--font-mono)", fontSize: 12, wordBreak: "break-all" }}>{config.url}</code></div>}
               {config?.env && Object.keys(config.env).length > 0 && (
                 <div style={{ padding: "10px 12px", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", background: "var(--surface)" }}>
@@ -562,6 +574,58 @@ function headersToText(headers: Record<string, string> | undefined): string {
   return Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join("\n");
 }
 
+function formatArgs(args: string[] | undefined): string {
+  if (!args || args.length === 0) return "";
+  return args
+    .map((arg) => {
+      if (arg === "") return '""';
+      if (/[\s"]/.test(arg)) {
+        return `"${arg.replace(/"/g, '\\"')}"`;
+      }
+      return arg;
+    })
+    .join(" ");
+}
+
+function parseArgs(input: string): string[] {
+  const trimmed = input.trim();
+  if (!trimmed) return [];
+  const result: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+  let hasToken = false;
+
+  for (let i = 0; i < trimmed.length; i += 1) {
+    const ch = trimmed[i];
+    if (quote) {
+      if (ch === "\\" && i + 1 < trimmed.length && trimmed[i + 1] === quote) {
+        current += quote;
+        i += 1;
+      } else if (ch === quote) {
+        quote = null;
+      } else {
+        current += ch;
+      }
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      hasToken = true;
+    } else if (/\s/.test(ch)) {
+      if (hasToken) {
+        result.push(current);
+        current = "";
+        hasToken = false;
+      }
+    } else {
+      current += ch;
+      hasToken = true;
+    }
+  }
+  if (hasToken) {
+    result.push(current);
+  }
+  return result;
+}
+
 function buildFullJson(name: string, config: McpServerConfig): string {
   const serverObj: Record<string, unknown> = {};
   if (config.transport === "stdio") {
@@ -580,16 +644,22 @@ function buildFullJson(name: string, config: McpServerConfig): string {
 
 function McpFormDialog({ server, agents, selectedAgentIds, onClose, onSubmit }: {
   server: GroupedMcpServer | null; agents: AgentProfile[]; selectedAgentIds: string[];
-  onClose: () => void;
-  onSubmit: (agentIds: string[], config: McpServerConfig, conflictPolicy: ConflictPolicy) => Promise<void>;
+  onClose: (dirty: boolean) => void;
+  onSubmit: (
+    agentIds: string[],
+    config: McpServerConfig,
+    conflictPolicy: ConflictPolicy,
+    meta?: { hasExplicitDisabled?: boolean; hasExplicitTimeout?: boolean },
+  ) => Promise<void>;
 }) {
   const isEdit = server !== null;
   const existingConfig = server?.copies[0]?.config;
+  const initialAgentIdsRef = useRef<string[]>(selectedAgentIds);
 
   const [name, setName] = useState(server?.name ?? "");
   const [transport, setTransport] = useState<McpTransport>(existingConfig?.transport ?? "stdio");
   const [command, setCommand] = useState(existingConfig?.command ?? "");
-  const [args, setArgs] = useState(existingConfig?.args?.join(" ") ?? "");
+  const [args, setArgs] = useState(formatArgs(existingConfig?.args));
   const [env, setEnv] = useState(envToText(existingConfig?.env));
   const [url, setUrl] = useState(existingConfig?.url ?? "");
   const [headers, setHeaders] = useState(headersToText(existingConfig?.headers));
@@ -602,6 +672,33 @@ function McpFormDialog({ server, agents, selectedAgentIds, onClose, onSubmit }: 
   const jsonRef = useRef<HTMLTextAreaElement>(null);
   const envRef = useRef<HTMLTextAreaElement>(null);
   const headersRef = useRef<HTMLTextAreaElement>(null);
+
+  const initialJson = useMemo(() => buildFullJson((server?.name ?? "") || "unnamed", {
+    name: (server?.name ?? "") || "unnamed",
+    transport: existingConfig?.transport ?? "stdio",
+    command: (existingConfig?.command ?? "") || undefined,
+    args: parseArgs(formatArgs(existingConfig?.args)),
+    env: parseEnvText(envToText(existingConfig?.env)),
+    url: (existingConfig?.url ?? "") || undefined,
+    headers: parseHeaderText(headersToText(existingConfig?.headers)),
+  }), [server, existingConfig]);
+
+  const hasFormChanges = useMemo(() => {
+    if (name !== (server?.name ?? "")) return true;
+    if (transport !== (existingConfig?.transport ?? "stdio")) return true;
+    if (command !== (existingConfig?.command ?? "")) return true;
+    if (args !== formatArgs(existingConfig?.args)) return true;
+    if (env !== envToText(existingConfig?.env)) return true;
+    if (url !== (existingConfig?.url ?? "")) return true;
+    if (headers !== headersToText(existingConfig?.headers)) return true;
+    if (inputMode === "json" && jsonInput !== initialJson) return true;
+    if (!isEdit) {
+      const initIds = initialAgentIdsRef.current;
+      if (targetAgentIds.length !== initIds.length || targetAgentIds.some((id) => !initIds.includes(id))) return true;
+      if (conflictPolicy !== "backupOverwrite") return true;
+    }
+    return false;
+  }, [name, server, transport, existingConfig, command, args, env, url, headers, inputMode, jsonInput, initialJson, isEdit, targetAgentIds, conflictPolicy]);
 
   useEffect(() => {
     if (inputMode === "json" && jsonRef.current) {
@@ -625,7 +722,7 @@ function McpFormDialog({ server, agents, selectedAgentIds, onClose, onSubmit }: 
       name: name || "unnamed",
       transport,
       command: command || undefined,
-      args: args.trim() ? args.trim().split(/\s+/).filter(Boolean) : [],
+      args: parseArgs(args),
       env: parseEnvText(env),
       url: url || undefined,
       headers: parseHeaderText(headers),
@@ -640,19 +737,27 @@ function McpFormDialog({ server, agents, selectedAgentIds, onClose, onSubmit }: 
     if (firstKey === "mcpServers" && typeof parsed[firstKey] === "object" && parsed[firstKey] !== null && !Array.isArray(parsed[firstKey])) {
       const inner = parsed[firstKey] as Record<string, unknown>;
       const innerKey = Object.keys(inner)[0];
-      if (innerKey && typeof inner[innerKey] === "object" && inner[innerKey] !== null) {
-        return { serverName: innerKey, obj: inner[innerKey] as Record<string, unknown> };
+      if (innerKey && typeof inner[innerKey] === "object" && inner[innerKey] !== null && !Array.isArray(inner[innerKey])) {
+        return { serverName: innerKey.trim(), obj: inner[innerKey] as Record<string, unknown> };
       }
     }
+    // 处理直接 server 配置（顶层含 command 或 url）
+    if (typeof parsed.command === "string" || typeof parsed.url === "string") {
+      const inlineName = typeof parsed.name === "string" ? parsed.name.trim() : "";
+      return { serverName: inlineName, obj: parsed };
+    }
     // 处理 {"name": {...}} 格式
-    return { serverName: firstKey ?? "unnamed", obj: firstKey ? parsed[firstKey] as Record<string, unknown> : parsed };
+    if (firstKey && typeof parsed[firstKey] === "object" && parsed[firstKey] !== null && !Array.isArray(parsed[firstKey])) {
+      return { serverName: firstKey === "unnamed" ? "" : firstKey.trim(), obj: parsed[firstKey] as Record<string, unknown> };
+    }
+    return { serverName: "", obj: parsed };
   }
 
   function switchToForm() {
     try {
       const parsed = JSON.parse(jsonInput);
       const { serverName, obj } = unwrapMcpServers(parsed);
-      if (!name.trim()) setName(serverName);
+      if (!name.trim() && serverName) setName(serverName);
       const cmd = obj.command as string | undefined;
       const urlStr = obj.url as string | undefined;
       const argsArr = obj.args as string[] | undefined;
@@ -662,7 +767,7 @@ function McpFormDialog({ server, agents, selectedAgentIds, onClose, onSubmit }: 
       if (cmd) {
         setTransport("stdio");
         setCommand(cmd ?? "");
-        setArgs((argsArr ?? []).join(" "));
+        setArgs(formatArgs(argsArr));
         setEnv(envObj ? Object.entries(envObj).map(([k, v]) => `${k}=${v}`).join("\n") : "");
       } else if (urlStr) {
         setTransport(transportStr === "sse" ? "sse" : "http");
@@ -674,33 +779,46 @@ function McpFormDialog({ server, agents, selectedAgentIds, onClose, onSubmit }: 
   }
 
   async function handleSubmit() {
-    if (!name.trim()) return;
+    if (inputMode === "form" && !name.trim()) return;
     setFormError(null);
     setSubmitting(true);
     try {
       let config: McpServerConfig;
+      let hasExplicitDisabled = false;
+      let hasExplicitTimeout = false;
       if (inputMode === "json") {
         try {
           const parsed = JSON.parse(jsonInput);
-          const { serverName: parsedName, obj } = unwrapMcpServers(parsed);
-          // 如果用户没有手动改名称，使用 JSON 中解析出的名称
-          if (!name.trim() || name.trim() === "unnamed") {
-            setName(parsedName);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            setFormError("JSON 解析失败，请检查格式。");
+            return;
           }
+          const { serverName: parsedName, obj } = unwrapMcpServers(parsed as Record<string, unknown>);
+          const finalName = (name.trim() && name.trim() !== "unnamed" ? name.trim() : parsedName) || "";
+          if (!finalName) {
+            setFormError("请输入服务器名称或在 JSON 中包含外层键名");
+            return;
+          }
+          setName(finalName);
           const cmd = obj.command as string | undefined;
           const urlStr = obj.url as string | undefined;
           const argsArr = obj.args as string[] | undefined;
           const envObj = obj.env as Record<string, string> | undefined;
           const headersObj = obj.headers as Record<string, string> | undefined;
           const transportStr = obj.transport as string | undefined;
+          hasExplicitDisabled = typeof obj.disabled === "boolean";
+          const rawTimeout = typeof obj.timeoutSec === "number" ? obj.timeoutSec : typeof obj.timeout === "number" ? obj.timeout : undefined;
+          hasExplicitTimeout = rawTimeout !== undefined;
           config = {
-            name: name.trim() || parsedName,
+            name: finalName,
             transport: urlStr ? (transportStr === "sse" ? "sse" : "http") : "stdio",
             command: cmd,
             args: argsArr ?? [],
             env: envObj ?? {},
             url: urlStr,
             headers: headersObj ?? {},
+            disabled: hasExplicitDisabled ? (obj.disabled as boolean) : (isEdit ? (existingConfig?.disabled ?? false) : false),
+            timeoutSec: hasExplicitTimeout ? rawTimeout : existingConfig?.timeoutSec,
           };
         } catch {
           setFormError("JSON 解析失败，请检查格式。");
@@ -710,19 +828,21 @@ function McpFormDialog({ server, agents, selectedAgentIds, onClose, onSubmit }: 
         config = {
           name: name.trim(),
           transport,
+          disabled: isEdit ? (existingConfig?.disabled ?? false) : false,
+          timeoutSec: existingConfig?.timeoutSec,
           ...(transport === "stdio"
-            ? { command: command.trim() || undefined, args: args.trim() ? args.trim().split(/\s+/).filter(Boolean) : [], env: parseEnvText(env) }
+            ? { command: command.trim() || undefined, args: parseArgs(args), env: parseEnvText(env) }
             : { url: url.trim() || undefined, headers: parseHeaderText(headers) }),
         };
       }
-      await onSubmit(targetAgentIds, config, conflictPolicy);
+      await onSubmit(targetAgentIds, config, conflictPolicy, { hasExplicitDisabled, hasExplicitTimeout });
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <Dialog maxWidth={640} large onClose={onClose}>
+    <Dialog maxWidth={640} large onClose={() => onClose(hasFormChanges)}>
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", gap: 12, borderBottom: "1px solid var(--border)", padding: "20px 24px" }}>
           <div style={{ width: 40, height: 40, background: "var(--accent-light)", borderRadius: "var(--radius-sm)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)", flexShrink: 0 }}>
@@ -730,7 +850,7 @@ function McpFormDialog({ server, agents, selectedAgentIds, onClose, onSubmit }: 
           </div>
           <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text)" }}>{isEdit ? "编辑 MCP Server" : "添加 MCP Server"}</h2>
           <div style={{ flex: 1 }} />
-          <button className="btn-icon" onClick={onClose} type="button" title="关闭" style={{ width: 36, height: 36 }}>
+          <button className="btn-icon" onClick={() => onClose(hasFormChanges)} type="button" title="关闭" style={{ width: 36, height: 36 }}>
             <svg className="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
           </button>
         </div>
@@ -826,7 +946,7 @@ function McpFormDialog({ server, agents, selectedAgentIds, onClose, onSubmit }: 
           <div style={{ fontSize: 12.5, color: "var(--danger)", padding: "0 24px 12px" }}>{formError}</div>
         )}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, borderTop: "1px solid var(--border)", background: "var(--surface-raised)", padding: "16px 24px" }}>
-          <button className="btn btn-primary" onClick={handleSubmit} disabled={submitting || !name.trim()}>{submitting ? "提交中..." : isEdit ? "更新" : "添加"}</button>
+          <button className="btn btn-primary" onClick={handleSubmit} disabled={submitting || (inputMode === "form" ? !name.trim() : (!name.trim() && !jsonInput.trim()))}>{submitting ? "提交中..." : isEdit ? "更新" : "添加"}</button>
         </div>
     </Dialog>
   );

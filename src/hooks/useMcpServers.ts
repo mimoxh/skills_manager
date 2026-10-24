@@ -13,6 +13,34 @@ interface Props {
   setBusy: (busy: boolean) => void;
 }
 
+function summarizeMcpResults(
+  results: McpOperationResult[],
+  successText: (succeededCount: number) => string,
+  actionLabel: string,
+): { text: string; type: ToastType } {
+  const errors = results.filter((r) => r.action === "error");
+  const skipped = results.filter((r) => r.action === "skipped");
+  const succeededCount = new Set(
+    results.filter((r) => r.action !== "error" && r.action !== "skipped").map((r) => r.agentId),
+  ).size;
+  if (errors.length > 0 || skipped.length > 0) {
+    const firstProblem = errors[0] ?? skipped[0];
+    const parts: string[] = [];
+    if (succeededCount > 0) parts.push(`${succeededCount} 个 Agent 成功`);
+    if (errors.length > 0) parts.push(`${errors.length} 个失败`);
+    if (skipped.length > 0) parts.push(`${skipped.length} 个跳过`);
+    const detail = firstProblem?.message ? `：${firstProblem.message}` : "";
+    return {
+      text: `${actionLabel}结果：${parts.join("，")}${detail}`,
+      type: errors.length > 0 ? "error" : "info",
+    };
+  }
+  return {
+    text: successText(succeededCount),
+    type: "success",
+  };
+}
+
 export function useMcpServers({ showToast, setBusy }: Props) {
   const [mcpServers, setMcpServers] = useState<GroupedMcpServer[]>([]);
   const [noFullCoverageMcpTitles, setNoFullCoverageMcpTitles] = useState<Set<string>>(new Set());
@@ -45,7 +73,8 @@ export function useMcpServers({ showToast, setBusy }: Props) {
     try {
       const results = await api.addMcpServer(agentIds, config, conflictPolicy);
       await refreshMcpServers();
-      showToast(`已添加 ${config.name} 到 ${results.length} 个 Agent。`, "success");
+      const toastInfo = summarizeMcpResults(results, (count) => `已添加 ${config.name} 到 ${count} 个 Agent。`, "添加");
+      showToast(toastInfo.text, toastInfo.type);
       return results;
     } catch (error) {
       showToast(String(error), "error");
@@ -125,7 +154,8 @@ export function useMcpServers({ showToast, setBusy }: Props) {
     try {
       const results = await api.syncMcpServer(serverName, sourceAgentId, targetAgentIds, conflictPolicy);
       await refreshMcpServers();
-      showToast(`已同步 ${serverName} 到 ${results.length} 个 Agent。`, "success");
+      const toastInfo = summarizeMcpResults(results, (count) => `已同步 ${serverName} 到 ${count} 个 Agent。`, "同步");
+      showToast(toastInfo.text, toastInfo.type);
       return results;
     } catch (error) {
       showToast(String(error), "error");
@@ -144,7 +174,8 @@ export function useMcpServers({ showToast, setBusy }: Props) {
     try {
       const results = await api.removeMcpServerFromAgents(serverName, agentIds);
       await refreshMcpServers();
-      showToast(`已从 ${agentIds.length} 个 Agent 删除 ${serverName}。`, "success");
+      const toastInfo = summarizeMcpResults(results, (count) => `已从 ${count} 个 Agent 删除 ${serverName}。`, "删除");
+      showToast(toastInfo.text, toastInfo.type);
       return results;
     } catch (error) {
       showToast(String(error), "error");

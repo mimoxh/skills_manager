@@ -38,29 +38,138 @@ struct JsonRpcError {
     data: Option<Value>,
 }
 
+const MAX_STDIO_LINE_BYTES: usize = 4 * 1024 * 1024;
+
+fn read_bounded_line<R: BufRead>(reader: &mut R, max_bytes: usize) -> io::Result<Option<String>> {
+    let mut buf = Vec::new();
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            if buf.is_empty() {
+                return Ok(None);
+            }
+            break;
+        }
+        if let Some(newline_pos) = available.iter().position(|&b| b == b'\n') {
+            let to_take = newline_pos + 1;
+            if buf.len() + to_take > max_bytes {
+                reader.consume(to_take);
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "JSON-RPC request line exceeds maximum allowed size",
+                ));
+            }
+            buf.extend_from_slice(&available[..to_take]);
+            reader.consume(to_take);
+            break;
+        } else {
+            let len = available.len();
+            if buf.len() + len > max_bytes {
+                reader.consume(len);
+                // Drain until newline or EOF
+                loop {
+                    let rem = reader.fill_buf()?;
+                    if rem.is_empty() {
+                        break;
+                    }
+                    if let Some(pos) = rem.iter().position(|&b| b == b'\n') {
+                        reader.consume(pos + 1);
+                        break;
+                    }
+                    let rem_len = rem.len();
+                    reader.consume(rem_len);
+                }
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "JSON-RPC request line exceeds maximum allowed size",
+                ));
+            }
+            buf.extend_from_slice(available);
+            reader.consume(len);
+        }
+    }
+    String::from_utf8(buf)
+        .map(Some)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+fn agent_supports_mcp(agent: &crate::models::AgentProfile) -> bool {
+    matches!(
+        agent.agent_type,
+        crate::models::AgentType::Codex
+            | crate::models::AgentType::ClaudeCode
+            | crate::models::AgentType::OpenCode
+            | crate::models::AgentType::Trae
+    ) || (agent.agent_type == crate::models::AgentType::Custom
+        && agent
+            .adapter_config
+            .as_ref()
+            .and_then(|c| c.get("mcpFormat"))
+            .and_then(|v| v.as_str())
+            .and_then(crate::mcp_adapter::mcp_format_to_agent_type)
+            .is_some())
+}
+
 pub fn run_stdio(service: AppService) -> AppResult<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut reader = stdin.lock();
     let mut writer = stdout.lock();
 
-    let mut line = String::new();
-    while reader.read_line(&mut line)? > 0 {
+    loop {
+        let line = match read_bounded_line(&mut reader, MAX_STDIO_LINE_BYTES) {
+            Ok(Some(line)) => line,
+            Ok(None) => break,
+            Err(err) => {
+                let resp = JsonRpcResponse {
+                    jsonrpc: "2.0",
+                    id: Value::Null,
+                    result: None,
+                    error: Some(JsonRpcError {
+                        code: -32700,
+                        message: format!("Parse error: {}", err),
+                        data: None,
+                    }),
+                };
+                let serialized = serde_json::to_string(&resp)?;
+                writer.write_all(serialized.as_bytes())?;
+                writer.write_all(b"\n")?;
+                writer.flush()?;
+                continue;
+            }
+        };
+
         let trimmed = line.trim();
         if trimmed.is_empty() {
-            line.clear();
             continue;
         }
 
-        if let Ok(req) = serde_json::from_str::<JsonRpcRequest>(trimmed) {
-            if let Some(resp) = handle_request(&service, req) {
+        match serde_json::from_str::<JsonRpcRequest>(trimmed) {
+            Ok(req) => {
+                if let Some(resp) = handle_request(&service, req) {
+                    let serialized = serde_json::to_string(&resp)?;
+                    writer.write_all(serialized.as_bytes())?;
+                    writer.write_all(b"\n")?;
+                    writer.flush()?;
+                }
+            }
+            Err(err) => {
+                let resp = JsonRpcResponse {
+                    jsonrpc: "2.0",
+                    id: Value::Null,
+                    result: None,
+                    error: Some(JsonRpcError {
+                        code: -32700,
+                        message: format!("Parse error: {}", err),
+                        data: None,
+                    }),
+                };
                 let serialized = serde_json::to_string(&resp)?;
                 writer.write_all(serialized.as_bytes())?;
                 writer.write_all(b"\n")?;
                 writer.flush()?;
             }
         }
-        line.clear();
     }
 
     Ok(())
@@ -290,13 +399,7 @@ fn handle_tool_call(service: &AppService, name: &str, args: &Value) -> Result<Va
                 .map(|a| {
                     let is_hub = a.agent_type == crate::models::AgentType::Universal
                         || crate::util::is_universal_skills_path(&a.skills_path);
-                    let supports_mcp = matches!(
-                        a.agent_type,
-                        crate::models::AgentType::Codex
-                            | crate::models::AgentType::ClaudeCode
-                            | crate::models::AgentType::OpenCode
-                            | crate::models::AgentType::Trae
-                    );
+                    let supports_mcp = agent_supports_mcp(&a);
                     json!({
                         "id": a.id,
                         "name": a.name,
@@ -453,15 +556,34 @@ fn handle_tool_call(service: &AppService, name: &str, args: &Value) -> Result<Va
                 )))
             } else {
                 let skills = service.scan_agent_skills().map_err(to_jsonrpc_err)?;
-                let matching = skills.into_iter().find(|s| s.title == skill_id);
+                let target_norm = crate::util::normalize_title(skill_id);
+                let matching = skills
+                    .into_iter()
+                    .find(|s| crate::util::normalize_title(&s.title) == target_norm);
                 if let Some(s) = matching {
+                    let non_hub_ids: Vec<String> = s
+                        .installed_agent_ids
+                        .iter()
+                        .filter(|id| !id.starts_with("universal:"))
+                        .cloned()
+                        .collect();
+                    let target_ids = if non_hub_ids.is_empty() {
+                        s.installed_agent_ids.clone()
+                    } else {
+                        non_hub_ids
+                    };
                     service
-                        .uninstall_skill_from_agents(skill_id, &s.installed_agent_ids)
+                        .uninstall_skill_from_agents(&s.title, &target_ids)
                         .map_err(to_jsonrpc_err)?;
                     Ok(tool_success(format!(
-                        "已从所有 {} 个 Agent 中卸载技能 '{}'",
-                        s.installed_agent_ids.len(),
-                        skill_id
+                        "已从 {} 个 Agent 中卸载技能 '{}'{}",
+                        target_ids.len(),
+                        s.title,
+                        if target_ids.len() < s.installed_agent_ids.len() {
+                            "（中枢原件已保留；如需彻底删除中枢原件，请在 agent_ids 中显式指定中枢 ID）"
+                        } else {
+                            ""
+                        }
                     )))
                 } else {
                     Ok(tool_success(format!("未找到技能 '{}'，可能已被卸载", skill_id)))
@@ -529,15 +651,7 @@ fn handle_tool_call(service: &AppService, name: &str, args: &Value) -> Result<Va
                 let agents = service.list_agents().map_err(to_jsonrpc_err)?;
                 let mcp_agents: Vec<_> = agents
                     .into_iter()
-                    .filter(|a| {
-                        matches!(
-                            a.agent_type,
-                            crate::models::AgentType::Codex
-                                | crate::models::AgentType::ClaudeCode
-                                | crate::models::AgentType::OpenCode
-                                | crate::models::AgentType::Trae
-                        )
-                    })
+                    .filter(agent_supports_mcp)
                     .collect();
 
                 let mut options_text = String::new();

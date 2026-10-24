@@ -21,7 +21,7 @@ Skills Manager is a local Windows desktop tool for managing Agent Skills and MCP
 - **No-tag filtering:** filter skills and agents lists by "no tag" to quickly locate uncategorized items.
 - **Independent view scrolling:** Skills, MCP, and Agents view lists scroll independently, the page no longer scrolls as a whole.
 - **Dual Styles & Theme Switching:** provides "Clean Minimal (Modern Blue)" and "Classic Warm (Amber Gold)" visual styles, supporting light mode, dark mode, and system preference with local persistence.
-- **Streamlined UI:** removed title bar icon and text, removed bottom status bar, theme switcher moved to the Settings view for a cleaner interface with more content area.
+- **Sectioned Settings:** the Settings view uses single-page anchor navigation for common preferences, sync connection, Agent targets, maintenance, and advanced options. Sensitive connection details stay collapsed by default while save state and the save action remain visible.
 
 ## Tech Stack
 

@@ -5,7 +5,7 @@
 //! 不引入 async）。收到 `Shutdown` 或通道断开会退出。
 
 use crate::service::AppService;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -15,6 +15,7 @@ const WATCHER_GRACE: Duration = Duration::from_secs(3);
 
 enum Signal {
     SyncNow,
+    UpdatePollSecs(u64),
     Shutdown,
 }
 
@@ -31,6 +32,7 @@ impl Drop for OperationGuard<'_> {
 struct Inner {
     sender: Mutex<Option<Sender<Signal>>>,
     running: AtomicBool,
+    generation: AtomicU64,
     run_lock: Mutex<()>,
     in_operation: AtomicBool,
     last_operation_end: Mutex<Option<Instant>>,
@@ -53,6 +55,7 @@ impl SyncManager {
             inner: Arc::new(Inner {
                 sender: Mutex::new(None),
                 running: AtomicBool::new(false),
+                generation: AtomicU64::new(0),
                 run_lock: Mutex::new(()),
                 in_operation: AtomicBool::new(false),
                 last_operation_end: Mutex::new(None),
@@ -103,11 +106,18 @@ impl SyncManager {
         OperationGuard { manager: self }
     }
 
-    /// 启动后台轮询线程（幂等）。
+    /// 启动后台轮询线程（幂等；若已在运行则动态更新轮询周期并触发一次）。
     pub fn start(&self, service: AppService, poll_secs: u64) {
         if self.inner.running.swap(true, Ordering::SeqCst) {
+            if let Ok(guard) = self.inner.sender.lock() {
+                if let Some(sender) = guard.as_ref() {
+                    let _ = sender.send(Signal::UpdatePollSecs(poll_secs));
+                    let _ = sender.send(Signal::SyncNow);
+                }
+            }
             return;
         }
+        let current_gen = self.inner.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let (sender, receiver) = mpsc::channel();
         match self.inner.sender.lock() {
             Ok(mut guard) => *guard = Some(sender),
@@ -115,16 +125,21 @@ impl SyncManager {
         }
         let inner = Arc::clone(&self.inner);
         std::thread::spawn(move || {
-            let poll = Duration::from_secs(poll_secs.max(5));
+            let mut poll = Duration::from_secs(poll_secs.max(5));
             loop {
                 match receiver.recv_timeout(poll) {
                     Ok(Signal::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
+                    Ok(Signal::UpdatePollSecs(next_secs)) => {
+                        poll = Duration::from_secs(next_secs.max(5));
+                    }
                     Ok(Signal::SyncNow) | Err(RecvTimeoutError::Timeout) => {
                         let _ = service.sync_auto_once();
                     }
                 }
             }
-            inner.running.store(false, Ordering::SeqCst);
+            if inner.generation.load(Ordering::SeqCst) == current_gen {
+                inner.running.store(false, Ordering::SeqCst);
+            }
         });
         // 启动后立即触发一次，避免等到第一个轮询周期。
         self.trigger();
@@ -141,6 +156,7 @@ impl SyncManager {
 
     /// 停止后台线程（幂等）。
     pub fn stop(&self) {
+        self.inner.generation.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut guard) = self.inner.sender.lock() {
             if let Some(sender) = guard.take() {
                 let _ = sender.send(Signal::Shutdown);

@@ -247,14 +247,66 @@ pub fn run(service: AppService, args: &[String]) -> AppResult<()> {
         }
         "uninstall" => {
             if rest.is_empty() {
-                return Err(AppError::Message("用法: skills-manager uninstall <skill_id>".into()));
+                return Err(AppError::Message(
+                    "用法: skills-manager uninstall <skill_id> [--target <agent_id...>] [--all]".into(),
+                ));
             }
             let skill_id = &rest[0];
+            let mut explicit_targets = Vec::new();
+            let mut include_hub = false;
+            let mut idx = 1;
+            while idx < rest.len() {
+                match rest[idx].as_str() {
+                    "--target" | "-t" => {
+                        idx += 1;
+                        while idx < rest.len() && !rest[idx].starts_with('-') {
+                            explicit_targets.push(rest[idx].clone());
+                            idx += 1;
+                        }
+                        continue;
+                    }
+                    "--all" => {
+                        include_hub = true;
+                    }
+                    _ => {}
+                }
+                idx += 1;
+            }
+
             let skills = service.scan_agent_skills()?;
-            let matching = skills.into_iter().find(|s| s.title == *skill_id);
+            let target_norm = crate::util::normalize_title(skill_id);
+            let matching = skills
+                .into_iter()
+                .find(|s| crate::util::normalize_title(&s.title) == target_norm);
             if let Some(s) = matching {
-                service.uninstall_skill_from_agents(skill_id, &s.installed_agent_ids)?;
-                println!("✓ 已从 {} 个 Agent 中卸载技能 '{}'", s.installed_agent_ids.len(), skill_id);
+                let targets = if !explicit_targets.is_empty() {
+                    explicit_targets
+                } else if include_hub {
+                    s.installed_agent_ids.clone()
+                } else {
+                    let non_hub: Vec<String> = s
+                        .installed_agent_ids
+                        .iter()
+                        .filter(|id| !id.starts_with("universal:"))
+                        .cloned()
+                        .collect();
+                    if non_hub.is_empty() {
+                        s.installed_agent_ids.clone()
+                    } else {
+                        non_hub
+                    }
+                };
+                service.uninstall_skill_from_agents(&s.title, &targets)?;
+                println!(
+                    "✓ 已从 {} 个 Agent 中卸载技能 '{}'{}",
+                    targets.len(),
+                    s.title,
+                    if targets.len() < s.installed_agent_ids.len() {
+                        "（中枢原件已保留，使用 --all 可一并移除）"
+                    } else {
+                        ""
+                    }
+                );
             } else {
                 println!("未找到技能 '{}'，可能未安装或已卸载。", skill_id);
             }

@@ -16,10 +16,12 @@ use std::time::Duration;
 type HmacSha256 = Hmac<Sha256>;
 
 const SERVICE: &str = "s3";
+const MAX_S3_OBJECT_BYTES: u64 = 256 * 1024 * 1024;
 
 pub struct S3Transport {
     endpoint: String,
     host: String,
+    base_path: String,
     bucket: String,
     region: String,
     access_key_id: String,
@@ -42,18 +44,25 @@ impl S3Transport {
         if bucket.trim().is_empty() {
             return Err(AppError::Message("S3 bucket 不能为空".to_string()));
         }
-        let host = endpoint
+        let without_scheme = endpoint
             .strip_prefix("https://")
             .or_else(|| endpoint.strip_prefix("http://"))
             .unwrap_or(&endpoint)
-            .trim_end_matches('/')
-            .to_string();
+            .trim_end_matches('/');
+        let (host, base_path) = match without_scheme.split_once('/') {
+            Some((h, p)) => (
+                h.to_string(),
+                format!("/{}", p.trim_matches('/')),
+            ),
+            None => (without_scheme.to_string(), String::new()),
+        };
         let agent = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(120))
             .build();
         Ok(Self {
             endpoint,
             host,
+            base_path: if base_path == "/" { String::new() } else { base_path },
             bucket: bucket.trim().to_string(),
             region: if region.trim().is_empty() {
                 "us-east-1".to_string()
@@ -99,9 +108,14 @@ impl S3Transport {
         let scope = format!("{date}/{}/{SERVICE}/aws4_request", self.region);
 
         let canonical_uri = if key.is_empty() {
-            format!("/{}", self.bucket)
+            format!("{}/{}", self.base_path, uri_encode_path(&self.bucket))
         } else {
-            format!("/{}/{}", self.bucket, uri_encode_path(key))
+            format!(
+                "{}/{}/{}",
+                self.base_path,
+                uri_encode_path(&self.bucket),
+                uri_encode_path(key)
+            )
         };
         let canonical_query = canonical_query(query);
         let canonical_headers = format!(
@@ -137,9 +151,9 @@ impl S3Transport {
             request.send_bytes(body)
         };
         match response {
-            Ok(resp) => Ok(read_body(resp)),
+            Ok(resp) => read_body(resp),
             Err(ureq::Error::Status(code, resp)) => {
-                let detail = String::from_utf8_lossy(&read_body(resp)).to_string();
+                let detail = String::from_utf8_lossy(&read_body_lossy(resp)).to_string();
                 Err(AppError::Message(format!("S3 返回 {code}: {detail}")))
             }
             Err(error) => Err(AppError::Message(format!("S3 请求失败: {error}"))),
@@ -161,10 +175,10 @@ impl SyncTransport for S3Transport {
     fn get(&self, key: &str) -> AppResult<Option<Vec<u8>>> {
         let request = self.signed("GET", key, &[], b"");
         match request.call() {
-            Ok(resp) => Ok(Some(read_body(resp))),
+            Ok(resp) => Ok(Some(read_body(resp)?)),
             Err(ureq::Error::Status(404, _)) => Ok(None),
             Err(ureq::Error::Status(code, resp)) => {
-                let detail = String::from_utf8_lossy(&read_body(resp)).to_string();
+                let detail = String::from_utf8_lossy(&read_body_lossy(resp)).to_string();
                 Err(AppError::Message(format!("S3 返回 {code}: {detail}")))
             }
             Err(error) => Err(AppError::Message(format!("S3 请求失败: {error}"))),
@@ -209,7 +223,7 @@ impl SyncTransport for S3Transport {
             Ok(_) => Ok(()),
             Err(ureq::Error::Status(404, _)) => Ok(()),
             Err(ureq::Error::Status(code, resp)) => {
-                let detail = String::from_utf8_lossy(&read_body(resp)).to_string();
+                let detail = String::from_utf8_lossy(&read_body_lossy(resp)).to_string();
                 Err(AppError::Message(format!("S3 返回 {code}: {detail}")))
             }
             Err(error) => Err(AppError::Message(format!("S3 请求失败: {error}"))),
@@ -217,9 +231,22 @@ impl SyncTransport for S3Transport {
     }
 }
 
-fn read_body(response: ureq::Response) -> Vec<u8> {
+fn read_body(response: ureq::Response) -> AppResult<Vec<u8>> {
     let mut bytes = Vec::new();
-    let _ = response.into_reader().read_to_end(&mut bytes);
+    response
+        .into_reader()
+        .take(MAX_S3_OBJECT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| AppError::Message(format!("读取 S3 响应体失败: {error}")))?;
+    if bytes.len() as u64 > MAX_S3_OBJECT_BYTES {
+        return Err(AppError::Message("S3 响应体超过最大允许大小上限。".to_string()));
+    }
+    Ok(bytes)
+}
+
+fn read_body_lossy(response: ureq::Response) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let _ = response.into_reader().take(64 * 1024).read_to_end(&mut bytes);
     bytes
 }
 

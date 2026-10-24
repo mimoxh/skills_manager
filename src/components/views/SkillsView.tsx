@@ -39,6 +39,9 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
   }, [focusSkillTitle, skills]);
   const [dragging, setDragging] = useState(false);
   const [filter, setFilter] = useState<SkillsFilter>(initialFilter);
+  useEffect(() => {
+    setFilter(initialFilter);
+  }, [initialFilter]);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTagFilters, setSelectedTagFilters] = useState<string[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<GroupedSkill | null>(null);
@@ -141,7 +144,11 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
 
   async function confirmDelete() {
     if (!deleteTarget) return;
-    await onUninstall(deleteTarget.title, deleteTarget.installedAgentIds);
+    const orderedAgentIds = [
+      ...deleteTarget.installedAgentIds.filter((id) => !id.startsWith("universal:")),
+      ...deleteTarget.installedAgentIds.filter((id) => id.startsWith("universal:")),
+    ];
+    await onUninstall(deleteTarget.title, orderedAgentIds);
     setDeleteTarget(null);
   }
 
@@ -452,7 +459,7 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
           onSourceAgent={selectSourceAgent}
           onToggleAgent={toggleAgent}
           onConfirm={executeSync}
-          onToggleNoFullCoverage={async () => { await onToggleNoFullCoverage(selectedSkill.title); setSelectedSkill(null); }}
+          onToggleNoFullCoverage={async () => { await onToggleNoFullCoverage(selectedSkill.title); }}
           onUserTagsChange={updateSelectedSkillTags}
         />
       )}

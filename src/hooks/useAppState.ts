@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useCatalog } from "./useCatalog";
 import { useMcpServers } from "./useMcpServers";
 import { useSkillsData } from "./useSkillsData";
@@ -7,9 +7,25 @@ import { useToast } from "./useToast";
 
 export function useAppState() {
   const { toast, showToast, dismissToast } = useToast();
-  // busy 提升到组合层，跨 skills/mcp 域共享单一加载状态
-  const [busy, setBusy] = useState(false);
-  const sync = useSync({ showToast });
+  // busy 提升到组合层，跨 skills/mcp 域共享引用计数加载状态，避免嵌套或并发操作提前归零
+  const busyCountRef = useRef(0);
+  const [busy, setBusyState] = useState(false);
+  const setBusy = useCallback((next: boolean) => {
+    if (next) {
+      busyCountRef.current += 1;
+      setBusyState(true);
+    } else {
+      busyCountRef.current = Math.max(0, busyCountRef.current - 1);
+      setBusyState(busyCountRef.current > 0);
+    }
+  }, []);
+
+  const sync = useSync({
+    showToast,
+    onSynced: async () => {
+      await skillsData.refreshAll();
+    },
+  });
 
   const mcp = useMcpServers({ showToast, setBusy });
   const skillsData = useSkillsData({
@@ -17,6 +33,9 @@ export function useAppState() {
     setBusy,
     setMcpServers: mcp.setMcpServers,
     setNoFullCoverageMcpTitles: mcp.setNoFullCoverageMcpTitles,
+    onSkillsChanged: async () => {
+      await sync.refreshPendingHubSkills(false);
+    },
   });
   const catalog = useCatalog({
     showToast,
