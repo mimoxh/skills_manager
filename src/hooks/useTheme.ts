@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import { DEFAULT_PALETTE, isPalette, themeOption, type Palette } from "../lib/themes";
 
+export type { Palette } from "../lib/themes";
 export type ThemeMode = "system" | "light" | "dark";
 export type ResolvedTheme = "light" | "dark";
-export type Palette = "modern" | "parchment";
 
 const THEME_STORAGE_KEY = "skills-manager.theme";
 const PALETTE_STORAGE_KEY = "skills-manager.palette";
@@ -12,10 +13,6 @@ function isThemeMode(value: string | null): value is ThemeMode {
   return value === "system" || value === "light" || value === "dark";
 }
 
-function isPalette(value: string | null): value is Palette {
-  return value === "modern" || value === "parchment";
-}
-
 function readStoredTheme(): ThemeMode {
   if (typeof window === "undefined") return "system";
   const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
@@ -23,9 +20,9 @@ function readStoredTheme(): ThemeMode {
 }
 
 function readStoredPalette(): Palette {
-  if (typeof window === "undefined") return "modern";
+  if (typeof window === "undefined") return DEFAULT_PALETTE;
   const stored = window.localStorage.getItem(PALETTE_STORAGE_KEY);
-  return isPalette(stored) ? stored : "modern";
+  return isPalette(stored) ? stored : DEFAULT_PALETTE;
 }
 
 function systemTheme(): ResolvedTheme {
@@ -52,9 +49,11 @@ export function useTheme() {
   }, []);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = resolvedTheme;
-    document.documentElement.dataset.themeMode = themeMode;
-    document.documentElement.dataset.palette = palette;
+    const root = document.documentElement;
+    root.dataset.theme = resolvedTheme;
+    root.dataset.themeMode = themeMode;
+    root.dataset.palette = palette;
+    root.dataset.style = themeOption(palette).style;
   }, [resolvedTheme, themeMode, palette]);
 
   function setThemeMode(nextMode: ThemeMode) {

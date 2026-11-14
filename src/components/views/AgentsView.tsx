@@ -7,7 +7,6 @@ import { UserTagEditor } from "./UserTagEditor";
 
 const agentTypeOptions: Array<{ value: AgentType; label: string }> = [
   { value: "custom", label: "自定义" },
-  { value: "universal", label: "Universal 通用中枢" },
   { value: "opencode", label: "OpenCode" },
   { value: "codex", label: "Codex" },
   { value: "claudeCode", label: "Claude Code" },
@@ -52,8 +51,8 @@ interface AgentsViewProps {
   customAgent: AgentProfile;
   busy: boolean;
   onCustomChange: (agent: AgentProfile) => void;
-  onSaveCustom: () => void;
-  onSaveAgent?: (agent: AgentProfile) => Promise<void> | void;
+  onSaveCustom: () => Promise<boolean | void> | boolean | void;
+  onSaveAgent?: (agent: AgentProfile) => Promise<boolean | void> | boolean | void;
   onSetAgentTags: (agentId: string, tags: string[]) => Promise<string[]>;
   onDelete: (agentId: string) => void;
   onSync: (title: string, targetAgentIds: string[], conflictPolicy: ConflictPolicy) => Promise<InstallResult[]>;
@@ -105,16 +104,22 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
 
   async function handleSaveEdit() {
     if (!editAgent) return;
-    if (onSaveAgent) {
-      await onSaveAgent(editAgent);
-    } else {
-      onCustomChange(editAgent);
-      onSaveCustom();
+    try {
+      if (onSaveAgent) {
+        const ok = await onSaveAgent(editAgent);
+        if (ok === false) return;
+      } else {
+        onCustomChange(editAgent);
+        const ok = await onSaveCustom();
+        if (ok === false) return;
+      }
+      if (editAgent.id) {
+        await onSetAgentTags(editAgent.id, editAgent.userTags ?? []);
+      }
+      setEditAgent(null);
+    } catch {
+      // 保存失败时保持弹窗打开
     }
-    if (editAgent.id) {
-      await onSetAgentTags(editAgent.id, editAgent.userTags ?? []);
-    }
-    setEditAgent(null);
   }
 
   function toggleTagFilter(tag: string) {
@@ -132,7 +137,13 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
 
   async function handleAddMissing() {
     if (!previewAgent || !selectedMissing.length) return;
-    for (const title of selectedMissing) { await onSync(title, [previewAgent.id], "prompt"); }
+    for (const title of selectedMissing) {
+      try {
+        await onSync(title, [previewAgent.id], "backupOverwrite");
+      } catch {
+        // 单条失败已提示，继续处理后续项
+      }
+    }
     setSelectedMissing([]);
   }
 
@@ -212,11 +223,6 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
                           ★ 基准中枢
                         </span>
                       )}
-                      {agent.supportsUniversal && agent.type !== "universal" && (
-                        <span className="badge" style={{ marginLeft: 6, fontSize: 10, background: "rgba(16, 185, 129, 0.1)", color: "#059669" }}>
-                          原生兼容中枢
-                        </span>
-                      )}
                     </div>
                     <div className="agent-path">{agent.skillsPath}</div>
                     <div className="agent-tags">
@@ -225,26 +231,13 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
                       ))}
                       <span className="badge badge-success">{installedCount} 已有</span>
                       {missingCount > 0 && <span className="badge badge-warning">{missingCount} 缺失</span>}
-                      {agent.type !== "universal" && onSaveAgent && (
-                        <button
-                          className="badge badge-user-tag"
-                          type="button"
-                          title="该 harness 是否原生扫描 Universal 中枢（~/.agents/skills）"
-                          style={{ cursor: "pointer" }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void onSaveAgent({ ...agent, supportsUniversal: !agent.supportsUniversal });
-                          }}
-                          disabled={busy}
-                        >
-                          {agent.supportsUniversal ? "原生兼容：开" : "原生兼容：关"}
-                        </button>
-                      )}
                     </div>
                   </div>
-                  <button className="btn-icon" onClick={(e) => { e.stopPropagation(); setDeleteAgent(agent); }} disabled={busy} title="删除" type="button">
-                    <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
-                  </button>
+                  {agent.type !== "universal" && (
+                    <button className="btn-icon" onClick={(e) => { e.stopPropagation(); setDeleteAgent(agent); }} disabled={busy} title="删除" type="button">
+                      <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+                    </button>
+                  )}
                 </div>
               );
             })}
@@ -261,7 +254,7 @@ export function AgentsView({ agents, skills, customAgent, busy, onCustomChange, 
       </div>
 
       {/* Right Side: Add Agent Panel (always visible) */}
-      <AddAgentPanel customAgent={customAgent} busy={busy} onCustomChange={onCustomChange} onSaveCustom={onSaveCustom} pickFolder={pickFolder} pickFile={pickFile} />
+      <AddAgentPanel customAgent={customAgent} hubPath={agents.find((agent) => agent.type === "universal")?.skillsPath ?? ""} busy={busy} onCustomChange={onCustomChange} onSaveCustom={onSaveCustom} pickFolder={pickFolder} pickFile={pickFile} />
 
       {/* Preview Dialog */}
       {previewAgent && (
@@ -460,10 +453,12 @@ function AgentPreviewDialog({ agent, installedSkills, missingSkills, selectedMis
 
         {/* Footer */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, borderTop: "1px solid var(--border)", padding: "16px 24px" }}>
-          <button className="btn btn-secondary" onClick={onDelete} disabled={busy} type="button" style={{ color: "var(--danger)" }}>
-            <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
-            删除
-          </button>
+          {agent.type !== "universal" ? (
+            <button className="btn btn-secondary" onClick={onDelete} disabled={busy} type="button" style={{ color: "var(--danger)" }}>
+              <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+              删除
+            </button>
+          ) : <div />}
           <div style={{ display: "flex", gap: 8 }}>
             {agent.type === "claudeCowork" && unregisteredSkills.length > 0 && onRepairCowork && (
               <button className="btn btn-secondary" onClick={() => onRepairCowork(agent.id)} disabled={busy} type="button">
@@ -580,11 +575,12 @@ function AgentEditDialog({ agent, availableUserTags, busy, onChange, onClose, on
         <div style={{ flex: 1, overflow: "auto", padding: "20px 24px" }}>
           <div className="input-group">
             <label className="input-label">类型</label>
-            <select className="input" value={agent.type} onChange={(e) => {
+            <select className="input" value={agent.type} disabled={agent.type === "universal"} onChange={(e) => {
               const newType = e.target.value as AgentType;
               const newAdapterConfig: Record<string, unknown> = isMcpAgent(newType, {}) ? { mcpConfigPath: "" } : {};
               onChange({ ...agent, type: newType, adapterConfig: newAdapterConfig });
             }}>
+              {agent.type === "universal" && <option value="universal">Universal 通用中枢</option>}
               {agentTypeOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
             </select>
           </div>
@@ -595,8 +591,8 @@ function AgentEditDialog({ agent, availableUserTags, busy, onChange, onClose, on
           <div className="input-group">
             <label className="input-label">Skills 安装目录</label>
             <div style={{ display: "flex", gap: 8 }}>
-              <input className="input" value={agent.skillsPath} onChange={(e) => onChange({ ...agent, skillsPath: e.target.value })} placeholder="C:\Users\you\.agent\skills" style={{ flex: 1 }} />
-              <button className="btn btn-secondary" onClick={async () => { const p = await pickFolder(); if (p) onChange({ ...agent, skillsPath: p }); }} disabled={busy} type="button">浏览</button>
+              <input className="input" value={agent.skillsPath} onChange={(e) => onChange({ ...agent, skillsPath: e.target.value })} placeholder="C:\Users\you\.agent\skills" readOnly={agent.type === "universal"} style={{ flex: 1 }} />
+              {agent.type !== "universal" && <button className="btn btn-secondary" onClick={async () => { const p = await pickFolder(); if (p) onChange({ ...agent, skillsPath: p }); }} disabled={busy} type="button">浏览</button>}
             </div>
           </div>
           {showMcpFormat && (
@@ -644,8 +640,9 @@ function AgentEditDialog({ agent, availableUserTags, busy, onChange, onClose, on
 
 // ── 添加 Agent 面板 (右侧常驻) ──────────────────────────────────────
 
-function AddAgentPanel({ customAgent, busy, onCustomChange, onSaveCustom, pickFolder, pickFile }: {
+function AddAgentPanel({ customAgent, hubPath, busy, onCustomChange, onSaveCustom, pickFolder, pickFile }: {
   customAgent: AgentProfile; busy: boolean;
+  hubPath: string;
   onCustomChange: (agent: AgentProfile) => void; onSaveCustom: () => void;
   pickFolder: () => Promise<string | null>;
   pickFile: (filters?: Array<{ name: string; extensions: string[] }>) => Promise<string | null>;
@@ -663,7 +660,16 @@ function AddAgentPanel({ customAgent, busy, onCustomChange, onSaveCustom, pickFo
       <div className="card-body">
         <div className="input-group">
           <label className="input-label">类型</label>
-          <select className="input" value={customAgent.type} onChange={(e) => { const t = e.target.value as AgentType; onCustomChange({ ...customAgent, type: t, adapterConfig: isMcpAgent(t, {}) ? { mcpConfigPath: "" } : {} }); }}>
+          <select className="input" value={customAgent.type} onChange={(e) => {
+            const t = e.target.value as AgentType;
+            onCustomChange({
+              ...customAgent,
+              type: t,
+              name: defaultAgentName(t),
+              skillsPath: defaultAgentSkillsPath(t, hubPath),
+              adapterConfig: isMcpAgent(t, {}) ? { mcpConfigPath: "" } : {},
+            });
+          }}>
             {agentTypeOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
           </select>
         </div>
@@ -674,8 +680,8 @@ function AddAgentPanel({ customAgent, busy, onCustomChange, onSaveCustom, pickFo
         <div className="input-group">
           <label className="input-label">Skills 安装目录</label>
           <div style={{ display: "flex", gap: 8 }}>
-            <input className="input" value={customAgent.skillsPath} onChange={(e) => onCustomChange({ ...customAgent, skillsPath: e.target.value })} placeholder={skillsPlaceholder(customAgent.type)} style={{ flex: 1 }} />
-            <button className="btn btn-secondary" onClick={async () => { const p = await pickFolder(); if (p) onCustomChange({ ...customAgent, skillsPath: p }); }} disabled={busy} type="button">浏览</button>
+            <input className="input" value={customAgent.skillsPath} onChange={(e) => onCustomChange({ ...customAgent, skillsPath: e.target.value })} placeholder={skillsPlaceholder(customAgent.type)} readOnly={customAgent.type === "universal"} style={{ flex: 1 }} />
+            {customAgent.type !== "universal" && <button className="btn btn-secondary" onClick={async () => { const p = await pickFolder(); if (p) onCustomChange({ ...customAgent, skillsPath: p }); }} disabled={busy} type="button">浏览</button>}
           </div>
         </div>
         {showMcpFormat && (
@@ -718,13 +724,24 @@ function agentTypeLabel(type: AgentType): string {
 }
 
 function agentPlaceholder(type: AgentType): string {
-  const map: Partial<Record<AgentType, string>> = { universal: "Universal (.agents/skills)", opencode: "OpenCode", codex: "Codex", claudeCode: "Claude Code", claudeCowork: "Claude Desktop Cowork", cursor: "Cursor", trae: "Trae" };
+  const map: Partial<Record<AgentType, string>> = { universal: "Skills Manager 中枢", opencode: "OpenCode", codex: "Codex", claudeCode: "Claude Code", claudeCowork: "Claude Desktop Cowork", cursor: "Cursor", trae: "Trae" };
   return map[type] ?? "例如 My Agent";
 }
 
 function skillsPlaceholder(type: AgentType): string {
-  const map: Partial<Record<AgentType, string>> = { universal: "~/.agents/skills", opencode: "~/.opencode/skills", codex: "~/.codex/skills", claudeCode: "~/.claude/skills", claudeCowork: "%LOCALAPPDATA%\\Claude-3p\\...\\skills", cursor: "~/.cursor/skills", trae: "~/.trae/skills" };
-  return map[type] ?? "C:\\Users\\you\\.agents\\skills";
+  const map: Partial<Record<AgentType, string>> = { universal: "<程序目录>\\skills", opencode: "~/.opencode/skills", codex: "~/.codex/skills", claudeCode: "~/.claude/skills", claudeCowork: "%LOCALAPPDATA%\\Claude-3p\\...\\skills", cursor: "~/.cursor/skills", trae: "~/.trae/skills" };
+  return map[type] ?? "C:\\path\\to\\skills";
+}
+
+/// 选择内置类型时预填默认名称；自定义类型留空由用户填写。
+function defaultAgentName(type: AgentType): string {
+  return type === "custom" ? "" : agentPlaceholder(type);
+}
+
+/// 选择内置类型时预填默认 Skills 目录；`~` 由后端展开为用户主目录。
+function defaultAgentSkillsPath(type: AgentType, hubPath: string): string {
+  if (type === "universal") return hubPath;
+  return type === "custom" ? "" : skillsPlaceholder(type);
 }
 
 function mcpPlaceholder(type: AgentType, format?: string): string {

@@ -83,7 +83,10 @@ impl CatalogIndex {
     }
 
     fn connect(&self) -> AppResult<Connection> {
-        Ok(Connection::open(&self.db_path)?)
+        let conn = Connection::open(&self.db_path)?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        let _ = conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
+        Ok(conn)
     }
 
     fn init(&self) -> AppResult<()> {

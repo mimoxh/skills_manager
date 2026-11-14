@@ -4,9 +4,12 @@ use crate::{
         AgentProfile, CatalogFilters, CatalogRefreshResult, CatalogRefreshStatus,
         CatalogSafetyMode, CatalogSearchResult, CatalogSort, CatalogSource, ConflictPolicy,
         GroupedMcpServer, GroupedSkill, ImportSkillFile, ImportSkillResult, InitialData,
-        InstallResult, McpOperationResult, McpServerConfig,
+        InstallResult, McpOperationResult, McpServerConfig, RemoteInstallOptions,
+        RemoteInstallResult, RemoteMcpInstallOptions, RemoteSourceInspection, SyncConfig,
+        SyncConflict, SyncConflictChoice, SyncStatus,
     },
     service::AppService,
+    store::PendingHubSkill,
 };
 use tauri::State;
 
@@ -32,11 +35,18 @@ pub async fn import_skill_upload(
     files: Vec<ImportSkillFile>,
     target_agent_ids: Vec<String>,
     conflict_policy: ConflictPolicy,
+    to_hub: Option<bool>,
     service: State<'_, AppService>,
 ) -> AppResult<ImportSkillResult> {
     let service = service.inner().clone();
     run_blocking(move || {
-        service.import_uploaded_files(&file_name, &files, &target_agent_ids, conflict_policy)
+        service.import_uploaded_files(
+            &file_name,
+            &files,
+            &target_agent_ids,
+            conflict_policy,
+            to_hub.unwrap_or(true),
+        )
     })
     .await
 }
@@ -81,6 +91,7 @@ pub async fn sync_grouped_skill(
     source_agent_id: Option<String>,
     target_agent_ids: Vec<String>,
     conflict_policy: ConflictPolicy,
+    to_hub: Option<bool>,
     service: State<'_, AppService>,
 ) -> AppResult<Vec<InstallResult>> {
     let service = service.inner().clone();
@@ -90,9 +101,28 @@ pub async fn sync_grouped_skill(
             source_agent_id.as_deref(),
             target_agent_ids,
             conflict_policy,
+            to_hub.unwrap_or(true),
         )
     })
     .await
+}
+
+#[tauri::command]
+pub async fn set_hub_skill_targets(
+    title: String, target_agent_ids: Vec<String>, service: State<'_, AppService>,
+) -> AppResult<Vec<InstallResult>> {
+    let service = service.inner().clone();
+    run_blocking(move || service.set_hub_skill_targets(&title, &target_agent_ids)).await
+}
+
+#[tauri::command]
+pub fn list_pending_hub_skills(service: State<AppService>) -> AppResult<Vec<PendingHubSkill>> {
+    service.list_pending_hub_skills()
+}
+
+#[tauri::command]
+pub fn acknowledge_pending_hub_skills(keys: Vec<String>, service: State<AppService>) -> AppResult<()> {
+    service.acknowledge_pending_hub_skills(&keys)
 }
 
 #[tauri::command]
@@ -229,13 +259,75 @@ pub async fn install_catalog_skill(
     catalog_skill_id: String,
     target_agent_ids: Vec<String>,
     conflict_policy: ConflictPolicy,
+    to_hub: Option<bool>,
     service: State<'_, AppService>,
 ) -> AppResult<Vec<InstallResult>> {
     let service = service.inner().clone();
     run_blocking(move || {
-        service.install_catalog_skill(&catalog_skill_id, target_agent_ids, conflict_policy)
+        service.install_catalog_skill(
+            &catalog_skill_id,
+            target_agent_ids,
+            conflict_policy,
+            to_hub.unwrap_or(true),
+        )
     })
     .await
+}
+
+// ── Skills 同步 Commands ──────────────────────────────────────────────
+
+#[tauri::command]
+pub fn sync_get_config(service: State<AppService>) -> AppResult<SyncConfig> {
+    service.sync_get_config()
+}
+
+#[tauri::command]
+pub fn sync_set_config(
+    config: SyncConfig,
+    secret_access_key: Option<String>,
+    encrypt_password: Option<String>,
+    service: State<AppService>,
+) -> AppResult<SyncConfig> {
+    service.sync_set_config(config, secret_access_key, encrypt_password)
+}
+
+#[tauri::command]
+pub async fn sync_now(service: State<'_, AppService>) -> AppResult<SyncStatus> {
+    let service = service.inner().clone();
+    run_blocking(move || service.sync_now()).await
+}
+
+#[tauri::command]
+pub fn sync_status(service: State<AppService>) -> AppResult<SyncStatus> {
+    service.sync_status()
+}
+
+#[tauri::command]
+pub fn sync_list_conflicts(service: State<AppService>) -> AppResult<Vec<SyncConflict>> {
+    service.sync_list_conflicts()
+}
+
+#[tauri::command]
+pub fn sync_resolve_conflict(
+    skill_id: String,
+    choice: SyncConflictChoice,
+    service: State<AppService>,
+) -> AppResult<SyncStatus> {
+    service.sync_resolve_conflict(&skill_id, choice)
+}
+
+#[tauri::command]
+pub fn sync_test_connection(
+    config: SyncConfig,
+    service: State<AppService>,
+) -> AppResult<String> {
+    service.sync_test_connection(config)
+}
+
+#[tauri::command]
+pub async fn sync_gc(service: State<'_, AppService>) -> AppResult<usize> {
+    let service = service.inner().clone();
+    run_blocking(move || service.sync_gc()).await
 }
 
 // ── MCP Commands ──────────────────────────────────────────────────────
@@ -325,4 +417,47 @@ pub fn remove_mcp_server_from_agents(
     service
         .mcp()
         .remove_mcp_server_from_agents(&agents, &server_name, &agent_ids)
+}
+
+// ── 远程源码与外部 Agent 集成 Commands ─────────────────────────────────────
+
+#[tauri::command]
+pub async fn inspect_remote_source(
+    url: String,
+    service: State<'_, AppService>,
+) -> AppResult<RemoteSourceInspection> {
+    let service = service.inner().clone();
+    run_blocking(move || service.inspect_remote_source(&url)).await
+}
+
+#[tauri::command]
+pub async fn install_remote_source(
+    options: RemoteInstallOptions,
+    service: State<'_, AppService>,
+) -> AppResult<RemoteInstallResult> {
+    let service = service.inner().clone();
+    run_blocking(move || service.install_remote_source(options)).await
+}
+
+#[tauri::command]
+pub fn install_remote_mcp(
+    options: RemoteMcpInstallOptions,
+    service: State<AppService>,
+) -> AppResult<Vec<McpOperationResult>> {
+    service.install_remote_mcp(options)
+}
+
+#[tauri::command]
+pub fn get_self_executable_path() -> AppResult<String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| AppError::Message(format!("获取程序路径失败: {}", e)))?;
+    Ok(exe.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn register_self_as_mcp(
+    target_agent_ids: Vec<String>,
+    service: State<AppService>,
+) -> AppResult<Vec<McpOperationResult>> {
+    service.register_self_as_mcp(&target_agent_ids)
 }

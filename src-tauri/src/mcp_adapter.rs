@@ -6,24 +6,133 @@ use std::path::{Path, PathBuf};
 
 // ---- 共享文件读写（消除 3 个 JSON 适配器 + 1 个 TOML 适配器的 read/write 重复）----
 
-/// 读取 JSON 配置文件，文件不存在时返回空对象。Claude / OpenCode / Trae 共用。
+/// 读取 JSON / JSONC 配置文件，文件不存在时返回空对象。Claude / OpenCode / Trae 共用。
 pub fn read_json_file(path: &Path) -> AppResult<serde_json::Value> {
     if !path.exists() {
         return Ok(serde_json::Value::Object(Default::default()));
     }
     let text = std::fs::read_to_string(path)?;
-    let value: serde_json::Value = serde_json::from_str(&text)?;
-    Ok(value)
+    match serde_json::from_str(&text) {
+        Ok(value) => Ok(value),
+        Err(first_err) => {
+            let cleaned = strip_jsonc(&text);
+            serde_json::from_str(&cleaned).map_err(|_| AppError::from(first_err))
+        }
+    }
 }
 
-/// 写入 JSON 配置文件，自动创建父目录。
-pub fn write_json_file(path: &Path, value: &serde_json::Value) -> AppResult<()> {
+/// 剥离 JSONC 中的行注释 (`//`)、块注释 (`/* ... */`) 与尾随逗号，同时保留字符串字面量原样。
+fn strip_jsonc(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0;
+    let mut in_string = false;
+
+    while i < bytes.len() {
+        if in_string {
+            let ch = input[i..].chars().next().unwrap();
+            out.push(ch);
+            if ch == '\\' && i + 1 < bytes.len() {
+                i += ch.len_utf8();
+                let next_ch = input[i..].chars().next().unwrap();
+                out.push(next_ch);
+                i += next_ch.len_utf8();
+                continue;
+            }
+            if ch == '"' {
+                in_string = false;
+            }
+            i += ch.len_utf8();
+        } else if bytes[i] == b'"' {
+            in_string = true;
+            out.push('"');
+            i += 1;
+        } else if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+            i += 2;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+        } else if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            if i + 1 < bytes.len() {
+                i += 2;
+            }
+        } else {
+            let ch = input[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+
+    let stage1 = out;
+    let s_bytes = stage1.as_bytes();
+    let mut final_out = String::with_capacity(stage1.len());
+    let mut j = 0;
+    let mut in_str = false;
+    while j < s_bytes.len() {
+        if in_str {
+            let ch = stage1[j..].chars().next().unwrap();
+            final_out.push(ch);
+            if ch == '\\' && j + 1 < s_bytes.len() {
+                j += ch.len_utf8();
+                let next_ch = stage1[j..].chars().next().unwrap();
+                final_out.push(next_ch);
+                j += next_ch.len_utf8();
+                continue;
+            }
+            if ch == '"' {
+                in_str = false;
+            }
+            j += ch.len_utf8();
+        } else if s_bytes[j] == b'"' {
+            in_str = true;
+            final_out.push('"');
+            j += 1;
+        } else if s_bytes[j] == b',' {
+            let mut k = j + 1;
+            while k < s_bytes.len() && s_bytes[k].is_ascii_whitespace() {
+                k += 1;
+            }
+            if k < s_bytes.len() && (s_bytes[k] == b'}' || s_bytes[k] == b']') {
+                j += 1;
+                continue;
+            }
+            final_out.push(',');
+            j += 1;
+        } else {
+            let ch = stage1[j..].chars().next().unwrap();
+            final_out.push(ch);
+            j += ch.len_utf8();
+        }
+    }
+    final_out
+}
+
+fn atomic_write_str(path: &Path, text: &str) -> AppResult<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let text = serde_json::to_string_pretty(value)?;
-    std::fs::write(path, text)?;
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("config");
+    let temp_name = format!(".{}.{}.tmp", file_name, uuid::Uuid::new_v4().simple());
+    let temp_path = path.with_file_name(temp_name);
+    std::fs::write(&temp_path, text)?;
+    if let Err(err) = std::fs::rename(&temp_path, path) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(err.into());
+    }
     Ok(())
+}
+
+/// 写入 JSON 配置文件，自动创建父目录并采用同目录临时文件原子替换。
+pub fn write_json_file(path: &Path, value: &serde_json::Value) -> AppResult<()> {
+    let text = serde_json::to_string_pretty(value)?;
+    atomic_write_str(path, &text)
 }
 
 /// 读取 TOML 配置文件，文件不存在时返回空表。Codex 专用。
@@ -36,15 +145,11 @@ pub fn read_toml_file(path: &Path) -> AppResult<toml::Value> {
     Ok(value)
 }
 
-/// 写入 TOML 配置文件，自动创建父目录。
+/// 写入 TOML 配置文件，自动创建父目录并采用同目录临时文件原子替换。
 pub fn write_toml_file(path: &Path, value: &toml::Value) -> AppResult<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let text = toml::to_string_pretty(value)
         .map_err(|e| AppError::Message(format!("TOML 序列化失败: {}", e)))?;
-    std::fs::write(path, text)?;
-    Ok(())
+    atomic_write_str(path, &text)
 }
 
 // ---- MCP 段存取（消除 4 个适配器 add/update/remove/toggle 中 ×16 的 get-section 样板）----

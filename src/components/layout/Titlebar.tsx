@@ -1,4 +1,4 @@
-import { MouseEvent, useEffect, useState } from "react";
+import { MouseEvent, ReactNode, useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { hasTauriRuntime } from "../../lib/env";
 
@@ -6,7 +6,7 @@ function appWindow() {
   return hasTauriRuntime() ? getCurrentWindow() : null;
 }
 
-export function Titlebar() {
+export function Titlebar({ actions }: { actions?: ReactNode }) {
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -29,6 +29,11 @@ export function Titlebar() {
     <div className="titlebar" onMouseDown={startDrag} onDoubleClick={toggleMaximize}>
       <div className="titlebar-logo" />
       <div className="titlebar-spacer" />
+      {actions && (
+        <div onMouseDown={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()} style={{ display: "flex", height: "100%" }}>
+          {actions}
+        </div>
+      )}
       <div onMouseDown={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()} style={{ display: "flex", height: "100%" }}>
         <button className="titlebar-btn" onClick={() => appWindow()?.minimize()} title="最小化" type="button">
           <svg className="icon icon-sm" viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12" /></svg>

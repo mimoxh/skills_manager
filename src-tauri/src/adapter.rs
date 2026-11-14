@@ -1,7 +1,7 @@
 use crate::{
     error::{AppError, AppResult},
     models::{AgentProfile, AgentType},
-    util::effective_supports_universal,
+    util::{effective_supports_universal, program_skills_path},
 };
 use std::{
     env, fs,
@@ -25,11 +25,7 @@ impl DirectoryAdapter {
     }
 
     fn home_path(parts: &[&str]) -> Option<PathBuf> {
-        let mut path = dirs::home_dir()?;
-        for part in parts {
-            path.push(part);
-        }
-        Some(path)
+        home_dir_path(parts)
     }
 
     fn detect_claude_cowork_profiles(session_root: &Path) -> Vec<AgentProfile> {
@@ -95,22 +91,17 @@ fn safe_path_segment(value: &str) -> String {
 
 impl AgentAdapter for DirectoryAdapter {
     fn detect(&self) -> Vec<AgentProfile> {
-        // OpenCode 特殊处理：检测 ~/.opencode.json 配置文件
+        // OpenCode 特殊处理：检测 ~/.config/opencode 配置目录
         if self.agent_type == AgentType::OpenCode {
-            let config_exists = Self::home_path(&[".opencode.json"]).map_or(false, |p| p.exists());
-            let skills_path = Self::home_path(&[".opencode", "skills"])
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| {
-                    dirs::home_dir()
-                        .map(|h| {
-                            h.join(".opencode")
-                                .join("skills")
-                                .to_string_lossy()
-                                .to_string()
-                        })
-                        .unwrap_or_default()
-                });
-            if config_exists || std::path::Path::new(&skills_path).exists() {
+            let Some(config_dir) = opencode_config_dir() else {
+                return vec![];
+            };
+            let config_exists = config_dir.join("opencode.json").exists()
+                || config_dir.join("opencode.jsonc").exists()
+                || Self::home_path(&[".opencode.json"]).map_or(false, |p| p.exists());
+            let skills_dir = config_dir.join("skills");
+            if config_exists || config_dir.is_dir() || skills_dir.exists() {
+                let skills_path = skills_dir.to_string_lossy().to_string();
                 return vec![AgentProfile {
                     id: format!("opencode:{}", skills_path),
                     name: "OpenCode".to_string(),
@@ -136,7 +127,7 @@ impl AgentAdapter for DirectoryAdapter {
         }
 
         let candidates = match self.agent_type {
-            AgentType::Universal => vec![Self::home_path(&[".agents", "skills"])],
+            AgentType::Universal => vec![program_skills_path().ok()],
             AgentType::Codex => vec![Self::home_path(&[".codex", "skills"])],
             AgentType::Claude => vec![
                 env::var_os("APPDATA")
@@ -166,7 +157,7 @@ impl AgentAdapter for DirectoryAdapter {
                 AgentProfile {
                     id: format!("{}:{}", type_name, path_str),
                     name: match self.agent_type {
-                        AgentType::Universal => "Universal (.agents/skills)".to_string(),
+                        AgentType::Universal => "Skills Manager 中枢".to_string(),
                         AgentType::Codex => "Codex".to_string(),
                         AgentType::Claude => "Claude".to_string(),
                         AgentType::ClaudeCode => "Claude Code".to_string(),
@@ -217,6 +208,46 @@ impl AgentAdapter for DirectoryAdapter {
 
 pub fn adapter_for(profile: &AgentProfile) -> DirectoryAdapter {
     DirectoryAdapter::new(profile.agent_type.clone())
+}
+
+/// 拼接用户主目录下的路径。
+fn home_dir_path(parts: &[&str]) -> Option<PathBuf> {
+    let mut path = dirs::home_dir()?;
+    for part in parts {
+        path.push(part);
+    }
+    Some(path)
+}
+
+/// OpenCode 全局配置目录。优先 `XDG_CONFIG_HOME/opencode`，
+/// 否则回退到 `~/.config/opencode`（Windows 上同样使用该路径）。
+fn opencode_config_dir() -> Option<PathBuf> {
+    if let Some(xdg) = env::var_os("XDG_CONFIG_HOME") {
+        if !xdg.is_empty() {
+            return Some(PathBuf::from(xdg).join("opencode"));
+        }
+    }
+    dirs::home_dir().map(|home| home.join(".config").join("opencode"))
+}
+
+/// 内置 Agent 类型的默认 Skills 目录（用于新增未检测到的 Agent）。
+/// `Custom` 与 `ClaudeCowork` 没有可推断的默认目录，返回 `None`。
+pub fn default_skills_path(agent_type: &AgentType) -> Option<PathBuf> {
+    match agent_type {
+        AgentType::Universal => program_skills_path().ok(),
+        AgentType::Codex => home_dir_path(&[".codex", "skills"]),
+        AgentType::ClaudeCode => home_dir_path(&[".claude", "skills"]),
+        AgentType::Cursor => home_dir_path(&[".cursor", "skills"]),
+        AgentType::Trae => home_dir_path(&[".trae", "skills"]),
+        AgentType::OpenCode => opencode_config_dir().map(|dir| dir.join("skills")),
+        AgentType::Claude => env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .map(|path| path.join("Claude").join("skills")),
+        AgentType::CherryStudio => env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .map(|path| path.join("CherryStudio").join("Data").join("Skills")),
+        AgentType::ClaudeCowork | AgentType::Custom => None,
+    }
 }
 
 pub fn built_in_adapters() -> Vec<DirectoryAdapter> {
@@ -278,5 +309,14 @@ mod tests {
             config.get("manifestPath").and_then(|value| value.as_str()),
             Some(plugin_root.join("manifest.json").to_string_lossy().as_ref())
         );
+    }
+
+    #[test]
+    fn default_skills_path_covers_builtin_types() {
+        let opencode = default_skills_path(&AgentType::OpenCode).unwrap();
+        assert!(opencode.ends_with(Path::new("opencode").join("skills")));
+        assert!(default_skills_path(&AgentType::Codex).is_some());
+        assert!(default_skills_path(&AgentType::Custom).is_none());
+        assert!(default_skills_path(&AgentType::ClaudeCowork).is_none());
     }
 }

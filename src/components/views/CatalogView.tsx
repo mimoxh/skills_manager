@@ -152,11 +152,10 @@ export function CatalogView({
       }
     }, 1500);
     return () => window.clearInterval(handle);
-  }, [activeRefreshStatus?.isRunning, filters.safetyMode, query, sort, page]);
+  }, [activeRefreshStatus?.isRunning, filters, query, sort, page]);
 
   function updateFilters(next: CatalogFilters) {
     onFilters(next);
-    onSearch(query, sort, next, 1);
   }
 
   function toggleArray(key: keyof Pick<CatalogFilters, "sourceIds" | "installStatuses" | "contentCapabilities">, value: string) {
@@ -169,9 +168,8 @@ export function CatalogView({
     onQuery(nextQuery);
   }
 
-  async function applySort(nextSort: CatalogSort) {
+  function applySort(nextSort: CatalogSort) {
     onSort(nextSort);
-    await onSearch(query, nextSort, filters, 1);
   }
 
   async function saveCustomSource() {
@@ -196,7 +194,7 @@ export function CatalogView({
   function openSkill(skill: CatalogSkill) {
     const localSkill = findLocalSkill(skill, localSkillLookup, defaultSourceId);
     setSelectedSkill(skill);
-    setSelectedAgents(localSkill?.installedAgentIds ?? []);
+    setSelectedAgents(localSkill?.copies.filter((copy) => copy.managedByHub && copy.agentId !== localSkill.universalAgentId).map((copy) => copy.agentId) ?? []);
     setConflictPolicy("backupOverwrite");
   }
 
@@ -208,15 +206,7 @@ export function CatalogView({
 
   async function installSelectedSkill() {
     if (!selectedSkill) return;
-    const deselectedIds = selectedLocalSkill
-      ? selectedLocalSkill.installedAgentIds.filter((id) => !selectedAgents.includes(id))
-      : [];
-    if (deselectedIds.length > 0 && selectedLocalSkill) {
-      await onUninstallSkill(selectedLocalSkill.title, deselectedIds);
-    }
-    if (selectedAgents.length > 0) {
-      await onInstallSkill(selectedSkill.id, selectedAgents, conflictPolicy);
-    }
+    await onInstallSkill(selectedSkill.id, selectedAgents, conflictPolicy);
     setSelectedSkill(null);
     setSelectedAgents([]);
   }
@@ -398,8 +388,8 @@ export function CatalogView({
                 <article className="catalog-card" key={skill.id} onClick={() => openSkill(skill)} onKeyDown={(e) => handleCardActivation(e, () => openSkill(skill))} role="button" tabIndex={0}>
                   <div className="catalog-card-top">
                     <SourceIcon icon={skill.sourceIcon} defaultSourceId={defaultSourceId} />
-                    <span className={`badge ${skill.installStatus === "installed" ? "badge-success" : "badge-muted"}`}>
-                      {skill.installStatus === "installed" ? "已安装" : "未安装"}
+                    <span className={`badge ${catalogInstallStatusBadgeClass(skill.installStatus)}`}>
+                      {catalogInstallStatusLabel(skill.installStatus)}
                     </span>
                   </div>
                   <div className="catalog-card-name">{skill.name}</div>
@@ -479,12 +469,13 @@ export function CatalogView({
 
       {selectedSkill && (
         <SkillInstallDialog
-          allowNoTargets={Boolean(selectedLocalSkill)}
-          agents={agents}
+          allowNoTargets
+          agents={agents.filter((agent) => agent.type !== "universal")}
           busy={busy}
           conflictPolicy={conflictPolicy}
           description={selectedSkill.description}
           installedAgentIds={selectedLocalSkill?.installedAgentIds ?? []}
+          managedAgentIds={selectedLocalSkill?.copies.filter((copy) => copy.managedByHub).map((copy) => copy.agentId) ?? []}
           metadata={[
             { label: "来源", value: selectedSkill.sourceName },
             { label: "仓库路径", value: selectedSkill.relativePath || selectedSkill.sourcePath },
@@ -605,8 +596,32 @@ function clawhubCatalogSlug(skill: CatalogSkill) {
 }
 
 function catalogPrimaryLabel(selectedAgentIds: string[], localSkill: GroupedSkill | null) {
-  if (!localSkill) return "安装到 Agents";
-  if (selectedAgentIds.length === 0) return "全部删除";
-  if (selectedAgentIds.length < localSkill.installedAgentIds.length) return "同步并清理";
-  return "安装/更新";
+  if (selectedAgentIds.length === 0) return "只保存到中枢";
+  return localSkill ? "安装/更新所选 Agent" : "安装到所选 Agent";
+}
+
+function catalogInstallStatusBadgeClass(status: CatalogSkill["installStatus"]): string {
+  switch (status) {
+    case "installed":
+      return "badge-success";
+    case "updateAvailable":
+      return "badge-syncable";
+    case "conflict":
+      return "badge-warning";
+    default:
+      return "badge-muted";
+  }
+}
+
+function catalogInstallStatusLabel(status: CatalogSkill["installStatus"]): string {
+  switch (status) {
+    case "installed":
+      return "已安装";
+    case "updateAvailable":
+      return "可更新";
+    case "conflict":
+      return "冲突";
+    default:
+      return "未安装";
+  }
 }

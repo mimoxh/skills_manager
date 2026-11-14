@@ -15,6 +15,7 @@ interface SkillInstallDialogProps {
   description?: string | null;
   enableAgentTagFilter?: boolean;
   installedAgentIds?: string[];
+  managedAgentIds?: string[];
   isNoFullCoverage?: boolean;
   metadata?: Array<{ label: string; value?: string | number | null }>;
   primaryLabel: string;
@@ -44,6 +45,7 @@ export function SkillInstallDialog({
   description,
   enableAgentTagFilter = false,
   installedAgentIds = [],
+  managedAgentIds = [],
   isNoFullCoverage = false,
   metadata = [],
   primaryLabel,
@@ -216,7 +218,7 @@ export function SkillInstallDialog({
                         width: 20, height: 20, flexShrink: 0, borderRadius: 4, border: `1px solid ${checked ? "var(--accent)" : "var(--border)"}`,
                         background: checked ? "var(--accent)" : "transparent", display: "flex", alignItems: "center", justifyContent: "center",
                       }}>
-                        {checked && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><polyline points="20 6 9 17 4 12" /></svg>}
+                        {checked && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" style={{ color: "var(--on-accent)" }}><polyline points="20 6 9 17 4 12" /></svg>}
                       </span>
                       <span style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
                         <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 500 }}>
@@ -224,11 +226,6 @@ export function SkillInstallDialog({
                           {agent.type === "universal" && (
                             <span className="badge" style={{ fontSize: 10, background: "rgba(124, 58, 237, 0.15)", color: "#7c3aed" }}>
                               ★ 基准中枢
-                            </span>
-                          )}
-                          {agent.supportsUniversal && agent.type !== "universal" && (
-                            <span className="badge" style={{ fontSize: 10, background: "rgba(16, 185, 129, 0.1)", color: "#059669" }}>
-                              原生兼容中枢
                             </span>
                           )}
                         </span>
@@ -241,7 +238,7 @@ export function SkillInstallDialog({
                           </span>
                         )}
                       </span>
-                      {installed && <span className="badge badge-success">已安装</span>}
+                      {installed && <span className="badge badge-success">{managedAgentIds.includes(agent.id) ? "中枢托管" : "Agent 自装"}</span>}
                     </button>
                   );
                 })}
@@ -296,7 +293,7 @@ export function SkillInstallDialog({
                           width: 20, height: 20, flexShrink: 0, borderRadius: 10, border: `1px solid ${checked ? "var(--accent)" : "var(--border)"}`,
                           background: checked ? "var(--accent)" : "transparent", display: "flex", alignItems: "center", justifyContent: "center",
                         }}>
-                          {checked && <svg width="10" height="10" viewBox="0 0 24 24" fill="white"><circle cx="12" cy="12" r="7" /></svg>}
+                          {checked && <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style={{ color: "var(--on-accent)" }}><circle cx="12" cy="12" r="7" /></svg>}
                         </span>
                         <span style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
                           <span style={{ display: "block", fontSize: 14, fontWeight: 500 }}>{copy.agentName}</span>

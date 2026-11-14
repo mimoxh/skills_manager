@@ -45,6 +45,21 @@ export function useCatalog({ showToast, refreshAll, defaultSourceId }: Props) {
   const [catalogQuery, setCatalogQuery] = useState("");
   const [catalogSort, setCatalogSort] = useState<CatalogSort>("updatedDesc");
   const [catalogFilters, setCatalogFilters] = useState<CatalogFilters>(emptyCatalogFilters);
+  const latestSearchRef = useRef({
+    query: catalogQuery,
+    sort: catalogSort,
+    filters: catalogFilters,
+    page: catalogPage,
+    pageSize: catalogPageSize,
+  });
+  latestSearchRef.current = {
+    query: catalogQuery,
+    sort: catalogSort,
+    filters: catalogFilters,
+    page: catalogPage,
+    pageSize: catalogPageSize,
+  };
+  const searchReqIdRef = useRef(0);
 
   async function searchCatalog(
     nextQuery = catalogQuery,
@@ -52,12 +67,21 @@ export function useCatalog({ showToast, refreshAll, defaultSourceId }: Props) {
     nextFilters = catalogFilters,
     nextPage = catalogPage,
   ) {
+    const reqId = ++searchReqIdRef.current;
+    latestSearchRef.current = {
+      query: nextQuery,
+      sort: nextSort,
+      filters: nextFilters,
+      page: nextPage,
+      pageSize: catalogPageSize,
+    };
     setCatalogBusy(true);
     try {
       const [sources, result] = await Promise.all([
         api.listCatalogSources(),
         api.searchCatalogSkills(nextQuery, nextSort, nextFilters, nextPage, catalogPageSize),
       ]);
+      if (reqId !== searchReqIdRef.current) return;
       setCatalogSources(sources);
       setCatalogSkills(result.items);
       setCatalogTotal(result.total);
@@ -65,9 +89,12 @@ export function useCatalog({ showToast, refreshAll, defaultSourceId }: Props) {
       setCatalogHasMore(result.hasMore);
       showToast(`仓库目录显示第 ${result.page} 页 ${result.items.length} 个 skills，共 ${result.total} 个。`, "info");
     } catch (error) {
+      if (reqId !== searchReqIdRef.current) return;
       showToast(String(error), "error");
     } finally {
-      setCatalogBusy(false);
+      if (reqId === searchReqIdRef.current) {
+        setCatalogBusy(false);
+      }
     }
   }
 
@@ -139,10 +166,13 @@ export function useCatalog({ showToast, refreshAll, defaultSourceId }: Props) {
           console.warn(`Catalog source refresh failed: ${source.id}`, error);
         }
       }
+      const latest = latestSearchRef.current;
+      const reqId = ++searchReqIdRef.current;
       const [nextSources, nextSkills] = await Promise.all([
         api.listCatalogSources(),
-        api.searchCatalogSkills(catalogQuery, catalogSort, catalogFilters, catalogPage, catalogPageSize),
+        api.searchCatalogSkills(latest.query, latest.sort, latest.filters, latest.page, latest.pageSize),
       ]);
+      if (reqId !== searchReqIdRef.current) return;
       setCatalogSources(nextSources);
       setCatalogSkills(nextSkills.items);
       setCatalogTotal(nextSkills.total);
@@ -184,16 +214,26 @@ export function useCatalog({ showToast, refreshAll, defaultSourceId }: Props) {
     targetAgentIds: string[],
     conflictPolicy: ConflictPolicy,
   ): Promise<InstallResult[]> {
-    if (!targetAgentIds.length) {
-      showToast("请至少选择一个目标 Agent。", "error");
-      return [];
-    }
     setCatalogBusy(true);
     try {
       const results = await api.installCatalogSkill(catalogSkillId, targetAgentIds, conflictPolicy);
       await refreshAll();
-      await searchCatalog();
-      showToast(`已完成 ${results.length} 个安装任务。`, "success");
+      const latest = latestSearchRef.current;
+      await searchCatalog(latest.query, latest.sort, latest.filters, latest.page);
+      const errors = results.filter((r) => r.action === "error");
+      const skipped = results.filter((r) => r.action === "skipped");
+      const succeeded = results.length - errors.length - skipped.length;
+      if (errors.length > 0 || skipped.length > 0) {
+        const firstProblem = errors[0] ?? skipped[0];
+        const parts: string[] = [];
+        if (succeeded > 0) parts.push(`${succeeded} 个成功`);
+        if (errors.length > 0) parts.push(`${errors.length} 个失败`);
+        if (skipped.length > 0) parts.push(`${skipped.length} 个跳过`);
+        const detail = firstProblem?.message ? `：${firstProblem.message}` : "";
+        showToast(`安装结果：${parts.join("，")}${detail}`, errors.length > 0 ? "error" : "info");
+      } else {
+        showToast(`已完成 ${results.length} 个安装任务。`, "success");
+      }
       return results;
     } catch (error) {
       showToast(String(error), "error");

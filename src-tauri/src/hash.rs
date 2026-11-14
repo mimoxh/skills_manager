@@ -149,17 +149,24 @@ pub fn remove_dir_or_symlink(path: &Path) -> AppResult<()> {
 }
 
 /// 优先创建目录链接（Symlink，失败则 Junction），最后回退复制。
-/// 返回 Ok(true) 表示创建了链接，Ok(false) 表示使用了普通复制。
-pub fn symlink_or_copy_dir(source: &Path, target: &Path) -> AppResult<bool> {
+/// 返回实际使用的分发方式。
+pub fn symlink_or_copy_dir(source: &Path, target: &Path) -> AppResult<&'static str> {
+    symlink_or_copy_dir_with(source, target, create_dir_symlink, create_dir_junction)
+}
+
+fn symlink_or_copy_dir_with<F, G>(source: &Path, target: &Path, symlink: F, junction: G) -> AppResult<&'static str>
+where
+    F: Fn(&Path, &Path) -> std::io::Result<()>,
+    G: Fn(&Path, &Path) -> std::io::Result<()>,
+{
     remove_dir_or_symlink(target)?;
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
-    if create_dir_symlink(source, target).is_ok() || create_dir_junction(source, target).is_ok() {
-        return Ok(true);
-    }
+    if symlink(source, target).is_ok() { return Ok("symlink"); }
+    if junction(source, target).is_ok() { return Ok("junction"); }
     copy_dir_all(source, target)?;
-    Ok(false)
+    Ok("copy")
 }
 
 /// 计算任意可序列化值的稳定指纹（sha256 over 键排序后的 JSON 表示）。
@@ -215,6 +222,30 @@ mod tests {
             fs::read_to_string(dest.join("SKILL.md")).unwrap(),
             "real-content"
         );
+    }
+
+    #[test]
+    fn distribution_uses_copy_when_both_link_methods_fail() {
+        let source = tempfile::tempdir().unwrap();
+        let target_root = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("SKILL.md"), "fallback").unwrap();
+        let target = target_root.path().join("demo");
+        let fail = |_: &Path, _: &Path| Err(std::io::Error::other("unavailable"));
+        assert_eq!(symlink_or_copy_dir_with(source.path(), &target, fail, fail).unwrap(), "copy");
+        assert_eq!(fs::read_to_string(target.join("SKILL.md")).unwrap(), "fallback");
+        assert!(!is_symlink_path(&target));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn distribution_uses_junction_when_symlink_fails() {
+        let source = tempfile::tempdir().unwrap();
+        let target_root = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("SKILL.md"), "junction").unwrap();
+        let target = target_root.path().join("demo");
+        let fail = |_: &Path, _: &Path| Err(std::io::Error::other("unavailable"));
+        assert_eq!(symlink_or_copy_dir_with(source.path(), &target, fail, create_dir_junction).unwrap(), "junction");
+        assert_eq!(fs::read_to_string(target.join("SKILL.md")).unwrap(), "junction");
     }
 
     #[test]

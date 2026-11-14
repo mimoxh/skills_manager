@@ -46,6 +46,39 @@ impl CherryStudioAdapter {
         }
     }
 
+    /// 从 AgentProfile 推导 CherryStudio 数据目录（优先使用 profile.skills_path 的父目录，回退默认 APPDATA 路径）
+    pub fn from_profile(agent: &AgentProfile) -> Option<Self> {
+        let trimmed = agent.skills_path.trim();
+        if !trimmed.is_empty() {
+            let skills_path = Path::new(trimmed);
+            if let Some(parent) = skills_path.parent() {
+                if !parent.as_os_str().is_empty() && parent.exists() {
+                    return Some(Self {
+                        data_dir: parent.to_path_buf(),
+                    });
+                }
+            }
+        }
+        Self::new()
+    }
+
+    fn validate_folder_name(folder_name: &str) -> AppResult<PathBuf> {
+        let trimmed = folder_name.trim();
+        if trimmed.is_empty() {
+            return Err(crate::error::AppError::Message(
+                "Cherry Studio 技能目录名不能为空".to_string(),
+            ));
+        }
+        let rel = crate::util::safe_relative_path(trimmed)?;
+        if rel.components().count() != 1 {
+            return Err(crate::error::AppError::Message(format!(
+                "Cherry Studio 技能目录名非法: {}",
+                folder_name
+            )));
+        }
+        Ok(rel)
+    }
+
     pub fn skills_dir(&self) -> PathBuf {
         self.data_dir.join("Skills")
     }
@@ -84,8 +117,12 @@ impl CherryStudioAdapter {
         source_path: &Path,
         folder_name: &str,
     ) -> AppResult<String> {
-        let target = self.skills_dir().join(folder_name);
+        let rel = Self::validate_folder_name(folder_name)?;
+        let target = self.skills_dir().join(&rel);
         fs::create_dir_all(self.skills_dir())?;
+        if target.exists() {
+            fs::remove_dir_all(&target)?;
+        }
         copy_dir_all(source_path, &target)?;
 
         let (name, description, _version) = read_skill_md_meta(&target);
@@ -108,10 +145,11 @@ impl CherryStudioAdapter {
     /// 1. Delete from agents.db (CASCADE cleans agent_skills)
     /// 2. Delete directory
     pub fn uninstall_skill(&self, folder_name: &str) -> AppResult<()> {
+        let rel = Self::validate_folder_name(folder_name)?;
         let db = self.open_db()?;
         db.delete_skill(folder_name)?;
 
-        let target = self.skills_dir().join(folder_name);
+        let target = self.skills_dir().join(&rel);
         if target.exists() {
             fs::remove_dir_all(&target)?;
         }

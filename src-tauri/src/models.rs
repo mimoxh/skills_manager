@@ -48,6 +48,8 @@ pub struct AgentSkillCopy {
     pub installed_at: Option<String>,
     #[serde(default)]
     pub is_symlink: bool,
+    #[serde(default)]
+    pub managed_by_hub: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -119,6 +121,22 @@ impl AgentType {
             AgentType::OpenCode => "opencode",
         }
     }
+
+    /// 内置 Agent 类型的默认展示名；自定义类型没有默认名称。
+    pub fn default_name(&self) -> Option<&'static str> {
+        match self {
+            AgentType::Universal => Some("Skills Manager 中枢"),
+            AgentType::Codex => Some("Codex"),
+            AgentType::Claude => Some("Claude"),
+            AgentType::ClaudeCode => Some("Claude Code"),
+            AgentType::ClaudeCowork => Some("Claude Desktop Cowork"),
+            AgentType::Cursor => Some("Cursor"),
+            AgentType::Trae => Some("Trae"),
+            AgentType::CherryStudio => Some("Cherry Studio"),
+            AgentType::OpenCode => Some("OpenCode"),
+            AgentType::Custom => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -154,7 +172,7 @@ pub enum ConflictPolicy {
     Rename,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallResult {
     pub agent_id: String,
@@ -163,6 +181,8 @@ pub struct InstallResult {
     pub target_path: String,
     pub backup_path: Option<String>,
     pub message: String,
+    #[serde(default)]
+    pub distribution_method: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -392,4 +412,251 @@ pub struct McpTestResult {
     pub server_name: String,
     pub success: bool,
     pub message: String,
+}
+
+// ── Skills 同步数据模型 ───────────────────────────────────────────────
+
+/// 同步配置。`secretAccessKey` 与加密口令不在此结构内（存 OS 钥匙串）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub endpoint: String,
+    #[serde(default)]
+    pub bucket: String,
+    #[serde(default = "default_region")]
+    pub region: String,
+    #[serde(default = "default_true")]
+    pub path_style: bool,
+    #[serde(default)]
+    pub access_key_id: String,
+    #[serde(default = "default_poll_secs")]
+    pub poll_secs: u64,
+    #[serde(default = "default_true")]
+    pub encrypt: bool,
+}
+
+impl Default for SyncConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: String::new(),
+            bucket: String::new(),
+            region: default_region(),
+            path_style: true,
+            access_key_id: String::new(),
+            poll_secs: default_poll_secs(),
+            encrypt: true,
+        }
+    }
+}
+
+/// 同步状态（下发给前端徽标 / 设置页）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStatus {
+    pub configured: bool,
+    pub enabled: bool,
+    pub running: bool,
+    #[serde(default)]
+    pub last_run_at: Option<String>,
+    #[serde(default)]
+    pub last_error: Option<String>,
+    pub pending_conflicts: usize,
+    pub device_id: String,
+    pub device_name: String,
+}
+
+/// 单台设备发布的清单（加密前的明文结构）。存于 `devices/<deviceId>.json`。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceManifest {
+    pub schema_version: u32,
+    pub device_id: String,
+    pub device_name: String,
+    pub updated_at: String,
+    #[serde(default)]
+    pub skills: HashMap<String, ManifestSkillEntry>,
+    #[serde(default)]
+    pub agents: HashMap<String, ManifestAgentMeta>,
+}
+
+/// 清单中的单个 skill 条目；key = `normalize(name)`。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestSkillEntry {
+    /// 展示名（manifest name），与 key 的关系为 `normalize(name)`。
+    pub name: String,
+    /// 中枢内目录名，供远端还原。
+    pub dir_name: String,
+    /// 明文 zip 的 sha256（身份哈希）。
+    pub hash: String,
+    /// `blobs/<hash>.bin`。
+    pub blob: String,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub source_url: Option<String>,
+    #[serde(default)]
+    pub installed_at: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub no_full_coverage: bool,
+    /// 墓碑：true 表示该 skill 已被删除。
+    #[serde(default)]
+    pub deleted: bool,
+    pub updated_at: String,
+}
+
+/// agent 便携元数据；`portableKey` 为内置 `AgentType::as_str()` 或 custom 名称。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestAgentMeta {
+    #[serde(default)]
+    pub user_tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SyncConflictKind {
+    /// 两端内容都变了。
+    BothModified,
+    /// 一端删除、另一端修改。
+    DeleteVsModify,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncConflict {
+    /// `normalize(name)`。
+    pub skill_id: String,
+    pub name: String,
+    pub dir_name: String,
+    #[serde(default)]
+    pub local_hash: Option<String>,
+    #[serde(default)]
+    pub remote_hash: Option<String>,
+    pub remote_device_id: String,
+    pub kind: SyncConflictKind,
+    pub detected_at: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SyncConflictChoice {
+    Local,
+    Remote,
+    /// 都留：远端改名保存。
+    Rename,
+}
+
+fn default_region() -> String {
+    "us-east-1".to_string()
+}
+
+fn default_poll_secs() -> u64 {
+    60
+}
+
+// ── 远程源码与外部 Agent 集成 ───────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteSourceType {
+    SingleSkill,
+    MultiSkill,
+    McpServer,
+    Both,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedSkillInfo {
+    pub name: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub version: Option<String>,
+    pub relative_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedMcpInfo {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub transport: McpTransport,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentChoice {
+    pub id: String,
+    pub name: String,
+    pub agent_type: AgentType,
+    pub skills_dir: String,
+    pub is_hub: bool,
+    pub supports_universal: bool,
+    pub supports_mcp: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteSourceInspection {
+    pub url: String,
+    pub repo_name: String,
+    pub branch: Option<String>,
+    pub subpath: Option<String>,
+    pub detected_type: RemoteSourceType,
+    #[serde(default)]
+    pub skills: Vec<DetectedSkillInfo>,
+    #[serde(default)]
+    pub mcp_servers: Vec<DetectedMcpInfo>,
+    #[serde(default)]
+    pub available_agents: Vec<AgentChoice>,
+    #[serde(default)]
+    pub recommended_agent_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteInstallOptions {
+    pub url: String,
+    pub target_agent_ids: Vec<String>,
+    pub conflict_policy: ConflictPolicy,
+    #[serde(default)]
+    pub to_hub: Option<bool>,
+    /// 如果是多技能仓库，指定要安装的技能 relative_path 或 name
+    #[serde(default)]
+    pub selected_skills: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteInstallResult {
+    pub url: String,
+    pub results: Vec<InstallResult>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteMcpInstallOptions {
+    pub config: McpServerConfig,
+    pub target_agent_ids: Vec<String>,
+    pub conflict_policy: ConflictPolicy,
 }

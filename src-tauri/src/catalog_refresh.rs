@@ -17,6 +17,8 @@ use zip::ZipArchive;
 
 /// ClawHub 单次下载的大小上限（zip 包），防止异常数据耗尽内存。
 const MAX_CLAWHUB_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
+const MAX_CLAWHUB_PAGES: usize = 1_000;
+const MAX_EMPTY_PAGES: usize = 3;
 
 impl AppService {
     pub(crate) fn refresh_clawhub_index(&self, safety_mode: CatalogSafetyMode) -> AppResult<usize> {
@@ -32,8 +34,10 @@ impl AppService {
         let agent = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(45))
             .build();
+        let mut seen_cursors = std::collections::HashSet::new();
+        let mut empty_pages = 0usize;
 
-        loop {
+        for _ in 0..MAX_CLAWHUB_PAGES {
             if self.is_catalog_refresh_cancelled("clawhub", safety_mode)? {
                 self.save_catalog_refresh_cancelled(
                     "clawhub",
@@ -57,6 +61,11 @@ impl AppService {
                 return Ok(fetched_count);
             }
             let skills = parse_clawhub_api_catalog_value(&value, &source)?;
+            if skills.is_empty() {
+                empty_pages += 1;
+            } else {
+                empty_pages = 0;
+            }
             self.catalog_index
                 .upsert_skills("clawhub", safety_mode, generation, &skills)?;
             fetched_count += skills.len();
@@ -87,8 +96,24 @@ impl AppService {
                 )?;
                 return Ok(fetched_count);
             };
+            if empty_pages >= MAX_EMPTY_PAGES || !seen_cursors.insert(next_cursor.clone()) {
+                self.catalog_index.finish_refresh(
+                    "clawhub",
+                    safety_mode,
+                    generation,
+                    fetched_count,
+                )?;
+                return Ok(fetched_count);
+            }
             cursor = Some(next_cursor);
         }
+        self.catalog_index.finish_refresh(
+            "clawhub",
+            safety_mode,
+            generation,
+            fetched_count,
+        )?;
+        Ok(fetched_count)
     }
 
     fn fetch_clawhub_index_page(
@@ -323,9 +348,24 @@ impl AppService {
             if let Some(parent) = destination.parent() {
                 fs::create_dir_all(parent)?;
             }
-            // 流式写盘，避免单文件整体读入内存
+            // 流式写盘并限制实际解压字节数，防止伪造 zip header 绕过 zip bomb 限制
             let mut dest = fs::File::create(&destination)?;
-            std::io::copy(&mut file, &mut dest)?;
+            let mut limited = (&mut file).take(MAX_ZIP_FILE_SIZE + 1);
+            let written = std::io::copy(&mut limited, &mut dest)?;
+            if written > MAX_ZIP_FILE_SIZE {
+                let _ = fs::remove_file(&destination);
+                return Err(AppError::Message(format!(
+                    "zip 中文件 {} 实际解压大小超过单文件上限。",
+                    file_path.display()
+                )));
+            }
+            total_extracted = total_extracted.saturating_sub(file_size).saturating_add(written);
+            if total_extracted > MAX_ZIP_TOTAL_SIZE {
+                let _ = fs::remove_file(&destination);
+                return Err(AppError::Message(
+                    "zip 解压总大小超过上限，疑似 zip bomb。".to_string(),
+                ));
+            }
             extracted_count += 1;
         }
 

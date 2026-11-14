@@ -6,7 +6,7 @@ use crate::{
 use serde_json::Value as JsonValue;
 use std::path::{Path, PathBuf};
 
-/// OpenCode MCP 适配器，读写 `~/.opencode.json`
+/// OpenCode MCP 适配器，读写 `~/.config/opencode/opencode.json`（兼容 `.jsonc` 与旧版 `~/.opencode.json`）
 /// OpenCode 使用 "mcp" 作为顶层 key，"remote" 作为远程传输类型，支持 "enabled" 字段
 const AGENT_LABEL: &str = "OpenCode";
 
@@ -24,33 +24,43 @@ impl OpenCodeMcpAdapter {
     fn default_config_path() -> Option<PathBuf> {
         let home = dirs::home_dir()?;
 
-        let home_config = home.join(".opencode.json");
-        if home_config.exists() {
-            return Some(home_config);
+        // 旧版 `~/.opencode.json`
+        let legacy_home_config = home.join(".opencode.json");
+        if legacy_home_config.exists() {
+            return Some(legacy_home_config);
         }
 
-        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-            let xdg_path = PathBuf::from(xdg).join("opencode").join(".opencode.json");
-            if xdg_path.exists() {
-                return Some(xdg_path);
+        let mut config_dirs = Vec::new();
+        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+            if !xdg.is_empty() {
+                config_dirs.push(PathBuf::from(xdg).join("opencode"));
             }
         }
+        config_dirs.push(home.join(".config").join("opencode"));
 
-        let dot_config = home.join(".config").join("opencode").join(".opencode.json");
-        if dot_config.exists() {
-            return Some(dot_config);
+        for dir in &config_dirs {
+            let json = dir.join("opencode.json");
+            if json.exists() {
+                return Some(json);
+            }
+            let jsonc = dir.join("opencode.jsonc");
+            if jsonc.exists() {
+                return Some(jsonc);
+            }
         }
 
         if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-            let local_path = PathBuf::from(local_app_data)
-                .join("opencode")
-                .join(".opencode.json");
-            if local_path.exists() {
-                return Some(local_path);
+            let local_dir = PathBuf::from(local_app_data).join("opencode");
+            let local_json = local_dir.join("opencode.json");
+            if local_json.exists() {
+                return Some(local_json);
             }
         }
 
-        Some(home_config)
+        config_dirs
+            .into_iter()
+            .next()
+            .map(|dir| dir.join("opencode.json"))
     }
 
     /// 将 env 字符串数组 ["KEY=val", ...] 转换为 HashMap
@@ -237,31 +247,32 @@ impl McpAdapter for OpenCodeMcpAdapter {
         let path = self.config_path(profile)?;
         let root = mcp_adapter::read_json_file(&path)?;
         let mut servers = Vec::new();
+        let mut seen_names = std::collections::HashSet::new();
 
-        // 同时检查 "mcp" 和 "mcpServers" 两个 key（兼容性）
-        let mcp_obj = root
-            .get(MCP_KEY)
-            .or_else(|| root.get("mcpServers"))
-            .and_then(|v| v.as_object());
-
-        if let Some(mcp_obj) = mcp_obj {
-            for (name, value) in mcp_obj {
-                if let Some(obj) = value.as_object() {
-                    let server_config = Self::parse_mcp_server(name, obj);
-                    // 包装为 { "mcp": { "server_name": { ... } } } 完整结构
-                    let mut mcp_wrapper = serde_json::Map::new();
-                    mcp_wrapper.insert(name.clone(), value.clone());
-                    let mut root_wrapper = serde_json::Map::new();
-                    root_wrapper.insert(MCP_KEY.to_string(), JsonValue::Object(mcp_wrapper));
-                    let raw = Some(serde_json::to_string_pretty(&root_wrapper)?);
-                    servers.push(AgentMcpServer {
-                        agent_id: profile.id.clone(),
-                        agent_name: profile.name.clone(),
-                        config_path: path.to_string_lossy().to_string(),
-                        fingerprint: crate::hash::stable_fingerprint(&server_config)?,
-                        config: server_config,
-                        raw_config: raw,
-                    });
+        // 同时合并 "mcp" 和 "mcpServers" 两个 key（若同名则以 "mcp" 优先）
+        for section_key in [MCP_KEY, "mcpServers"] {
+            if let Some(mcp_obj) = root.get(section_key).and_then(|v| v.as_object()) {
+                for (name, value) in mcp_obj {
+                    if !seen_names.insert(name.clone()) {
+                        continue;
+                    }
+                    if let Some(obj) = value.as_object() {
+                        let server_config = Self::parse_mcp_server(name, obj);
+                        // 包装为 { "<section_key>": { "server_name": { ... } } } 完整结构
+                        let mut mcp_wrapper = serde_json::Map::new();
+                        mcp_wrapper.insert(name.clone(), value.clone());
+                        let mut root_wrapper = serde_json::Map::new();
+                        root_wrapper.insert(section_key.to_string(), JsonValue::Object(mcp_wrapper));
+                        let raw = Some(serde_json::to_string_pretty(&root_wrapper)?);
+                        servers.push(AgentMcpServer {
+                            agent_id: profile.id.clone(),
+                            agent_name: profile.name.clone(),
+                            config_path: path.to_string_lossy().to_string(),
+                            fingerprint: crate::hash::stable_fingerprint(&server_config)?,
+                            config: server_config,
+                            raw_config: raw,
+                        });
+                    }
                 }
             }
         }
@@ -297,19 +308,29 @@ impl McpAdapter for OpenCodeMcpAdapter {
         let path = self.config_path(profile)?;
         let mut root = mcp_adapter::read_json_file(&path)?;
 
-        let mcp_servers = mcp_adapter::json_mcp_section_mut(&mut root, MCP_KEY, AGENT_LABEL)?;
-
-        if !mcp_servers.contains_key(original_name) {
+        let target_key = if root
+            .get(MCP_KEY)
+            .and_then(|v| v.as_object())
+            .is_some_and(|m| m.contains_key(original_name))
+        {
+            MCP_KEY
+        } else if root
+            .get("mcpServers")
+            .and_then(|v| v.as_object())
+            .is_some_and(|m| m.contains_key(original_name))
+        {
+            "mcpServers"
+        } else {
             return Err(AppError::Message(format!(
                 "MCP server '{}' 不存在于 OpenCode 配置中",
                 original_name
             )));
-        }
+        };
 
+        let mcp_servers = mcp_adapter::json_mcp_section_mut(&mut root, target_key, AGENT_LABEL)?;
         if original_name != config.name {
             mcp_servers.remove(original_name);
         }
-
         mcp_servers.insert(config.name.clone(), Self::config_to_json_object(config));
 
         mcp_adapter::write_json_file(&path, &root)
@@ -319,14 +340,27 @@ impl McpAdapter for OpenCodeMcpAdapter {
         let path = self.config_path(profile)?;
         let mut root = mcp_adapter::read_json_file(&path)?;
 
-        let mcp_servers = mcp_adapter::json_mcp_section_mut(&mut root, MCP_KEY, AGENT_LABEL)?;
-
-        if mcp_servers.remove(name).is_none() {
+        let target_key = if root
+            .get(MCP_KEY)
+            .and_then(|v| v.as_object())
+            .is_some_and(|m| m.contains_key(name))
+        {
+            MCP_KEY
+        } else if root
+            .get("mcpServers")
+            .and_then(|v| v.as_object())
+            .is_some_and(|m| m.contains_key(name))
+        {
+            "mcpServers"
+        } else {
             return Err(AppError::Message(format!(
                 "MCP server '{}' 不存在于 OpenCode 配置中",
                 name
             )));
-        }
+        };
+
+        let mcp_servers = mcp_adapter::json_mcp_section_mut(&mut root, target_key, AGENT_LABEL)?;
+        mcp_servers.remove(name);
 
         mcp_adapter::write_json_file(&path, &root)
     }
@@ -335,8 +369,23 @@ impl McpAdapter for OpenCodeMcpAdapter {
         let path = self.config_path(profile)?;
         let mut root = mcp_adapter::read_json_file(&path)?;
 
-        let mcp_servers = mcp_adapter::json_mcp_section_mut(&mut root, MCP_KEY, AGENT_LABEL)?;
+        let target_key = if root
+            .get(MCP_KEY)
+            .and_then(|v| v.as_object())
+            .is_some_and(|m| m.contains_key(name))
+        {
+            MCP_KEY
+        } else if root
+            .get("mcpServers")
+            .and_then(|v| v.as_object())
+            .is_some_and(|m| m.contains_key(name))
+        {
+            "mcpServers"
+        } else {
+            return Err(AppError::Message(format!("MCP server '{}' 不存在", name)));
+        };
 
+        let mcp_servers = mcp_adapter::json_mcp_section_mut(&mut root, target_key, AGENT_LABEL)?;
         let server_obj = mcp_servers
             .get_mut(name)
             .and_then(|v| v.as_object_mut())
@@ -356,7 +405,7 @@ impl McpAdapter for OpenCodeMcpAdapter {
     fn config_path(&self, profile: &AgentProfile) -> AppResult<PathBuf> {
         mcp_adapter::resolve_mcp_config_path(
             &profile.adapter_config,
-            &["json"],
+            &["json", "jsonc"],
             Self::default_config_path(),
             AGENT_LABEL,
         )

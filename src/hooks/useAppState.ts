@@ -1,13 +1,31 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useCatalog } from "./useCatalog";
 import { useMcpServers } from "./useMcpServers";
 import { useSkillsData } from "./useSkillsData";
+import { useSync } from "./useSync";
 import { useToast } from "./useToast";
 
 export function useAppState() {
   const { toast, showToast, dismissToast } = useToast();
-  // busy 提升到组合层，跨 skills/mcp 域共享单一加载状态
-  const [busy, setBusy] = useState(false);
+  // busy 提升到组合层，跨 skills/mcp 域共享引用计数加载状态，避免嵌套或并发操作提前归零
+  const busyCountRef = useRef(0);
+  const [busy, setBusyState] = useState(false);
+  const setBusy = useCallback((next: boolean) => {
+    if (next) {
+      busyCountRef.current += 1;
+      setBusyState(true);
+    } else {
+      busyCountRef.current = Math.max(0, busyCountRef.current - 1);
+      setBusyState(busyCountRef.current > 0);
+    }
+  }, []);
+
+  const sync = useSync({
+    showToast,
+    onSynced: async () => {
+      await skillsData.refreshAll();
+    },
+  });
 
   const mcp = useMcpServers({ showToast, setBusy });
   const skillsData = useSkillsData({
@@ -15,6 +33,9 @@ export function useAppState() {
     setBusy,
     setMcpServers: mcp.setMcpServers,
     setNoFullCoverageMcpTitles: mcp.setNoFullCoverageMcpTitles,
+    onSkillsChanged: async () => {
+      await sync.refreshPendingHubSkills(false);
+    },
   });
   const catalog = useCatalog({
     showToast,
@@ -70,6 +91,7 @@ export function useAppState() {
     refreshAll: skillsData.refreshAll,
     loadSkillReadme: skillsData.loadSkillReadme,
     syncSkillToAgents: skillsData.syncSkillToAgents,
+    setHubSkillTargets: skillsData.setHubSkillTargets,
     deleteAgent: skillsData.deleteAgent,
     uninstallSkill: skillsData.uninstallSkill,
     uninstallSkillFromAgents: skillsData.uninstallSkillFromAgents,
@@ -98,5 +120,17 @@ export function useAppState() {
     removeMcpServerFromAgents: mcp.removeMcpServerFromAgents,
     noFullCoverageMcpTitles: mcp.noFullCoverageMcpTitles,
     toggleMcpNoFullCoverage: mcp.toggleMcpNoFullCoverage,
+    // 同步
+    syncConfig: sync.syncConfig,
+    syncStatus: sync.syncStatus,
+    syncConflicts: sync.syncConflicts,
+    syncBusy: sync.syncBusy,
+    saveSyncConfig: sync.saveSyncConfig,
+    testSyncConnection: sync.testSyncConnection,
+    syncNow: sync.syncNow,
+    resolveSyncConflict: sync.resolveSyncConflict,
+    runSyncGc: sync.runSyncGc,
+    pendingHubSkills: sync.pendingHubSkills,
+    refreshPendingHubSkills: sync.refreshPendingHubSkills,
   };
 }

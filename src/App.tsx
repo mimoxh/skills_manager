@@ -3,12 +3,14 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import { Toast } from "./components/ui/Toast";
 import { Titlebar } from "./components/layout/Titlebar";
 import { Sidebar } from "./components/layout/Sidebar";
+import { ThemeSwitcher } from "./components/layout/ThemeSwitcher";
 import { ImportAgentDialog } from "./components/views/ImportAgentDialog";
 import { CatalogView } from "./components/views/CatalogView";
 import { McpView } from "./components/views/McpView";
 import { SettingsView } from "./components/views/SettingsView";
 import { useAppState } from "./hooks/useAppState";
 import { useTheme } from "./hooks/useTheme";
+import { installRipple } from "./lib/ripple";
 import { fileToUpload } from "./lib/utils";
 import type { SkillsFilter } from "./types";
 
@@ -34,6 +36,9 @@ export default function App() {
 
   const state = useAppState();
   const theme = useTheme();
+  const [focusSkillTitle, setFocusSkillTitle] = useState<string | null>(null);
+
+  useEffect(() => installRipple(), []);
 
   useEffect(() => {
     if ("__TAURI_INTERNALS__" in window) {
@@ -44,9 +49,17 @@ export default function App() {
   }, []);
 
   async function handleUploadChange(event: ChangeEvent<HTMLInputElement>) {
-    const files = [...(event.target.files ?? [])];
+    const rawFiles = [...(event.target.files ?? [])];
+    if (!rawFiles.length) return;
+    const uploadName = rawFiles[0]?.webkitRelativePath
+      ? rawFiles[0].webkitRelativePath.split("/")[0]
+      : (rawFiles[0]?.name ?? "upload");
+    const files = rawFiles.filter((f) => {
+      const rel = `/${(f.webkitRelativePath || f.name).replace(/\\/g, "/")}`;
+      return !/\/(\.git|node_modules|target|\.venv|__pycache__|dist|build)\//.test(rel);
+    });
     try {
-      await state.importFiles(files[0]?.name ?? "upload", await Promise.all(files.map((f) => fileToUpload(f))));
+      await state.importFiles(uploadName, await Promise.all(files.map((f) => fileToUpload(f))));
     } catch (error) {
       state.showToast(String(error), "error");
     } finally {
@@ -57,8 +70,8 @@ export default function App() {
 
   function navigateTo(view: View, filter?: SkillsFilter) {
     setView(view);
-    if (view === "skills" && filter) {
-      setSkillsFilter(filter);
+    if (view === "skills") {
+      setSkillsFilter(filter ?? "all");
     }
   }
 
@@ -73,6 +86,8 @@ export default function App() {
               busy={state.busy}
               noFullCoverageTitles={state.noFullCoverageTitles}
               initialFilter={skillsFilter}
+              focusSkillTitle={focusSkillTitle}
+              onFocusedSkill={() => setFocusSkillTitle(null)}
               onDrop={state.handleSkillDrop}
               onFolder={() => folderInputRef.current?.click()}
               onArchive={() => archiveInputRef.current?.click()}
@@ -163,6 +178,17 @@ export default function App() {
             resolvedTheme={theme.resolvedTheme}
             onPaletteChange={theme.setPalette}
             onThemeChange={theme.setThemeMode}
+            syncConfig={state.syncConfig}
+            syncStatus={state.syncStatus}
+            syncConflicts={state.syncConflicts}
+            syncBusy={state.syncBusy}
+            onSaveSyncConfig={state.saveSyncConfig}
+            onTestSyncConnection={state.testSyncConnection}
+            onSyncNow={state.syncNow}
+            onResolveSyncConflict={state.resolveSyncConflict}
+            onSyncGc={state.runSyncGc}
+            onRefreshMcp={state.refreshMcpServers}
+            agents={state.agents}
           />
         );
       default:
@@ -191,7 +217,23 @@ export default function App() {
           agentCount={state.agents.length}
         />
         <div className="main">
-          <Titlebar />
+          <Titlebar
+            actions={
+              <ThemeSwitcher
+                palette={theme.palette}
+                themeMode={theme.themeMode}
+                resolvedTheme={theme.resolvedTheme}
+                onPaletteChange={theme.setPalette}
+                onThemeChange={theme.setThemeMode}
+              />
+            }
+          />
+          {state.pendingHubSkills.length > 0 && (
+            <div style={{ padding: "8px 16px", background: "var(--accent-light)", display: "flex", alignItems: "center", gap: 12, fontSize: 12 }}>
+              <span style={{ flex: 1 }}>{state.pendingHubSkills[0].message ?? `新 Skill「${state.pendingHubSkills[0].title}」已同步到中枢，尚未选择本机 Agent。`}{state.pendingHubSkills.length > 1 ? `（另有 ${state.pendingHubSkills.length - 1} 个待处理）` : ""}</span>
+              {state.skills.some((skill) => skill.title === state.pendingHubSkills[0].title) && <button className="btn btn-primary btn-sm" type="button" onClick={() => { setView("skills"); setFocusSkillTitle(state.pendingHubSkills[0].title); void state.refreshAll(); }}>查看 Skill</button>}
+            </div>
+          )}
           <div className="content">
             {state.isInitialLoading ? (
               <div style={{ display: "flex", height: "100%", alignItems: "center", justifyContent: "center" }}>
