@@ -5,8 +5,10 @@
 Skills Manager is a local Windows desktop tool for managing Agent Skills and MCP server configuration across multiple AI clients. It scans local agent directories, compares skill and MCP coverage, installs skills from local files or skills repositories, and helps sync configuration without manually copying folders or editing each config file one by one.
 
 <p align="center">
-  <img src="assets/preview-overview.png" alt="Skills Manager overview preview" width="900" />
+  <img src="assets/preview-overview.png" alt="Skills Manager Skills console (Material 3 · Cobalt · Apricot)" width="900" />
 </p>
+
+<p align="center"><a href="assets/SCREENSHOTS.en.md">More theme screenshots →</a></p>
 
 ## Features
 
@@ -20,7 +22,7 @@ Skills Manager is a local Windows desktop tool for managing Agent Skills and MCP
 - **Git / GitHub URL Skill & MCP Installation:** inspect GitHub repositories, `/tree/main/...` subdirectories, and local folders for Skills and MCP configuration. Select both kinds from one source and install skills while writing MCP configuration to selected compatible agents. MCP commands still need their runtime dependencies to be available.
 - **No-tag filtering:** filter skills and agents lists by "no tag" to quickly locate uncategorized items.
 - **Independent view scrolling:** Skills, MCP, and Agents view lists scroll independently, the page no longer scrolls as a whole.
-- **Dual Styles & Theme Switching:** provides "Clean Minimal (Modern Blue)" and "Classic Warm (Amber Gold)" visual styles, supporting light mode, dark mode, and system preference with local persistence.
+- **Multiple Themes:** ships 7 themes, defaulting to Material 3 Expressive "Cobalt · Apricot"; also M3 "Berry · Lagoon", "Lime · Iris", "Teal · Coral", Linear / Raycast, and the classic "Clean Minimal" and "Classic Warm". Each theme changes both colors and component shapes, works in light, dark, or system mode, and can be switched anytime from Settings or the title bar, with local persistence.
 - **Sectioned Settings:** the Settings view uses single-page anchor navigation for common preferences, sync connection, Agent targets, maintenance, and advanced options. Sensitive connection details stay collapsed by default while save state and the save action remain visible.
 
 ## Tech Stack
@@ -167,4 +169,4 @@ The script runs:
 npm run native:build -- --no-bundle
 ```
 
-The portable build outputs `src-tauri\target\release\skill-sync-manager.exe`. The `release/` folder's `SkillsManager-v0.4.1-windows-portable.zip` is the release artifact, suitable for uploading to GitHub Releases; the root-level `SkillsManager.exe` is useful for quick local verification.
+The portable build outputs `src-tauri\target\release\skill-sync-manager.exe`. The `release/` folder's `SkillsManager-v0.5.0-windows-portable.zip` is the release artifact, suitable for uploading to GitHub Releases; the root-level `SkillsManager.exe` is useful for quick local verification.

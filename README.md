@@ -5,8 +5,10 @@
 Skills Manager 是一个本地 Windows 桌面工具，用于管理多个 AI 客户端中的 Agent Skills 和 MCP server 配置。它会扫描本机 Agent 目录、对比 Skill 与 MCP 覆盖情况、从本地文件或 skills 仓库安装技能，并帮助你同步配置，减少手动复制文件夹或逐个编辑配置文件的重复操作。
 
 <p align="center">
-  <img src="assets/preview-overview.png" alt="Skills Manager 概览预览" width="900" />
-</p> 
+  <img src="assets/preview-overview.png" alt="Skills Manager Skills 控制台（Material 3 · 钴蓝 · 杏橙）" width="900" />
+</p>
+
+<p align="center"><a href="assets/SCREENSHOTS.md">查看更多主题截图 →</a></p>
 
 ## 主要功能
 
@@ -20,7 +22,7 @@ Skills Manager 是一个本地 Windows 桌面工具，用于管理多个 AI 客�
 - **Git / GitHub URL 导入与安装**：支持 GitHub 仓库、`/tree/main/...` 子目录链接及本地路径，识别 Skill 和 MCP 配置。同一来源可分别勾选 Skill 与 MCP，在一次操作中安装技能并写入所选 MCP Agent 的配置；MCP 服务仍需具备可运行的命令及依赖。
 - **无标签筛选**：Skills 和 Agents 列表支持筛选"无标签"项目，便于快速定位未分类的技能和 Agent。
 - **视图独立滚动**：Skills、MCP、Agents 视图列表独立滚动，页面整体不跟随滚动，多列表场景下操作更流畅。
-- **双风格与主题切换**：支持「清爽极简（现代蓝白）」与「经典暖色（琥珀暖金）」两种风格，兼容浅色、深色与跟随系统模式，并在本机持久化偏好。
+- **多主题切换**：内置 7 个主题，默认 Material 3 Expressive「钴蓝 · 杏橙」；另有 M3「莓果 · 湖青」「青柠 · 鸢尾」「深青 · 珊瑚」、Linear / Raycast，以及经典的「清爽极简」「经典暖色」。主题同时改变配色与组件形态，均支持浅色、深色与跟随系统，可在设置页或标题栏右上角随时切换，偏好在本机持久化。
 - **分段设置页**：设置页使用单页锚点导航，按常用配置、同步连接、Agent 目标、数据维护和高级配置分区；高级凭据默认收起，并持续显示保存状态与保存入口。
 
 ## 技术栈
@@ -170,4 +172,4 @@ SkillsManager 内置了标准 stdio JSON-RPC 2.0 MCP 服务与 Windows 控制台
 npm run native:build -- --no-bundle
 ```
 
-便携版构建产物为 `src-tauri\target\release\skill-sync-manager.exe`。`release/` 目录中的 `SkillsManager-v0.4.1-windows-portable.zip` 是发布产物，适合上传到 GitHub Releases；根目录的 `SkillsManager.exe` 可用于本地快速验证。
+便携版构建产物为 `src-tauri\target\release\skill-sync-manager.exe`。`release/` 目录中的 `SkillsManager-v0.5.0-windows-portable.zip` 是发布产物，适合上传到 GitHub Releases；根目录的 `SkillsManager.exe` 可用于本地快速验证。
