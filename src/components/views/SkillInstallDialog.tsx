@@ -218,7 +218,7 @@ export function SkillInstallDialog({
                         width: 20, height: 20, flexShrink: 0, borderRadius: 4, border: `1px solid ${checked ? "var(--accent)" : "var(--border)"}`,
                         background: checked ? "var(--accent)" : "transparent", display: "flex", alignItems: "center", justifyContent: "center",
                       }}>
-                        {checked && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><polyline points="20 6 9 17 4 12" /></svg>}
+                        {checked && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" style={{ color: "var(--on-accent)" }}><polyline points="20 6 9 17 4 12" /></svg>}
                       </span>
                       <span style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
                         <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 500 }}>
@@ -293,7 +293,7 @@ export function SkillInstallDialog({
                           width: 20, height: 20, flexShrink: 0, borderRadius: 10, border: `1px solid ${checked ? "var(--accent)" : "var(--border)"}`,
                           background: checked ? "var(--accent)" : "transparent", display: "flex", alignItems: "center", justifyContent: "center",
                         }}>
-                          {checked && <svg width="10" height="10" viewBox="0 0 24 24" fill="white"><circle cx="12" cy="12" r="7" /></svg>}
+                          {checked && <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style={{ color: "var(--on-accent)" }}><circle cx="12" cy="12" r="7" /></svg>}
                         </span>
                         <span style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
                           <span style={{ display: "block", fontSize: 14, fontWeight: 500 }}>{copy.agentName}</span>

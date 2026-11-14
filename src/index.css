@@ -55,6 +55,12 @@
   --radius-full: 9999px;
   --accent-ring: rgba(217, 119, 6, 0.14);
   --accent-glow: rgba(217, 119, 6, 0.22);
+  /* 主色/危险色上的前景色、主色容器上的前景色、外框色、输入框底色：新主题会覆写 */
+  --on-accent: #ffffff;
+  --on-accent-light: var(--accent);
+  --on-danger: #ffffff;
+  --outline: var(--border-hover);
+  --input-bg: var(--surface);
 }
 
 [data-theme="dark"] {
@@ -225,7 +231,7 @@ input { cursor: text; outline: none; }
   background: var(--accent);
   border-radius: var(--radius-sm);
   display: flex; align-items: center; justify-content: center;
-  color: white; font-weight: 700; font-size: 15px;
+  color: var(--on-accent); font-weight: 700; font-size: 15px;
   flex-shrink: 0;
 }
 .sidebar-logo-text { font-size: 15px; font-weight: 600; color: var(--text); white-space: nowrap; }
@@ -285,7 +291,7 @@ input { cursor: text; outline: none; }
 }
 .theme-icon-btn.active {
   background: var(--accent);
-  color: white;
+  color: var(--on-accent);
   box-shadow: 0 2px 8px var(--accent-glow);
 }
 
@@ -367,7 +373,7 @@ input { cursor: text; outline: none; }
 }
 .titlebar-btn:hover { background: var(--surface-hover); color: var(--text); }
 .titlebar-btn.close { border-top-right-radius: var(--radius-sm); }
-.titlebar-btn.close:hover { background: var(--danger); color: white; }
+.titlebar-btn.close:hover { background: #c42b1c; color: #ffffff; }
 
 /* ===== Top Bar ===== */
 .topbar {
@@ -556,14 +562,14 @@ input { cursor: text; outline: none; }
 .badge.skill-tag-filter.selected {
   background: var(--accent);
   border-color: var(--accent);
-  color: white;
+  color: var(--on-accent);
   font-weight: 700;
   box-shadow: 0 2px 8px var(--accent-glow);
 }
 .badge.skill-tag-filter.selected:hover {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
-  color: white;
+  color: var(--on-accent);
 }
 .badge.skill-tag-filter.untagged {
   background: var(--surface);
@@ -574,7 +580,7 @@ input { cursor: text; outline: none; }
 .badge.skill-tag-filter.untagged.selected {
   background: var(--accent);
   border-color: var(--accent);
-  color: white;
+  color: var(--on-accent);
   font-style: normal;
   font-weight: 700;
   box-shadow: 0 2px 8px var(--accent-glow);
@@ -954,14 +960,14 @@ input { cursor: text; outline: none; }
   border-radius: var(--radius-sm); font-size: 13px; font-weight: 500;
   transition: all 0.15s ease; border: 1px solid transparent; white-space: nowrap;
 }
-.btn-primary { background: var(--accent); color: white; border-color: var(--accent); }
+.btn-primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 .btn-secondary { background: var(--surface); color: var(--text); border-color: var(--border); }
 .btn-secondary:hover { background: var(--surface-hover); border-color: var(--border-hover); }
 .btn-ghost { background: transparent; color: var(--text-secondary); }
 .btn-ghost:hover { background: var(--surface-hover); color: var(--text); }
-.btn-danger { background: var(--danger); color: white; border-color: var(--danger); }
-.btn-danger:hover { background: #a83224; }
+.btn-danger { background: var(--danger); color: var(--on-danger); border-color: var(--danger); }
+.btn-danger:hover { background: color-mix(in srgb, var(--danger), black 14%); }
 .btn-sm { height: 32px; padding: 0 12px; font-size: 12.5px; }
 .btn-icon {
   width: 32px; height: 32px; padding: 0;
@@ -1534,7 +1540,7 @@ select.input:focus {
   justify-content: center;
   border-radius: var(--radius-sm);
   background: var(--accent);
-  color: white;
+  color: var(--on-accent);
   font-size: 17px;
   font-weight: 700;
 }

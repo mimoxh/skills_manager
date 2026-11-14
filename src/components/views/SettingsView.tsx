@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import type { Palette, ResolvedTheme, ThemeMode } from "../../hooks/useTheme";
+import { DEFAULT_PALETTE, THEME_GROUPS, THEME_OPTIONS, type ThemeOption } from "../../lib/themes";
 import type { AgentProfile, SyncConfig, SyncConflict, SyncConflictChoice, SyncStatus } from "../../types";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { ConflictDialog } from "./ConflictDialog";
@@ -34,27 +35,6 @@ const emptySyncConfig: SyncConfig = {
   pollSecs: 60,
   encrypt: true,
 };
-
-// 主题风格选项：value / 名称 / 描述 / 迷你预览色（表面、次级表面、强调色）
-const paletteOptions: Array<{
-  value: Palette;
-  label: string;
-  desc: string;
-  swatch: [string, string, string];
-}> = [
-  {
-    value: "modern",
-    label: "清爽极简",
-    desc: "纯白画布 + 蓝色点缀，现代干净，适合专注工作",
-    swatch: ["#ffffff", "#f4f4f5", "#3b82f6"],
-  },
-  {
-    value: "parchment",
-    label: "经典暖色",
-    desc: "象牙奶油 + 琥珀暖金，温润通透质感",
-    swatch: ["#ffffff", "#f5efe6", "#d97706"],
-  },
-];
 
 const themeModeOptions: Array<{ mode: ThemeMode; label: string }> = [
   { mode: "system", label: "跟随系统" },
@@ -275,32 +255,37 @@ export function SettingsView({
         <div className="card settings-card">
           <div className="card-header">
             <div className="card-title">外观</div>
-            <div className="card-desc">主题风格与明暗模式可自由组合</div>
+            <div className="card-desc">主题与明暗模式可自由组合，也可以随时从标题栏右上角切换</div>
           </div>
           <div className="card-body settings-stack-lg">
             <div>
-              <div className="settings-field-title">主题风格</div>
-              <div className="settings-theme-grid">
-                {paletteOptions.map((option) => {
-                  const active = palette === option.value;
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => onPaletteChange(option.value)}
-                      aria-pressed={active}
-                      className={`settings-theme-option${active ? " active" : ""}`}
-                    >
-                      <SwatchPreview colors={option.swatch} />
-                      <div className="settings-inline">
-                        <span className="settings-option-title">{option.label}</span>
-                        {active && <span className="badge badge-success">当前</span>}
-                      </div>
-                      <span className="settings-option-desc">{option.desc}</span>
-                    </button>
-                  );
-                })}
-              </div>
+              <div className="settings-field-title">主题</div>
+              {THEME_GROUPS.map((group) => (
+                <div key={group} className="settings-theme-group">
+                  <div className="settings-theme-group-label">{group}</div>
+                  <div className="settings-theme-grid settings-theme-grid-wide">
+                    {THEME_OPTIONS.filter((option) => option.group === group).map((option) => {
+                      const active = palette === option.value;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => onPaletteChange(option.value)}
+                          aria-pressed={active}
+                          className={`settings-theme-option${active ? " active" : ""}`}
+                        >
+                          <SwatchPreview option={option} theme={resolvedTheme} />
+                          <div className="settings-inline">
+                            <span className="settings-option-title">{option.label}</span>
+                            {active ? <span className="badge badge-success">当前</span> : option.value === DEFAULT_PALETTE && <span className="badge badge-version">默认</span>}
+                          </div>
+                          <span className="settings-option-desc">{option.desc}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
 
             <div>
@@ -557,40 +542,17 @@ function SummaryItem({ label, value, tone }: { label: string; value: string; ton
   );
 }
 
-/** 主题风格的迷你预览：左侧页面 + 右侧强调色块 */
-function SwatchPreview({ colors }: { colors: [string, string, string] }) {
+/** 主题预览：背景上依次放主色胶囊、主色容器块和辅助色块，形状随组件风格变化 */
+function SwatchPreview({ option, theme }: { option: ThemeOption; theme: ResolvedTheme }) {
+  const [bg, primary, container, extra] = option.swatch[theme];
+  const round = option.style === "m3" ? 999 : option.style === "linear" ? 4 : 6;
+  const block = option.style === "m3" ? 8 : option.style === "linear" ? 4 : 6;
   return (
-    <div style={{ display: "flex", gap: 6, height: 46 }}>
-      <div
-        style={{
-          flex: 2,
-          borderRadius: 8,
-          border: "1px solid var(--border)",
-          background: colors[0],
-          display: "flex",
-          flexDirection: "column",
-          gap: 5,
-          padding: 7,
-        }}
-      >
-        <div style={{ height: 7, width: "62%", borderRadius: 3, background: colors[2], opacity: 0.92 }} />
-        <div style={{ height: 7, width: "82%", borderRadius: 3, background: colors[1] }} />
-        <div style={{ height: 7, width: "70%", borderRadius: 3, background: colors[1] }} />
-      </div>
-      <div
-        style={{
-          flex: 1,
-          borderRadius: 8,
-          border: "1px solid var(--border)",
-          background: colors[1],
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <div style={{ width: 16, height: 16, borderRadius: 5, background: colors[2] }} />
-      </div>
-    </div>
+    <span className="theme-swatch-lg" style={{ background: bg }}>
+      <i style={{ width: 22, borderRadius: round, background: primary }} />
+      <i style={{ width: 36, borderRadius: block, background: container }} />
+      <i style={{ width: 22, borderRadius: block, background: extra }} />
+    </span>
   );
 }
 

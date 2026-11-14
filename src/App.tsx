@@ -3,12 +3,14 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import { Toast } from "./components/ui/Toast";
 import { Titlebar } from "./components/layout/Titlebar";
 import { Sidebar } from "./components/layout/Sidebar";
+import { ThemeSwitcher } from "./components/layout/ThemeSwitcher";
 import { ImportAgentDialog } from "./components/views/ImportAgentDialog";
 import { CatalogView } from "./components/views/CatalogView";
 import { McpView } from "./components/views/McpView";
 import { SettingsView } from "./components/views/SettingsView";
 import { useAppState } from "./hooks/useAppState";
 import { useTheme } from "./hooks/useTheme";
+import { installRipple } from "./lib/ripple";
 import { fileToUpload } from "./lib/utils";
 import type { SkillsFilter } from "./types";
 
@@ -35,6 +37,8 @@ export default function App() {
   const state = useAppState();
   const theme = useTheme();
   const [focusSkillTitle, setFocusSkillTitle] = useState<string | null>(null);
+
+  useEffect(() => installRipple(), []);
 
   useEffect(() => {
     if ("__TAURI_INTERNALS__" in window) {
@@ -213,7 +217,17 @@ export default function App() {
           agentCount={state.agents.length}
         />
         <div className="main">
-          <Titlebar />
+          <Titlebar
+            actions={
+              <ThemeSwitcher
+                palette={theme.palette}
+                themeMode={theme.themeMode}
+                resolvedTheme={theme.resolvedTheme}
+                onPaletteChange={theme.setPalette}
+                onThemeChange={theme.setThemeMode}
+              />
+            }
+          />
           {state.pendingHubSkills.length > 0 && (
             <div style={{ padding: "8px 16px", background: "var(--accent-light)", display: "flex", alignItems: "center", gap: 12, fontSize: 12 }}>
               <span style={{ flex: 1 }}>{state.pendingHubSkills[0].message ?? `新 Skill「${state.pendingHubSkills[0].title}」已同步到中枢，尚未选择本机 Agent。`}{state.pendingHubSkills.length > 1 ? `（另有 ${state.pendingHubSkills.length - 1} 个待处理）` : ""}</span>

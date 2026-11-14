@@ -35,17 +35,17 @@ export function Dialog({
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
-        borderRadius: "var(--radius-lg)",
-        border: "1px solid var(--border)",
-        background: "var(--surface-raised)",
+        borderRadius: "var(--dialog-radius, var(--radius-lg))",
+        border: "var(--dialog-border, 1px solid var(--border))",
+        background: "var(--dialog-bg, var(--surface-raised))",
         boxShadow: "0 18px 55px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.06)",
       }
     : {
         width: "100%",
         maxWidth,
-        borderRadius: "var(--radius-lg)",
-        border: "1px solid var(--border)",
-        background: "var(--surface-raised)",
+        borderRadius: "var(--dialog-radius, var(--radius-lg))",
+        border: "var(--dialog-border, 1px solid var(--border))",
+        background: "var(--dialog-bg, var(--surface-raised))",
         boxShadow: "0 18px 55px rgba(0,0,0,0.14)",
       };
   return (
@@ -58,7 +58,7 @@ export function Dialog({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: dark ? "rgba(0, 0, 0, 0.36)" : "rgba(0, 0, 0, 0.28)",
+        background: dark ? "var(--scrim, rgba(0, 0, 0, 0.36))" : "var(--scrim, rgba(0, 0, 0, 0.28))",
         padding: 20,
       }}
     >
