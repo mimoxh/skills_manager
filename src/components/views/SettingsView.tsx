@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import type { Palette, ResolvedTheme, ThemeMode } from "../../hooks/useTheme";
 import { DEFAULT_PALETTE, THEME_GROUPS, THEME_OPTIONS, type ThemeOption } from "../../lib/themes";
-import type { AgentProfile, SyncConfig, SyncConflict, SyncConflictChoice, SyncStatus } from "../../types";
+import type { AgentProfile, AppUpdateInfo, AppUpdateInstallResult, SyncConfig, SyncConflict, SyncConflictChoice, SyncStatus } from "../../types";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { ConflictDialog } from "./ConflictDialog";
 
@@ -23,6 +23,13 @@ interface SettingsViewProps {
   onSyncGc: () => Promise<void>;
   onRefreshMcp?: () => Promise<void>;
   agents?: AgentProfile[];
+  appUpdate?: AppUpdateInfo | null;
+  appUpdateChecking?: boolean;
+  appUpdateInstalling?: boolean;
+  appUpdateInstalled?: AppUpdateInstallResult | null;
+  onCheckAppUpdate?: () => Promise<void>;
+  onInstallAppUpdate?: () => Promise<void>;
+  onRestartApp?: () => Promise<void>;
 }
 
 const emptySyncConfig: SyncConfig = {
@@ -48,6 +55,7 @@ const settingsSections = [
   { id: "settings-agents", label: "Agent 目标" },
   { id: "settings-maintenance", label: "数据与维护" },
   { id: "settings-advanced", label: "高级配置" },
+  { id: "settings-update", label: "程序更新" },
 ] as const;
 
 type SettingsSectionId = (typeof settingsSections)[number]["id"];
@@ -70,6 +78,13 @@ export function SettingsView({
   onSyncGc,
   onRefreshMcp,
   agents = [],
+  appUpdate = null,
+  appUpdateChecking = false,
+  appUpdateInstalling = false,
+  appUpdateInstalled = null,
+  onCheckAppUpdate,
+  onInstallAppUpdate,
+  onRestartApp,
 }: SettingsViewProps) {
   const [draft, setDraft] = useState<SyncConfig>(syncConfig ?? emptySyncConfig);
   const [pollSecsInput, setPollSecsInput] = useState(String((syncConfig ?? emptySyncConfig).pollSecs));
@@ -77,6 +92,7 @@ export function SettingsView({
   const [password, setPassword] = useState("");
   const [conflictOpen, setConflictOpen] = useState(false);
   const [gcConfirmOpen, setGcConfirmOpen] = useState(false);
+  const [updateConfirmOpen, setUpdateConfirmOpen] = useState(false);
   const [activeSection, setActiveSection] = useState<SettingsSectionId>(settingsSections[0].id);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const pageRef = useRef<HTMLDivElement>(null);
@@ -489,13 +505,72 @@ export function SettingsView({
           </details>
         </div>
 
+      </section>
+
+      <section id="settings-update" className="settings-section" tabIndex={-1}>
+        <SectionHeading title="程序更新" description="从 GitHub Release 获取新版本，下载后替换当前程序并重启。" />
         <div className="card settings-card settings-about-card">
-          <div className="card-body settings-about-row">
-            <div className="settings-app-mark">S</div>
-            <div>
-              <div className="settings-option-title">Skills Manager</div>
-              <div className="settings-help">v{__APP_VERSION__} · AI Coding Agent 技能统一管理器</div>
+          <div className="card-body settings-stack-lg">
+            <div className="settings-action-row">
+              <div className="settings-about-row">
+                <div className="settings-app-mark">S</div>
+                <div>
+                  <div className="settings-option-title">Skills Manager</div>
+                  <div className="settings-help">
+                    当前 v{appUpdate?.currentVersion ?? __APP_VERSION__}
+                    {appUpdate?.latestVersion ? ` · 最新 v${appUpdate.latestVersion}` : ""}
+                    {" · AI Coding Agent 技能统一管理器"}
+                  </div>
+                </div>
+              </div>
+              <div className="settings-inline">
+                {appUpdate?.hasUpdate && <span className="badge badge-warning">有新版本</span>}
+                {appUpdate && !appUpdate.hasUpdate && <span className="badge badge-success">已是最新</span>}
+                <button className="btn btn-secondary btn-sm" type="button" disabled={appUpdateChecking || appUpdateInstalling} onClick={() => void onCheckAppUpdate?.()}>
+                  {appUpdateChecking ? "检查中..." : "检查更新"}
+                </button>
+              </div>
             </div>
+
+            {appUpdate?.hasUpdate && !appUpdateInstalled && (
+              <>
+                <div className="separator" />
+                <div className="settings-status-list">
+                  <div><span>新版本</span><strong>{appUpdate.releaseName || `v${appUpdate.latestVersion}`}</strong></div>
+                  {appUpdate.publishedAt && <div><span>发布时间</span><strong>{new Date(appUpdate.publishedAt).toLocaleString()}</strong></div>}
+                  {appUpdate.assetName && <div><span>更新包</span><strong>{appUpdate.assetName}{appUpdate.assetSize ? `（${formatBytes(appUpdate.assetSize)}）` : ""}</strong></div>}
+                </div>
+                {appUpdate.releaseNotes && (
+                  <details className="settings-disclosure">
+                    <summary>更新说明</summary>
+                    <div className="settings-disclosure-body">
+                      <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, margin: 0 }}>{appUpdate.releaseNotes}</pre>
+                    </div>
+                  </details>
+                )}
+                {appUpdate.message && <div className="settings-help">{appUpdate.message}</div>}
+                <div className="settings-action-row">
+                  <div className="settings-help">更新会替换程序目录中的 exe，旧版本在重启后自动清理；skills/ 中枢与配置不受影响。</div>
+                  <div className="settings-inline">
+                    {appUpdate.releaseUrl && (
+                      <button className="btn btn-secondary btn-sm" type="button" onClick={() => copyText("releaseUrl", appUpdate.releaseUrl ?? "")}>
+                        {copiedKey === "releaseUrl" ? "已复制" : "复制发布页链接"}
+                      </button>
+                    )}
+                    <button className="btn btn-primary btn-sm" type="button" disabled={!appUpdate.canAutoInstall || appUpdateInstalling} onClick={() => setUpdateConfirmOpen(true)}>
+                      {appUpdateInstalling ? "下载中..." : "下载并安装"}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {appUpdateInstalled && (
+              <div className="settings-action-row">
+                <div className="settings-result success" style={{ flex: 1 }}>{appUpdateInstalled.message}</div>
+                <button className="btn btn-primary btn-sm" type="button" onClick={() => void onRestartApp?.()}>立即重启</button>
+              </div>
+            )}
           </div>
         </div>
       </section>
@@ -506,6 +581,17 @@ export function SettingsView({
           busy={syncBusy}
           onClose={() => setConflictOpen(false)}
           onResolve={(skillId, choice) => { void onResolveSyncConflict(skillId, choice); }}
+        />
+      )}
+
+      {updateConfirmOpen && (
+        <ConfirmDialog
+          title="安装新版本"
+          message={`将下载 v${appUpdate?.latestVersion ?? ""} 并替换当前程序，完成后需要重启。下载期间请保持网络连接。`}
+          confirmLabel="下载并安装"
+          busy={appUpdateInstalling}
+          onClose={() => setUpdateConfirmOpen(false)}
+          onConfirm={() => { setUpdateConfirmOpen(false); void onInstallAppUpdate?.(); }}
         />
       )}
 
@@ -521,6 +607,12 @@ export function SettingsView({
       )}
     </div>
   );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${bytes} B`;
 }
 
 function SectionHeading({ title, description }: { title: string; description: string }) {

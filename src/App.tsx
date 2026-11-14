@@ -97,6 +97,11 @@ export default function App() {
               onRefresh={state.refreshAll}
               onToggleNoFullCoverage={state.toggleNoFullCoverage}
               onSetSkillTags={state.setSkillTags}
+              skillUpdates={state.skillUpdates}
+              skillUpdatesChecking={state.skillUpdatesChecking}
+              skillUpdating={state.skillUpdating}
+              onCheckSkillUpdates={state.checkSkillUpdates}
+              onUpdateSkills={state.updateSkills}
             />
           </Suspense>
         );
@@ -189,6 +194,13 @@ export default function App() {
             onSyncGc={state.runSyncGc}
             onRefreshMcp={state.refreshMcpServers}
             agents={state.agents}
+            appUpdate={state.appUpdate}
+            appUpdateChecking={state.appUpdateChecking}
+            appUpdateInstalling={state.appUpdateInstalling}
+            appUpdateInstalled={state.appUpdateInstalled}
+            onCheckAppUpdate={() => state.checkAppUpdate(false)}
+            onInstallAppUpdate={state.installAppUpdate}
+            onRestartApp={state.restartApp}
           />
         );
       default:

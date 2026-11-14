@@ -38,6 +38,66 @@ pub fn hash_dir(path: &Path) -> AppResult<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+fn is_vcs_dir(entry: &walkdir::DirEntry) -> bool {
+    entry.depth() > 0 && entry.file_type().is_dir() && entry.file_name() == ".git"
+}
+
+/// 与 `hash_dir` 相同，但跳过 `.git`：每次 clone 的 .git 内容都不同，不能参与上游变更判定。
+pub fn hash_skill_content(path: &Path) -> AppResult<String> {
+    let path = resolve_dir_source(path);
+    let mut files = Vec::new();
+    for entry in WalkDir::new(&path)
+        .into_iter()
+        .filter_entry(|entry| !is_vcs_dir(entry))
+        .filter_map(Result::ok)
+    {
+        if entry.file_type().is_file() {
+            files.push(entry.path().to_path_buf());
+        }
+    }
+    files.sort();
+    let mut hasher = Sha256::new();
+    for file in files {
+        let relative = file
+            .strip_prefix(&path)
+            .map_err(|_| AppError::Message(format!("路径前缀剥离失败: {}", file.display())))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        hasher.update(relative.as_bytes());
+        hasher.update(b"\0");
+        let mut reader = fs::File::open(&file)?;
+        std::io::copy(&mut reader, &mut hasher)?;
+        hasher.update(b"\0");
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// 复制 Skill 内容并跳过 `.git`，避免把仓库元数据带进中枢与同步包。
+pub fn copy_skill_content(source: &Path, target: &Path) -> AppResult<()> {
+    let source = resolve_dir_source(source);
+    fs::create_dir_all(target)?;
+    for entry in WalkDir::new(&source)
+        .into_iter()
+        .filter_entry(|entry| !is_vcs_dir(entry))
+        .filter_map(Result::ok)
+    {
+        let relative = entry
+            .path()
+            .strip_prefix(&source)
+            .map_err(|_| AppError::Message(format!("路径前缀剥离失败: {}", entry.path().display())))?;
+        let destination = target.join(relative);
+        if entry.file_type().is_dir() {
+            fs::create_dir_all(&destination)?;
+        } else if entry.file_type().is_file() {
+            if let Some(parent) = destination.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(entry.path(), destination)?;
+        }
+    }
+    Ok(())
+}
+
 /// 若路径是目录软链/Junction，解析为真实目录，避免 WalkDir 不跟链导致空复制。
 pub fn resolve_dir_source(path: &Path) -> PathBuf {
     if is_symlink_path(path) {
@@ -246,6 +306,23 @@ mod tests {
         let fail = |_: &Path, _: &Path| Err(std::io::Error::other("unavailable"));
         assert_eq!(symlink_or_copy_dir_with(source.path(), &target, fail, create_dir_junction).unwrap(), "junction");
         assert_eq!(fs::read_to_string(target.join("SKILL.md")).unwrap(), "junction");
+    }
+
+    #[test]
+    fn skill_content_hash_and_copy_ignore_git_dir() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        fs::write(a.path().join("SKILL.md"), "same").unwrap();
+        fs::write(b.path().join("SKILL.md"), "same").unwrap();
+        fs::create_dir_all(a.path().join(".git")).unwrap();
+        fs::write(a.path().join(".git/index"), "clone-a").unwrap();
+        assert_eq!(hash_skill_content(a.path()).unwrap(), hash_skill_content(b.path()).unwrap());
+
+        let out = tempfile::tempdir().unwrap();
+        let dest = out.path().join("copy");
+        copy_skill_content(a.path(), &dest).unwrap();
+        assert!(dest.join("SKILL.md").exists());
+        assert!(!dest.join(".git").exists());
     }
 
     #[test]

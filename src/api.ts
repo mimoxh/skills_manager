@@ -26,6 +26,10 @@ import type {
   SyncConflict,
   SyncConflictChoice,
   SyncStatus,
+  SkillUpdateInfo,
+  SkillUpdateResult,
+  AppUpdateInfo,
+  AppUpdateInstallResult,
 } from "./types";
 
 function command<T>(name: string, args: Record<string, unknown>, fallback: () => T | Promise<T>) {
@@ -323,5 +327,32 @@ export const api = {
   },
   registerSelfAsMcp(targetAgentIds: string[]) {
     return command<McpOperationResult[]>("register_self_as_mcp", { targetAgentIds }, () => []);
+  },
+  // ── 更新 API ──
+  checkSkillUpdates() {
+    return command<SkillUpdateInfo[]>("check_skill_updates", {}, () => []);
+  },
+  updateSkillsFromSource(dirNames: string[]) {
+    return command<SkillUpdateResult[]>("update_skills_from_source", { dirNames }, () => []);
+  },
+  getAppVersion() {
+    return command<string>("get_app_version", {}, () => __APP_VERSION__);
+  },
+  checkAppUpdate() {
+    return command<AppUpdateInfo>("check_app_update", {}, () => ({
+      currentVersion: __APP_VERSION__,
+      latestVersion: null,
+      hasUpdate: false,
+      canAutoInstall: false,
+      message: "Desktop only",
+    }));
+  },
+  installAppUpdate() {
+    return command<AppUpdateInstallResult>("install_app_update", {}, () => {
+      throw new Error("Desktop only");
+    });
+  },
+  restartApp() {
+    return command<void>("restart_app", {}, () => undefined);
   },
 };

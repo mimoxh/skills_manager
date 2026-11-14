@@ -19,11 +19,13 @@ Skills Manager 是一个本地 Windows 桌面工具，用于管理多个 AI 客�
 - **MCP 管理**：为 Codex、Claude Code、OpenCode 和 Trae 扫描、新增、更新、启用或禁用、同步、删除 MCP server。支持的传输类型为 `stdio`、`http` 和 `sse`。支持自定义 MCP 配置文件路径。
 - **Skills 多设备同步**：所有由本程序添加的 Skill 都先存入 exe 旁的 `skills/` 中枢，可不选 Agent。只同步中枢内容；每台设备自行选择分发目标。优先软链接、然后 Junction、最后复制；同名或同标题的 Agent 自装 Skill 会保留并跳过。
 - **外部 Agent 接入 (MCP Server & CLI)**：内置标准 stdio JSON-RPC 2.0 MCP Server (`SkillsManager.exe mcp`) 与命令行工具，支持 Claude Code、Cursor、Windsurf、Claude Desktop、Antigravity 等 Agent 远程调用管理 Skills 和 MCP。调用安装时若未提供目标目录，会自动返回候选目录列表，引导 Agent 向用户提问确认。设置页支持一键将自身配置到本机检测到的 Agent。
+- **Skill 来源更新**：通过 Git / URL 或本地目录安装的 Skill 会记录来源和安装时的内容指纹。Skills 页「检查更新」会逐个来源拉取并比对，标出「可更新」「本机已修改」；更新只覆盖中枢内容，原内容先备份到数据目录，随后刷新本机可核实的分发目标，并通过同步传到其他设备。
+- **程序自更新**：启动后静默检查 GitHub Release；设置页「程序更新」可查看新版本说明，下载便携版 zip（校验 SHA-256）、替换当前 exe 并一键重启。旧 exe 在下次启动时清理；开发构建只检查不安装。
 - **Git / GitHub URL 导入与安装**：支持 GitHub 仓库、`/tree/main/...` 子目录链接及本地路径，识别 Skill 和 MCP 配置。同一来源可分别勾选 Skill 与 MCP，在一次操作中安装技能并写入所选 MCP Agent 的配置；MCP 服务仍需具备可运行的命令及依赖。
 - **无标签筛选**：Skills 和 Agents 列表支持筛选"无标签"项目，便于快速定位未分类的技能和 Agent。
 - **视图独立滚动**：Skills、MCP、Agents 视图列表独立滚动，页面整体不跟随滚动，多列表场景下操作更流畅。
 - **多主题切换**：内置 7 个主题，默认 Material 3 Expressive「钴蓝 · 杏橙」；另有 M3「莓果 · 湖青」「青柠 · 鸢尾」「深青 · 珊瑚」、Linear / Raycast，以及经典的「清爽极简」「经典暖色」。主题同时改变配色与组件形态，均支持浅色、深色与跟随系统，可在设置页或标题栏右上角随时切换，偏好在本机持久化。
-- **分段设置页**：设置页使用单页锚点导航，按常用配置、同步连接、Agent 目标、数据维护和高级配置分区；高级凭据默认收起，并持续显示保存状态与保存入口。
+- **分段设置页**：设置页使用单页锚点导航，按常用配置、同步连接、Agent 目标、数据维护、高级配置和程序更新分区；高级凭据默认收起，并持续显示保存状态与保存入口。
 
 ## 技术栈
 
@@ -172,4 +174,6 @@ SkillsManager 内置了标准 stdio JSON-RPC 2.0 MCP 服务与 Windows 控制台
 npm run native:build -- --no-bundle
 ```
 
-便携版构建产物为 `src-tauri\target\release\skill-sync-manager.exe`。`release/` 目录中的 `SkillsManager-v0.5.0-windows-portable.zip` 是发布产物，适合上传到 GitHub Releases；根目录的 `SkillsManager.exe` 可用于本地快速验证。
+便携版构建产物为 `src-tauri\target\release\skill-sync-manager.exe`。`release/` 目录中的 `SkillsManager-v0.6.0-windows-portable.zip` 是发布产物，适合上传到 GitHub Releases；根目录的 `SkillsManager.exe` 可用于本地快速验证。
+
+程序内自更新从 `mimoxh/skills_manager` 的最新 Release 中查找以 `-windows-portable.zip` 结尾的资产，并取出其中的 `Skills Manager.exe`。发布时请保持该命名，否则客户端只会提示新版本、无法自动安装。

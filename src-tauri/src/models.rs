@@ -660,3 +660,75 @@ pub struct RemoteMcpInstallOptions {
     pub target_agent_ids: Vec<String>,
     pub conflict_policy: ConflictPolicy,
 }
+
+// ── Skill 来源更新 / 程序自更新 ─────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SkillUpdateState {
+    UpToDate,
+    UpdateAvailable,
+    /// 上游未变，但中枢内容被本机改过。
+    LocalModified,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillUpdateInfo {
+    pub title: String,
+    pub dir_name: String,
+    pub source_url: String,
+    pub state: SkillUpdateState,
+    /// 有上游更新且中枢内容也被本机改过；更新前会备份。
+    #[serde(default)]
+    pub local_modified: bool,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillUpdateResult {
+    pub title: String,
+    pub dir_name: String,
+    pub updated: bool,
+    #[serde(default)]
+    pub error: bool,
+    #[serde(default)]
+    pub backup_path: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppUpdateInfo {
+    pub current_version: String,
+    #[serde(default)]
+    pub latest_version: Option<String>,
+    pub has_update: bool,
+    #[serde(default)]
+    pub release_name: Option<String>,
+    #[serde(default)]
+    pub release_notes: Option<String>,
+    #[serde(default)]
+    pub release_url: Option<String>,
+    #[serde(default)]
+    pub published_at: Option<String>,
+    #[serde(default)]
+    pub asset_name: Option<String>,
+    #[serde(default)]
+    pub asset_size: Option<u64>,
+    /// 当前运行形态能否自动替换 exe（开发构建或非 Windows 时为 false）。
+    pub can_auto_install: bool,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppUpdateInstallResult {
+    pub version: String,
+    pub exe_path: String,
+    pub message: String,
+}

@@ -52,6 +52,23 @@ struct AppState {
     sync_last_error: Option<String>,
     #[serde(default)]
     sync_last_run_at: Option<String>,
+    /// 中枢 Skill 的上游来源（key = 中枢目录名），用于检查与执行来源更新。
+    #[serde(default)]
+    skill_sources: HashMap<String, SkillSourceRecord>,
+}
+
+/// 中枢 Skill 的来源记录。`upstream_hash` 是最近一次安装/更新时上游内容的指纹（不含 .git），
+/// 只有中枢内容与之相同时才写入，用来区分「上游有更新」与「本机改过」。
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillSourceRecord {
+    pub source_url: String,
+    #[serde(default)]
+    pub relative_path: Option<String>,
+    #[serde(default)]
+    pub upstream_hash: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
 }
 
 /// 每个 skill 的同步基准（key = `normalize(name)`），用于区分真冲突与快进。
@@ -724,6 +741,19 @@ impl AppStore {
         {
             let mut state = self.lock_synced()?;
             state.sync_last_run_at = value;
+        }
+        self.save()
+    }
+
+    pub fn skill_source(&self, dir_name: &str) -> AppResult<Option<SkillSourceRecord>> {
+        let state = self.lock_synced()?;
+        Ok(state.skill_sources.get(dir_name).cloned())
+    }
+
+    pub fn set_skill_source(&self, dir_name: &str, record: SkillSourceRecord) -> AppResult<()> {
+        {
+            let mut state = self.lock_synced()?;
+            state.skill_sources.insert(dir_name.to_string(), record);
         }
         self.save()
     }

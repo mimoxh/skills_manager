@@ -19,11 +19,13 @@ Skills Manager is a local Windows desktop tool for managing Agent Skills and MCP
 - **MCP management:** scan, add, update, enable or disable, sync, and remove MCP servers for Codex, Claude Code, OpenCode, and Trae. Supported transports are `stdio`, `http`, and `sse`. Supports custom MCP configuration file path.
 - **Multi-device Skills sync:** every Skill added through Skills Manager first enters `skills/` beside the executable. You may select no agents. Only hub content syncs across devices; each device chooses its own targets. Distribution tries a symlink, then a Windows Junction, then a copy. Independently installed skills with the same name or title remain untouched.
 - **External Agent Integration (MCP Server & CLI):** built-in stdio JSON-RPC 2.0 MCP Server (`SkillsManager.exe mcp`) and Windows console CLI for external coding agents (Claude Code, Cursor, Windsurf, Claude Desktop, Antigravity, etc.) to manage skills and MCP servers programmatically. During installation, if target directories are omitted, it prompts with candidate agents and recommends the Universal Hub. One-click registration is available in Settings.
+- **Skill source updates:** skills installed from a Git URL or local folder record their source and a content fingerprint at install time. **Check updates** on the Skills view fetches each source once and marks skills as update available or locally modified. Updates only replace hub content, back up the old content to the data folder first, then refresh this device's verified targets and sync to other devices.
+- **App self-update:** the app silently checks GitHub Releases on startup. **Settings → App Update** shows the release notes, downloads the portable zip (SHA-256 verified), replaces the running exe, and restarts. The old exe is removed on the next launch; development builds only check.
 - **Git / GitHub URL Skill & MCP Installation:** inspect GitHub repositories, `/tree/main/...` subdirectories, and local folders for Skills and MCP configuration. Select both kinds from one source and install skills while writing MCP configuration to selected compatible agents. MCP commands still need their runtime dependencies to be available.
 - **No-tag filtering:** filter skills and agents lists by "no tag" to quickly locate uncategorized items.
 - **Independent view scrolling:** Skills, MCP, and Agents view lists scroll independently, the page no longer scrolls as a whole.
 - **Multiple Themes:** ships 7 themes, defaulting to Material 3 Expressive "Cobalt · Apricot"; also M3 "Berry · Lagoon", "Lime · Iris", "Teal · Coral", Linear / Raycast, and the classic "Clean Minimal" and "Classic Warm". Each theme changes both colors and component shapes, works in light, dark, or system mode, and can be switched anytime from Settings or the title bar, with local persistence.
-- **Sectioned Settings:** the Settings view uses single-page anchor navigation for common preferences, sync connection, Agent targets, maintenance, and advanced options. Sensitive connection details stay collapsed by default while save state and the save action remain visible.
+- **Sectioned Settings:** the Settings view uses single-page anchor navigation for common preferences, sync connection, Agent targets, maintenance, advanced options, and app updates. Sensitive connection details stay collapsed by default while save state and the save action remain visible.
 
 ## Tech Stack
 
@@ -169,4 +171,6 @@ The script runs:
 npm run native:build -- --no-bundle
 ```
 
-The portable build outputs `src-tauri\target\release\skill-sync-manager.exe`. The `release/` folder's `SkillsManager-v0.5.0-windows-portable.zip` is the release artifact, suitable for uploading to GitHub Releases; the root-level `SkillsManager.exe` is useful for quick local verification.
+The portable build outputs `src-tauri\target\release\skill-sync-manager.exe`. The `release/` folder's `SkillsManager-v0.6.0-windows-portable.zip` is the release artifact, suitable for uploading to GitHub Releases; the root-level `SkillsManager.exe` is useful for quick local verification.
+
+In-app self-update looks for an asset ending in `-windows-portable.zip` in the latest `mimoxh/skills_manager` Release and extracts `Skills Manager.exe` from it. Keep that naming when publishing; otherwise the app only reports the new version and cannot install it.

@@ -1,4 +1,5 @@
 pub mod adapter;
+pub mod app_update;
 pub mod catalog;
 pub mod catalog_index;
 pub mod catalog_refresh;
@@ -20,6 +21,7 @@ pub mod models;
 pub mod remote_source;
 pub mod service;
 pub mod skill_scan;
+pub mod skill_update;
 pub mod store;
 pub mod sync;
 pub mod util;
@@ -28,6 +30,7 @@ use commands::*;
 use service::AppService;
 
 pub fn run() {
+    app_update::cleanup_previous_update();
     // 优雅降级：state.json 损坏等初始化失败时不 panic，打印明确提示后退出，
     // 避免桌面窗口完全不弹出且无任何说明。
     let service = match AppService::new() {
@@ -91,7 +94,13 @@ pub fn run() {
             install_remote_source,
             install_remote_mcp,
             get_self_executable_path,
-            register_self_as_mcp
+            register_self_as_mcp,
+            check_skill_updates,
+            update_skills_from_source,
+            get_app_version,
+            check_app_update,
+            install_app_update,
+            restart_app
         ])
         .run(tauri::generate_context!())
         .expect("error while running Skills Manager");

@@ -4,6 +4,7 @@ import { useMcpServers } from "./useMcpServers";
 import { useSkillsData } from "./useSkillsData";
 import { useSync } from "./useSync";
 import { useToast } from "./useToast";
+import { useUpdates } from "./useUpdates";
 
 export function useAppState() {
   const { toast, showToast, dismissToast } = useToast();
@@ -37,6 +38,7 @@ export function useAppState() {
       await sync.refreshPendingHubSkills(false);
     },
   });
+  const updates = useUpdates({ showToast, refreshAll: skillsData.refreshAll });
   const catalog = useCatalog({
     showToast,
     refreshAll: skillsData.refreshAll,
@@ -132,5 +134,18 @@ export function useAppState() {
     runSyncGc: sync.runSyncGc,
     pendingHubSkills: sync.pendingHubSkills,
     refreshPendingHubSkills: sync.refreshPendingHubSkills,
+    // 更新
+    skillUpdates: updates.skillUpdates,
+    skillUpdatesChecking: updates.skillUpdatesChecking,
+    skillUpdating: updates.skillUpdating,
+    checkSkillUpdates: updates.checkSkillUpdates,
+    updateSkills: updates.updateSkills,
+    appUpdate: updates.appUpdate,
+    appUpdateChecking: updates.appUpdateChecking,
+    appUpdateInstalling: updates.appUpdateInstalling,
+    appUpdateInstalled: updates.appUpdateInstalled,
+    checkAppUpdate: updates.checkAppUpdate,
+    installAppUpdate: updates.installAppUpdate,
+    restartApp: updates.restartApp,
   };
 }
