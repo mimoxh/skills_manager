@@ -1090,7 +1090,7 @@ impl AppService {
     }
 
     /// 失效已安装集合缓存，在安装/同步/导入/卸载/回滚/agent 增删等变更后调用。
-    fn invalidate_installed_cache(&self) {
+    pub(crate) fn invalidate_installed_cache(&self) {
         if let Ok(mut cache) = self.installed_cache.lock() {
             *cache = None;
         }
@@ -1983,7 +1983,7 @@ impl AppService {
     }
 
     /// 拉取落中枢后，把新落地的 skill fanout 到各 agent（逐 skill 失败隔离）。
-    fn reconcile_from_hub(&self, dir_names: &[String]) -> AppResult<()> {
+    pub(crate) fn reconcile_from_hub(&self, dir_names: &[String]) -> AppResult<()> {
         if dir_names.is_empty() {
             return Ok(());
         }
@@ -2304,14 +2304,26 @@ impl AppService {
                 None,
             )?;
 
-            // 记录来源到 .skill-lock.json
+            // rename 策略下中枢目录名会变化，来源记录必须以实际落地的目录名为键
+            let hub_dir_name = hub_skill_path
+                .file_name()
+                .and_then(|v| v.to_str())
+                .unwrap_or(skill_dir_name)
+                .to_string();
             let _ = crate::skill_scan::write_skill_lock_entry(
-                skill_dir_name,
+                &hub_dir_name,
                 Some("git"),
                 Some("git"),
                 Some(&options.url),
                 &hub_skill_path,
             );
+            self.record_skill_source(
+                &hub_dir_name,
+                &hub_skill_path,
+                &skill_source_dir,
+                &options.url,
+                &skill_info.relative_path,
+            )?;
 
             let (scanned_title, _, _, _) = read_agent_skill_info(&hub_skill_path, false);
             let canonical_label = if !scanned_title.trim().is_empty() {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { handleCardActivation, matchesTags } from "../../lib/utils";
-import type { AgentProfile, AgentSkillCopy, ConflictPolicy, GroupedSkill, InstallResult, SkillsFilter } from "../../types";
+import type { AgentProfile, AgentSkillCopy, ConflictPolicy, GroupedSkill, InstallResult, SkillsFilter, SkillUpdateInfo, SkillUpdateResult } from "../../types";
 import { SkillInstallDialog } from "./SkillInstallDialog";
 import { InstallUrlDialog } from "./InstallUrlDialog";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
@@ -22,9 +22,14 @@ interface SkillsViewProps {
   onRefresh: () => void;
   onToggleNoFullCoverage: (title: string) => Promise<void>;
   onSetSkillTags: (title: string, tags: string[]) => Promise<string[]>;
+  skillUpdates?: SkillUpdateInfo[] | null;
+  skillUpdatesChecking?: boolean;
+  skillUpdating?: boolean;
+  onCheckSkillUpdates?: () => Promise<void>;
+  onUpdateSkills?: (dirNames: string[]) => Promise<SkillUpdateResult[]>;
 }
 
-export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initialFilter = "all", focusSkillTitle, onFocusedSkill, onDrop, onFolder, onArchive, onSync, onUninstall, onLoadReadme, onRefresh, onToggleNoFullCoverage, onSetSkillTags }: SkillsViewProps) {
+export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initialFilter = "all", focusSkillTitle, onFocusedSkill, onDrop, onFolder, onArchive, onSync, onUninstall, onLoadReadme, onRefresh, onToggleNoFullCoverage, onSetSkillTags, skillUpdates = null, skillUpdatesChecking = false, skillUpdating = false, onCheckSkillUpdates, onUpdateSkills }: SkillsViewProps) {
   const [selectedSkill, setSelectedSkill] = useState<GroupedSkill | null>(null);
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [selectedSourceAgentId, setSelectedSourceAgentId] = useState<string | null>(null);
@@ -47,6 +52,21 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
   const [deleteTarget, setDeleteTarget] = useState<GroupedSkill | null>(null);
   const [discardConfirm, setDiscardConfirm] = useState(false);
   const [showUrlDialog, setShowUrlDialog] = useState(false);
+  const [updateTargets, setUpdateTargets] = useState<SkillUpdateInfo[] | null>(null);
+
+  const updateByTitle = useMemo(() => {
+    const map = new Map<string, SkillUpdateInfo>();
+    for (const info of skillUpdates ?? []) map.set(info.title.trim().toLowerCase(), info);
+    return map;
+  }, [skillUpdates]);
+  const availableUpdates = useMemo(() => (skillUpdates ?? []).filter((info) => info.state === "updateAvailable"), [skillUpdates]);
+
+  async function confirmUpdate() {
+    if (!updateTargets || !onUpdateSkills) return;
+    const dirNames = updateTargets.map((info) => info.dirName);
+    setUpdateTargets(null);
+    await onUpdateSkills(dirNames);
+  }
 
   const statusFilteredSkills = useMemo(() => {
     if (filter === "covered") return skills.filter((s) => s.missingAgentIds.length === 0);
@@ -287,6 +307,17 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
               )}
             </div>
             <span className="skills-header-badge">{displayedSkills.length} 个可见项目</span>
+            {onCheckSkillUpdates && (
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => void onCheckSkillUpdates()}
+                disabled={busy || skillUpdatesChecking || skillUpdating}
+                type="button"
+                title="从 Git / URL 来源检查中枢 Skill 是否有新版本"
+              >
+                {skillUpdatesChecking ? "检查中..." : "检查更新"}
+              </button>
+            )}
             <button className="btn btn-secondary btn-sm" onClick={onRefresh} disabled={busy} type="button" title="刷新">
               <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>
             </button>
@@ -322,8 +353,18 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
             )}
           </div>
         )}
+        {availableUpdates.length > 0 && onUpdateSkills && (
+          <div className="skills-tag-filter-row" style={{ background: "var(--accent-light)" }}>
+            <span style={{ flex: 1, fontSize: 12 }}>{availableUpdates.length} 个 Skill 有上游更新。更新只覆盖中枢内容，原内容会备份，随后刷新本机已分发的目标并同步到其他设备。</span>
+            <button className="btn btn-primary btn-sm" type="button" disabled={busy || skillUpdating} onClick={() => setUpdateTargets(availableUpdates)}>
+              {skillUpdating ? "更新中..." : "全部更新"}
+            </button>
+          </div>
+        )}
         <div className="skills-list">
-          {displayedSkills.map((skill) => (
+          {displayedSkills.map((skill) => {
+            const updateInfo = updateByTitle.get(skill.title.trim().toLowerCase());
+            return (
             <div
               key={skill.title}
               className="skill-item"
@@ -371,6 +412,18 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
                   {noFullCoverageTitles.has(skill.title) && (
                     <span className="badge badge-muted">无需全覆盖</span>
                   )}
+                  {updateInfo?.state === "updateAvailable" && (
+                    <span className="badge badge-warning" title={updateInfo.message ?? undefined}>{updateInfo.localModified ? "可更新 · 本机已改" : "可更新"}</span>
+                  )}
+                  {updateInfo?.state === "localModified" && (
+                    <span className="badge badge-muted" title={updateInfo.message ?? undefined}>本机已修改</span>
+                  )}
+                  {updateInfo?.state === "upToDate" && (
+                    <span className="badge badge-muted">来源最新</span>
+                  )}
+                  {updateInfo?.state === "error" && (
+                    <span className="badge badge-muted" title={updateInfo.message ?? undefined}>更新检查失败</span>
+                  )}
                 </div>
               </div>
               <span className={`badge ${skill.missingAgentIds.length > 0 && !noFullCoverageTitles.has(skill.title) ? "badge-syncable" : "badge-synced"}`}>
@@ -382,6 +435,17 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
                   ? "已部分覆盖"
                   : "已覆盖"}
               </span>
+              {updateInfo?.state === "updateAvailable" && onUpdateSkills && (
+                <button
+                  className="btn btn-secondary btn-sm"
+                  style={{ flexShrink: 0 }}
+                  onClick={(e) => { e.stopPropagation(); setUpdateTargets([updateInfo]); }}
+                  disabled={busy || skillUpdating}
+                  type="button"
+                >
+                  更新
+                </button>
+              )}
               <button
                 className="btn-icon"
                 title={noFullCoverageTitles.has(skill.title) ? "取消无需全覆盖" : "标记无需全覆盖"}
@@ -403,7 +467,8 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
                 <svg className="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
               </button>
             </div>
-          ))}
+            );
+          })}
           {!displayedSkills.length && (
             <div style={{ textAlign: "center", padding: "48px 0", color: "var(--text-secondary)" }}>
               <p style={{ fontSize: 14, fontWeight: 500 }}>没有找到 skills</p>
@@ -476,6 +541,17 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
         />
       )}
 
+      {updateTargets && (
+        <ConfirmDialog
+          title="从来源更新 Skill"
+          message={updateConfirmMessage(updateTargets)}
+          confirmLabel="更新"
+          busy={busy || skillUpdating}
+          onClose={() => setUpdateTargets(null)}
+          onConfirm={() => void confirmUpdate()}
+        />
+      )}
+
       {discardConfirm && (
         <ConfirmDialog
           title="放弃更改"
@@ -497,6 +573,15 @@ export function SkillsView({ skills, agents, busy, noFullCoverageTitles, initial
       )}
     </div>
   );
+}
+
+function updateConfirmMessage(targets: SkillUpdateInfo[]): string {
+  const names = targets.length === 1 ? `「${targets[0].title}」` : `${targets.length} 个 Skill`;
+  const modified = targets.filter((info) => info.localModified).length;
+  const warning = modified
+    ? `其中 ${modified} 个的中枢内容已在本机修改，覆盖后如需保留修改，请从备份中手动合并。`
+    : "";
+  return `将从来源拉取最新内容覆盖中枢中的${names}，原内容会先备份到数据目录。${warning}`;
 }
 
 function preferredSourceCopy(skill: GroupedSkill): AgentSkillCopy {

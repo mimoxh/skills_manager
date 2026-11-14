@@ -1,6 +1,6 @@
 [package]
 name = "skill-sync-manager"
-version = "0.5.0"
+version = "0.6.0"
 description = "A multi-agent skills manager"
 authors = ["Skill Sync Manager"]
 edition = "2021"

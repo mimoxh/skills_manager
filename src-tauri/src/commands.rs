@@ -6,7 +6,8 @@ use crate::{
         GroupedMcpServer, GroupedSkill, ImportSkillFile, ImportSkillResult, InitialData,
         InstallResult, McpOperationResult, McpServerConfig, RemoteInstallOptions,
         RemoteInstallResult, RemoteMcpInstallOptions, RemoteSourceInspection, SyncConfig,
-        SyncConflict, SyncConflictChoice, SyncStatus,
+        SyncConflict, SyncConflictChoice, SyncStatus, SkillUpdateInfo, SkillUpdateResult,
+        AppUpdateInfo, AppUpdateInstallResult,
     },
     service::AppService,
     store::PendingHubSkill,
@@ -452,6 +453,43 @@ pub fn get_self_executable_path() -> AppResult<String> {
     let exe = std::env::current_exe()
         .map_err(|e| AppError::Message(format!("获取程序路径失败: {}", e)))?;
     Ok(exe.to_string_lossy().to_string())
+}
+
+// ── 更新 Commands ─────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn check_skill_updates(service: State<'_, AppService>) -> AppResult<Vec<SkillUpdateInfo>> {
+    let service = service.inner().clone();
+    run_blocking(move || service.check_skill_updates()).await
+}
+
+#[tauri::command]
+pub async fn update_skills_from_source(
+    dir_names: Vec<String>,
+    service: State<'_, AppService>,
+) -> AppResult<Vec<SkillUpdateResult>> {
+    let service = service.inner().clone();
+    run_blocking(move || service.update_skills_from_source(&dir_names)).await
+}
+
+#[tauri::command]
+pub fn get_app_version() -> String {
+    crate::app_update::current_version().to_string()
+}
+
+#[tauri::command]
+pub async fn check_app_update() -> AppResult<AppUpdateInfo> {
+    run_blocking(crate::app_update::check_app_update).await
+}
+
+#[tauri::command]
+pub async fn install_app_update() -> AppResult<AppUpdateInstallResult> {
+    run_blocking(crate::app_update::install_app_update).await
+}
+
+#[tauri::command]
+pub fn restart_app(app: tauri::AppHandle) {
+    app.restart();
 }
 
 #[tauri::command]

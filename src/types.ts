@@ -306,6 +306,48 @@ export interface RemoteMcpInstallOptions {
   conflictPolicy: ConflictPolicy;
 }
 
+// ── 更新类型 ──────────────────────────────────────────────────────────
+
+export type SkillUpdateState = "upToDate" | "updateAvailable" | "localModified" | "error";
+
+export interface SkillUpdateInfo {
+  title: string;
+  dirName: string;
+  sourceUrl: string;
+  state: SkillUpdateState;
+  localModified: boolean;
+  message?: string | null;
+}
+
+export interface SkillUpdateResult {
+  title: string;
+  dirName: string;
+  updated: boolean;
+  error: boolean;
+  backupPath?: string | null;
+  message: string;
+}
+
+export interface AppUpdateInfo {
+  currentVersion: string;
+  latestVersion?: string | null;
+  hasUpdate: boolean;
+  releaseName?: string | null;
+  releaseNotes?: string | null;
+  releaseUrl?: string | null;
+  publishedAt?: string | null;
+  assetName?: string | null;
+  assetSize?: number | null;
+  canAutoInstall: boolean;
+  message?: string | null;
+}
+
+export interface AppUpdateInstallResult {
+  version: string;
+  exePath: string;
+  message: string;
+}
+
 export interface PendingHubSkill {
   skillKey: string;
   title: string;
